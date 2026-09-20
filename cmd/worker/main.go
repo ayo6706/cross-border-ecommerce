@@ -2,18 +2,26 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/ayo6706/cross-border-ecommerce/internal/platform/config"
+	"github.com/ayo6706/cross-border-ecommerce/internal/platform/logging"
 )
 
 func main() {
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
-		Level: slog.LevelInfo,
-	}))
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to load configuration: %v\n", err)
+		os.Exit(1)
+	}
+
+	logger := logging.NewLogger(cfg.Log)
 	slog.SetDefault(logger)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -22,7 +30,10 @@ func main() {
 	shutdown := make(chan os.Signal, 1)
 	signal.Notify(shutdown, os.Interrupt, syscall.SIGTERM)
 
-	logger.Info("starting stream consumer and outbox worker daemon")
+	logger.Info("starting stream consumer and outbox worker daemon",
+		slog.String("service", cfg.App.ServiceName),
+		slog.String("environment", cfg.App.Environment),
+	)
 
 	var wg sync.WaitGroup
 	ticker := time.NewTicker(30 * time.Second)
@@ -46,5 +57,5 @@ func main() {
 	cancel()
 
 	wg.Wait()
-	logger.Info("worker daemon stopped cleanly")
+	logger.Info("worker daemon stopped gracefully")
 }
