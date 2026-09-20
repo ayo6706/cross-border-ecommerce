@@ -11,10 +11,13 @@ import (
 )
 
 type Querier interface {
+	CreateIngestionRun(ctx context.Context, arg CreateIngestionRunParams) (IngestionRun, error)
 	CreateProductVersion(ctx context.Context, arg CreateProductVersionParams) (ProductVersion, error)
 	DeleteProduct(ctx context.Context, id pgtype.UUID) error
 	DeleteSource(ctx context.Context, id string) error
 	FetchPendingOutboxEvents(ctx context.Context, limit int32) ([]OutboxEvent, error)
+	GetIngestionRunByID(ctx context.Context, id pgtype.UUID) (IngestionRun, error)
+	GetLatestIngestionRunBySource(ctx context.Context, sourceID string) (IngestionRun, error)
 	GetLatestProductVersion(ctx context.Context, productID pgtype.UUID) (ProductVersion, error)
 	GetProductByFingerprint(ctx context.Context, currentFingerprint string) (Product, error)
 	GetProductByID(ctx context.Context, id pgtype.UUID) (Product, error)
@@ -22,11 +25,14 @@ type Querier interface {
 	IncrementOutboxEventRetry(ctx context.Context, arg IncrementOutboxEventRetryParams) error
 	InsertOutboxEvent(ctx context.Context, arg InsertOutboxEventParams) (OutboxEvent, error)
 	ListActiveSources(ctx context.Context) ([]Source, error)
+	ListIngestionRunsBySource(ctx context.Context, arg ListIngestionRunsBySourceParams) ([]IngestionRun, error)
 	ListProductVersions(ctx context.Context, productID pgtype.UUID) ([]ProductVersion, error)
 	ListProductsAfterCursor(ctx context.Context, arg ListProductsAfterCursorParams) ([]Product, error)
 	ListProductsFirstPage(ctx context.Context, limit int32) ([]Product, error)
 	ListSources(ctx context.Context) ([]Source, error)
 	MarkOutboxEventProcessed(ctx context.Context, arg MarkOutboxEventProcessedParams) error
+	UpdateIngestionRunProgress(ctx context.Context, arg UpdateIngestionRunProgressParams) (IngestionRun, error)
+	UpdateIngestionRunStatus(ctx context.Context, arg UpdateIngestionRunStatusParams) (IngestionRun, error)
 	UpsertProduct(ctx context.Context, arg UpsertProductParams) (Product, error)
 	UpsertSource(ctx context.Context, arg UpsertSourceParams) (Source, error)
 }

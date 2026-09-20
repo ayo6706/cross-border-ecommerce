@@ -8,6 +8,23 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type IngestionRun struct {
+	ID               pgtype.UUID        `json:"id"`
+	SourceID         string             `json:"source_id"`
+	Status           string             `json:"status"`
+	Checkpoint       string             `json:"checkpoint"`
+	RecordsSeen      int32              `json:"records_seen"`
+	RecordsNew       int32              `json:"records_new"`
+	RecordsChanged   int32              `json:"records_changed"`
+	RecordsUnchanged int32              `json:"records_unchanged"`
+	RecordsFailed    int32              `json:"records_failed"`
+	ErrorSummary     string             `json:"error_summary"`
+	StartedAt        pgtype.Timestamptz `json:"started_at"`
+	CompletedAt      pgtype.Timestamptz `json:"completed_at"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
+}
+
 type OutboxEvent struct {
 	ID            pgtype.UUID        `json:"id"`
 	AggregateType string             `json:"aggregate_type"`
