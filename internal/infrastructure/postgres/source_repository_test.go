@@ -10,6 +10,7 @@ import (
 	"github.com/ayo6706/cross-border-ecommerce/internal/domain/source"
 	"github.com/ayo6706/cross-border-ecommerce/internal/infrastructure/postgres"
 	"github.com/ayo6706/cross-border-ecommerce/migrations"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func TestSourceRepository_ConstructorValidation(t *testing.T) {
@@ -24,7 +25,9 @@ func TestSourceRepository_ConstructorValidation(t *testing.T) {
 	}
 }
 
-func TestSourceRepository_LiveIntegration(t *testing.T) {
+func setupLiveSourceDB(t *testing.T) (*pgxpool.Pool, *postgres.SourceRepository) {
+	t.Helper()
+
 	connStr := os.Getenv("DATABASE_URL")
 	if connStr == "" {
 		connStr = "postgres://postgres:postgres@127.0.0.1:5433/crossborder_test?sslmode=disable"
@@ -40,12 +43,12 @@ func TestSourceRepository_LiveIntegration(t *testing.T) {
 	)
 	if err != nil {
 		t.Skipf("skipping live database test: unable to connect to %s: %v", connStr, err)
-		return
+		return nil, nil
 	}
-	defer pool.Close()
+	t.Cleanup(pool.Close)
 
 	if err := pool.Ping(ctx); err != nil {
-		t.Fatalf("expected successful pool ping, got %v", err)
+		t.Fatalf("expected successful pool ping: %v", err)
 	}
 
 	migrator, err := postgres.NewMigrator(pool, migrations.FS)
@@ -61,108 +64,167 @@ func TestSourceRepository_LiveIntegration(t *testing.T) {
 		t.Fatalf("failed to create source repository: %v", err)
 	}
 
-	t.Cleanup(func() {
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cleanupCancel()
-		_, _ = pool.Exec(cleanupCtx, "DELETE FROM sources WHERE id IN ($1, $2, $3)",
-			"shopify-us-live-test", "amazon-de-disabled-test", "source-in-tx")
+	return pool, repo
+}
+
+func TestSourceRepository_LiveIntegration(t *testing.T) {
+	pool, repo := setupLiveSourceDB(t)
+	ctx := context.Background()
+
+	t.Run("Validation_NilOrEmptyID", func(t *testing.T) {
+		if err := repo.Save(ctx, nil); !errors.Is(err, source.ErrInvalidSourceState) {
+			t.Fatalf("expected ErrInvalidSourceState on nil source, got %v", err)
+		}
+		if err := repo.Save(ctx, &source.Source{ID: ""}); !errors.Is(err, source.ErrInvalidSourceState) {
+			t.Fatalf("expected ErrInvalidSourceState on empty ID, got %v", err)
+		}
 	})
 
-	// 1. Validation error on nil or empty ID
-	if err := repo.Save(ctx, nil); !errors.Is(err, source.ErrInvalidSourceState) {
-		t.Fatalf("expected ErrInvalidSourceState on nil source, got %v", err)
-	}
-	if err := repo.Save(ctx, &source.Source{ID: ""}); !errors.Is(err, source.ErrInvalidSourceState) {
-		t.Fatalf("expected ErrInvalidSourceState on empty ID, got %v", err)
-	}
-
-	// 2. Save active source with JSONB configuration
-	s1 := &source.Source{
-		ID:        source.ID("shopify-us-live-test"),
-		Name:      "Shopify US Merchant Store",
-		Type:      source.TypeAPI,
-		Config:    map[string]any{"store_domain": "us-merchant.myshopify.com", "sync_interval_sec": float64(300)},
-		RateLimit: 50,
-		Enabled:   true,
-	}
-	if err := repo.Save(ctx, s1); err != nil {
-		t.Fatalf("failed to save source: %v", err)
-	}
-
-	// 3. FindByID
-	found, err := repo.FindByID(ctx, s1.ID)
-	if err != nil {
-		t.Fatalf("failed to find source by id: %v", err)
-	}
-	if found.Name != s1.Name {
-		t.Errorf("expected name %q, got %q", s1.Name, found.Name)
-	}
-	if found.Config["store_domain"] != "us-merchant.myshopify.com" {
-		t.Errorf("expected store_domain in config, got %v", found.Config)
-	}
-
-	// 4. Save disabled source
-	s2 := &source.Source{
-		ID:        source.ID("amazon-de-disabled-test"),
-		Name:      "Amazon DE Vendor",
-		Type:      source.TypeFeed,
-		Config:    map[string]any{"region": "eu-central-1"},
-		RateLimit: 20,
-		Enabled:   false,
-	}
-	if err := repo.Save(ctx, s2); err != nil {
-		t.Fatalf("failed to save disabled source: %v", err)
-	}
-
-	// 5. FindActive
-	activeList, err := repo.FindActive(ctx)
-	if err != nil {
-		t.Fatalf("failed to list active sources: %v", err)
-	}
-	var foundS1, foundS2 bool
-	for _, s := range activeList {
-		if s.ID == s1.ID {
-			foundS1 = true
+	t.Run("Save_And_FindByID", func(t *testing.T) {
+		s := &source.Source{
+			ID:        source.ID("shopify-us-live-test"),
+			Name:      "Shopify US Merchant Store",
+			Type:      source.TypeAPI,
+			Config:    map[string]any{"store_domain": "us-merchant.myshopify.com", "sync_interval_sec": float64(300)},
+			RateLimit: 50,
+			Enabled:   true,
 		}
-		if s.ID == s2.ID {
-			foundS2 = true
+		t.Cleanup(func() {
+			cleanCtx, cleanCancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cleanCancel()
+			_ = repo.Delete(cleanCtx, s.ID)
+		})
+
+		if err := repo.Save(ctx, s); err != nil {
+			t.Fatalf("failed to save source: %v", err)
 		}
-	}
-	if !foundS1 {
-		t.Error("expected active source s1 to be in FindActive list")
-	}
-	if foundS2 {
-		t.Error("expected disabled source s2 to NOT be in FindActive list")
-	}
 
-	// 6. Not found check
-	_, err = repo.FindByID(ctx, source.ID("non-existent-source-id"))
-	if !errors.Is(err, source.ErrSourceNotFound) {
-		t.Errorf("expected ErrSourceNotFound, got %v", err)
-	}
+		found, err := repo.FindByID(ctx, s.ID)
+		if err != nil {
+			t.Fatalf("failed to find source by id: %v", err)
+		}
+		if found.Name != s.Name {
+			t.Errorf("expected name %q, got %q", s.Name, found.Name)
+		}
+		if found.Config["store_domain"] != "us-merchant.myshopify.com" {
+			t.Errorf("expected store_domain in config, got %v", found.Config)
+		}
+	})
 
-	// 7. Transaction support
-	tx, err := pool.Begin(ctx)
-	if err != nil {
-		t.Fatalf("failed to begin tx: %v", err)
-	}
-	txRepo := repo.WithTx(tx)
-	sTx := &source.Source{
-		ID:      source.ID("source-in-tx"),
-		Name:    "Source in Tx",
-		Type:    source.TypeScraper,
-		Enabled: true,
-	}
-	if err := txRepo.Save(ctx, sTx); err != nil {
-		_ = tx.Rollback(ctx)
-		t.Fatalf("failed to save source in tx: %v", err)
-	}
-	if err := tx.Rollback(ctx); err != nil {
-		t.Fatalf("failed to rollback tx: %v", err)
-	}
+	t.Run("FindActive_FiltersCorrectly", func(t *testing.T) {
+		sActive := &source.Source{
+			ID:        source.ID("active-test-source"),
+			Name:      "Active Source",
+			Type:      source.TypeAPI,
+			RateLimit: 20,
+			Enabled:   true,
+		}
+		sDisabled := &source.Source{
+			ID:        source.ID("disabled-test-source"),
+			Name:      "Disabled Source",
+			Type:      source.TypeFeed,
+			RateLimit: 10,
+			Enabled:   false,
+		}
 
-	_, err = repo.FindByID(ctx, sTx.ID)
-	if !errors.Is(err, source.ErrSourceNotFound) {
-		t.Errorf("expected ErrSourceNotFound after tx rollback, got %v", err)
-	}
+		t.Cleanup(func() {
+			cleanCtx, cleanCancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cleanCancel()
+			_ = repo.Delete(cleanCtx, sActive.ID)
+			_ = repo.Delete(cleanCtx, sDisabled.ID)
+		})
+
+		_ = repo.Save(ctx, sActive)
+		_ = repo.Save(ctx, sDisabled)
+
+		activeList, err := repo.FindActive(ctx)
+		if err != nil {
+			t.Fatalf("failed to list active sources: %v", err)
+		}
+
+		var foundActive, foundDisabled bool
+		for _, s := range activeList {
+			if s.ID == sActive.ID {
+				foundActive = true
+			}
+			if s.ID == sDisabled.ID {
+				foundDisabled = true
+			}
+		}
+		if !foundActive {
+			t.Error("expected active source to be in FindActive list")
+		}
+		if foundDisabled {
+			t.Error("expected disabled source to NOT be in FindActive list")
+		}
+	})
+
+	t.Run("List_And_Delete", func(t *testing.T) {
+		s := &source.Source{
+			ID:        source.ID("delete-test-source"),
+			Name:      "To Delete",
+			Type:      source.TypeFile,
+			RateLimit: 30,
+			Enabled:   true,
+		}
+		_ = repo.Save(ctx, s)
+
+		allList, err := repo.List(ctx)
+		if err != nil {
+			t.Fatalf("failed to list sources: %v", err)
+		}
+		var found bool
+		for _, item := range allList {
+			if item.ID == s.ID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("expected created source to be in List()")
+		}
+
+		if err := repo.Delete(ctx, s.ID); err != nil {
+			t.Fatalf("failed to delete source: %v", err)
+		}
+
+		_, err = repo.FindByID(ctx, s.ID)
+		if !errors.Is(err, source.ErrSourceNotFound) {
+			t.Fatalf("expected ErrSourceNotFound after delete, got %v", err)
+		}
+	})
+
+	t.Run("FindByID_NotFound", func(t *testing.T) {
+		_, err := repo.FindByID(ctx, source.ID("non-existent-source-id"))
+		if !errors.Is(err, source.ErrSourceNotFound) {
+			t.Errorf("expected ErrSourceNotFound, got %v", err)
+		}
+	})
+
+	t.Run("Transaction_Rollback", func(t *testing.T) {
+		tx, err := pool.Begin(ctx)
+		if err != nil {
+			t.Fatalf("failed to begin tx: %v", err)
+		}
+		defer func() { _ = tx.Rollback(ctx) }()
+
+		txRepo := repo.WithTx(tx)
+		sTx := &source.Source{
+			ID:      source.ID("source-in-tx"),
+			Name:    "Source in Tx",
+			Type:    source.TypeScraper,
+			Enabled: true,
+		}
+		if err := txRepo.Save(ctx, sTx); err != nil {
+			t.Fatalf("failed to save source in tx: %v", err)
+		}
+		if err := tx.Rollback(ctx); err != nil {
+			t.Fatalf("failed to rollback tx: %v", err)
+		}
+
+		_, err = repo.FindByID(ctx, sTx.ID)
+		if !errors.Is(err, source.ErrSourceNotFound) {
+			t.Errorf("expected ErrSourceNotFound after tx rollback, got %v", err)
+		}
+	})
 }

@@ -85,6 +85,49 @@ func (r *SourceRepository) FindActive(ctx context.Context) ([]*source.Source, er
 	return result, nil
 }
 
+func (r *SourceRepository) List(ctx context.Context) ([]*source.Source, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+
+	rows, err := r.queries.ListSources(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list sources: %w", err)
+	}
+
+	result := make([]*source.Source, 0, len(rows))
+	for _, row := range rows {
+		src, err := toDomainSource(row)
+		if err != nil {
+			return nil, fmt.Errorf("convert source model: %w", err)
+		}
+		result = append(result, src)
+	}
+
+	return result, nil
+}
+
+func (r *SourceRepository) Delete(ctx context.Context, id source.ID) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
+	trimmed := strings.TrimSpace(string(id))
+	if trimmed == "" {
+		return source.ErrSourceNotFound
+	}
+
+	if err := r.queries.DeleteSource(ctx, trimmed); err != nil {
+		return fmt.Errorf("delete source: %w", err)
+	}
+
+	return nil
+}
+
 func (r *SourceRepository) Save(ctx context.Context, s *source.Source) error {
 	select {
 	case <-ctx.Done():
