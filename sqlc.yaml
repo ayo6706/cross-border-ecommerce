@@ -1,0 +1,15 @@
+version: "2"
+sql:
+  - engine: "postgresql"
+    schema:
+      - "migrations/000001_create_sources_and_products.up.sql"
+      - "migrations/000002_create_outbox_events.up.sql"
+    queries: "internal/infrastructure/postgres/queries"
+    gen:
+      go:
+        package: "generated"
+        out: "internal/infrastructure/postgres/generated"
+        sql_package: "pgx/v5"
+        emit_json_tags: true
+        emit_interface: true
+        emit_empty_slices: true

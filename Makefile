@@ -1,4 +1,4 @@
-.PHONY: all build test test-race lint clean run-api run-worker
+.PHONY: all build test test-race lint clean run-api run-worker sqlc-generate sqlc-verify
 
 # Go parameters
 GOCMD=go
@@ -36,3 +36,9 @@ run-worker:
 
 tidy:
 	$(GOMOD) tidy
+
+sqlc-generate:
+	sqlc generate
+
+sqlc-verify:
+	sqlc compile
