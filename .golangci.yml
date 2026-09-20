@@ -1,0 +1,68 @@
+run:
+  timeout: 5m
+  modules-download-mode: readonly
+
+linters-settings:
+  govet:
+    enable-all: true
+    disable:
+      - fieldalignment
+      - shadow
+  gocyclo:
+    min-complexity: 15
+  gocritic:
+    enabled-tags:
+      - diagnostic
+      - style
+      - performance
+      - experimental
+  revive:
+    rules:
+      - name: exported
+        disabled: false
+      - name: var-naming
+        disabled: false
+      - name: package-comments
+        disabled: true
+  depguard:
+    rules:
+      domain_purity:
+        list-mode: lax
+        files:
+          - "**/internal/domain/**"
+        deny:
+          - pkg: "database/sql"
+            desc: "Domain layer must not depend on database/sql"
+          - pkg: "github.com/jackc/pgx"
+            desc: "Domain layer must not depend on pgx"
+          - pkg: "net/http"
+            desc: "Domain layer must not depend on net/http"
+          - pkg: "github.com/ayo6706/cross-border-ecommerce/internal/infrastructure"
+            desc: "Domain layer must not depend on infrastructure"
+          - pkg: "github.com/ayo6706/cross-border-ecommerce/internal/adapters"
+            desc: "Domain layer must not depend on adapters"
+
+linters:
+  disable-all: true
+  enable:
+    - errcheck
+    - gosimple
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - gocritic
+    - gocyclo
+    - revive
+    - misspell
+    - depguard
+
+issues:
+  exclude-dirs:
+    - vendor
+  exclude-rules:
+    - path: _test\.go
+      linters:
+        - gocyclo
+        - errcheck
+        - gocritic

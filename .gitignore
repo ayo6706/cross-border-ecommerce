@@ -1,0 +1,29 @@
+# Binaries for programs and plugins
+bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test artifacts
+*.test
+*.out
+coverage.out
+coverage.html
+
+# Dependency directories
+vendor/
+
+# Local Environment & Secrets
+.env
+.env.*
+!.env.example
+
+# IDE & OS specific files
+.idea/
+.vscode/
+*.swp
+*~
+.DS_Store
+Thumbs.db
