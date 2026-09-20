@@ -3,12 +3,73 @@ package product_test
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 
 	productApp "github.com/ayo6706/cross-border-ecommerce/internal/application/product"
 	"github.com/ayo6706/cross-border-ecommerce/internal/domain/product"
-	"github.com/ayo6706/cross-border-ecommerce/internal/infrastructure/postgres"
 )
+
+type mockProductRepository struct {
+	mu       sync.RWMutex
+	products map[product.ID]*product.Product
+	byFp     map[string]product.ID
+}
+
+func newMockProductRepository() *mockProductRepository {
+	return &mockProductRepository{
+		products: make(map[product.ID]*product.Product),
+		byFp:     make(map[string]product.ID),
+	}
+}
+
+func (m *mockProductRepository) FindByID(ctx context.Context, id product.ID) (*product.Product, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	p, ok := m.products[id]
+	if !ok {
+		return nil, product.ErrProductNotFound
+	}
+	cp := *p
+	return &cp, nil
+}
+
+func (m *mockProductRepository) FindByFingerprint(ctx context.Context, fp string) (*product.Product, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	id, ok := m.byFp[fp]
+	if !ok {
+		return nil, product.ErrProductNotFound
+	}
+	p := m.products[id]
+	cp := *p
+	return &cp, nil
+}
+
+func (m *mockProductRepository) Save(ctx context.Context, p *product.Product) error {
+	if p == nil {
+		return product.ErrInvalidProductState
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	cp := *p
+	m.products[p.ID] = &cp
+	if p.CurrentFingerprint != "" {
+		m.byFp[p.CurrentFingerprint] = p.ID
+	}
+	return nil
+}
+
+func (m *mockProductRepository) List(ctx context.Context, params product.ListParams) ([]*product.Product, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	res := make([]*product.Product, 0, len(m.products))
+	for _, p := range m.products {
+		cp := *p
+		res = append(res, &cp)
+	}
+	return res, nil
+}
 
 func TestProductService_Constructor(t *testing.T) {
 	t.Parallel()
@@ -21,7 +82,7 @@ func TestProductService_Constructor(t *testing.T) {
 		t.Fatalf("expected nil service, got %v", svc)
 	}
 
-	repo := postgres.NewProductRepository()
+	repo := newMockProductRepository()
 	svc, err = productApp.NewService(repo)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -35,7 +96,7 @@ func TestProductService_CreateAndGet(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	repo := postgres.NewProductRepository()
+	repo := newMockProductRepository()
 	svc, err := productApp.NewService(repo)
 	if err != nil {
 		t.Fatalf("failed to initialize service: %v", err)
@@ -112,7 +173,7 @@ func TestProductService_GetProductByID_NotFound(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	repo := postgres.NewProductRepository()
+	repo := newMockProductRepository()
 	svc, _ := productApp.NewService(repo)
 
 	_, err := svc.GetProductByID(ctx, product.ID("non-existent"))
