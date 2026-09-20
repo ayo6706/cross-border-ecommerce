@@ -1,0 +1,5 @@
+ALTER TABLE IF EXISTS products DROP CONSTRAINT IF EXISTS fk_products_current_version;
+
+DROP TABLE IF EXISTS product_versions CASCADE;
+DROP TABLE IF EXISTS products CASCADE;
+DROP TABLE IF EXISTS sources CASCADE;
