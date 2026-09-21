@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"runtime/debug"
 	"strings"
 	"time"
 
@@ -107,6 +108,7 @@ func recoveryMiddleware(next http.Handler, logger *slog.Logger) http.Handler {
 				if logger != nil {
 					logger.ErrorContext(r.Context(), "panic recovered in http handler",
 						slog.Any("panic", rec),
+						slog.String("stack", string(debug.Stack())),
 					)
 				}
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)

@@ -193,7 +193,6 @@ func TestConfig_ValidationFailures(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -236,7 +235,6 @@ func TestLoad_InvalidEnvironmentValues(t *testing.T) {
 	}
 
 	for _, tc := range invalidEnvTests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			_, err := config.LoadFromLookup(func(k string) string { return tc.env[k] })
