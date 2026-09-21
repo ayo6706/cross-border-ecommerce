@@ -31,7 +31,28 @@ type Product struct {
 	UpdatedAt          time.Time
 }
 
+func NewProduct(id ID, canonicalName, description, brand, originCountry string) (*Product, error) {
+	now := time.Now().UTC()
+	p := &Product{
+		ID:            id,
+		CanonicalName: strings.TrimSpace(canonicalName),
+		Description:   strings.TrimSpace(description),
+		Brand:         strings.TrimSpace(brand),
+		OriginCountry: strings.ToUpper(strings.TrimSpace(originCountry)),
+		Status:        StatusDraft,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}
+	if err := p.Validate(); err != nil {
+		return nil, err
+	}
+	return p, nil
+}
+
 func (p *Product) Validate() error {
+	if p == nil {
+		return ErrInvalidProductState
+	}
 	if strings.TrimSpace(p.CanonicalName) == "" {
 		return ErrEmptyCanonicalName
 	}

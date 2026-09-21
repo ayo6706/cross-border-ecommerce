@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/ayo6706/cross-border-ecommerce/internal/domain/product"
 )
@@ -41,20 +40,9 @@ type CreateProductParams struct {
 }
 
 func (s *Service) CreateProduct(ctx context.Context, params CreateProductParams) (*product.Product, error) {
-	now := time.Now().UTC()
-	p := &product.Product{
-		ID:            params.ID,
-		CanonicalName: strings.TrimSpace(params.CanonicalName),
-		Description:   strings.TrimSpace(params.Description),
-		Brand:         strings.TrimSpace(params.Brand),
-		OriginCountry: strings.ToUpper(strings.TrimSpace(params.OriginCountry)),
-		Status:        product.StatusDraft,
-		CreatedAt:     now,
-		UpdatedAt:     now,
-	}
-
-	if err := p.Validate(); err != nil {
-		return nil, fmt.Errorf("validate product: %w", err)
+	p, err := product.NewProduct(params.ID, params.CanonicalName, params.Description, params.Brand, params.OriginCountry)
+	if err != nil {
+		return nil, fmt.Errorf("create product: %w", err)
 	}
 
 	if err := s.repo.Save(ctx, p); err != nil {
