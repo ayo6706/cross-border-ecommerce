@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -89,11 +90,11 @@ func (r *IngestionRepository) CreateRun(ctx context.Context, run *ingestion.Inge
 		SourceID:         string(run.SourceID),
 		Status:           string(run.Status),
 		Checkpoint:       run.Checkpoint,
-		RecordsSeen:      int32(run.RecordsSeen),
-		RecordsNew:       int32(run.RecordsNew),
-		RecordsChanged:   int32(run.RecordsChanged),
-		RecordsUnchanged: int32(run.RecordsUnchanged),
-		RecordsFailed:    int32(run.RecordsFailed),
+		RecordsSeen:      safeInt32(run.RecordsSeen),
+		RecordsNew:       safeInt32(run.RecordsNew),
+		RecordsChanged:   safeInt32(run.RecordsChanged),
+		RecordsUnchanged: safeInt32(run.RecordsUnchanged),
+		RecordsFailed:    safeInt32(run.RecordsFailed),
 		ErrorSummary:     run.ErrorSummary,
 		StartedAt:        startedAt,
 		CompletedAt:      completedAt,
@@ -150,11 +151,11 @@ func (r *IngestionRepository) UpdateProgress(ctx context.Context, id string, met
 	}
 
 	_, err = r.queries.UpdateIngestionRunProgress(ctx, generated.UpdateIngestionRunProgressParams{
-		SeenIncrement:      int32(metrics.Seen),
-		NewIncrement:       int32(metrics.New),
-		ChangedIncrement:   int32(metrics.Changed),
-		UnchangedIncrement: int32(metrics.Unchanged),
-		FailedIncrement:    int32(metrics.Failed),
+		SeenIncrement:      safeInt32(metrics.Seen),
+		NewIncrement:       safeInt32(metrics.New),
+		ChangedIncrement:   safeInt32(metrics.Changed),
+		UnchangedIncrement: safeInt32(metrics.Unchanged),
+		FailedIncrement:    safeInt32(metrics.Failed),
 		Checkpoint:         checkpoint,
 		UpdatedAt:          pgtype.Timestamptz{Time: updatedAt.UTC(), Valid: true},
 		ID:                 uuidVal,
@@ -292,4 +293,14 @@ func toDomainIngestionRun(row generated.IngestionRun) *ingestion.IngestionRun {
 		CreatedAt:        row.CreatedAt.Time.UTC(),
 		UpdatedAt:        row.UpdatedAt.Time.UTC(),
 	}
+}
+
+func safeInt32(n int) int32 {
+	if n > math.MaxInt32 {
+		return math.MaxInt32
+	}
+	if n < math.MinInt32 {
+		return math.MinInt32
+	}
+	return int32(n)
 }
