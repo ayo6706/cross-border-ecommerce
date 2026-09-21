@@ -79,6 +79,9 @@ func TestHealthEndpoints(t *testing.T) {
 		if resp.Status != "NOT_READY" {
 			t.Errorf("expected NOT_READY, got %q", resp.Status)
 		}
+		if resp.Details["database"] != "unavailable" {
+			t.Errorf("expected database detail 'unavailable', got %q", resp.Details["database"])
+		}
 	})
 }
 

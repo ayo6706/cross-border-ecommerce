@@ -124,6 +124,10 @@ func TestPanicRecovery(t *testing.T) {
 	if logEntry["panic"] != "catastrophic db hardware failure" {
 		t.Errorf("expected panic details in log, got: %v", logEntry["panic"])
 	}
+	stackVal, ok := logEntry["stack"].(string)
+	if !ok || stackVal == "" {
+		t.Errorf("expected non-empty stack trace in panic log, got: %v", logEntry["stack"])
+	}
 }
 
 type panickingPingerMock struct{}

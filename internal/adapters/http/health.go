@@ -33,7 +33,7 @@ func HandleReadiness(db Pinger) http.HandlerFunc {
 				_ = json.NewEncoder(w).Encode(HealthStatus{
 					Status: "NOT_READY",
 					Details: map[string]string{
-						"database": err.Error(),
+						"database": "unavailable",
 					},
 				})
 				return
