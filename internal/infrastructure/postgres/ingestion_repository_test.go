@@ -147,22 +147,22 @@ func TestIngestionRepository_LiveIntegration(t *testing.T) {
 		}
 
 		batch1 := ingestion.BatchMetrics{
-			Seen:       500,
-			New:        100,
-			Changed:    50,
-			Unchanged:  350,
-			Failed:     0,
+			Seen:      500,
+			New:       100,
+			Changed:   50,
+			Unchanged: 350,
+			Failed:    0,
 		}
 		if err := repo.UpdateProgress(ctx, run.ID, batch1, "cursor-500", now.Add(time.Second)); err != nil {
 			t.Fatalf("failed to update run progress batch 1: %v", err)
 		}
 
 		batch2 := ingestion.BatchMetrics{
-			Seen:       200,
-			New:        20,
-			Changed:    10,
-			Unchanged:  170,
-			Failed:     0,
+			Seen:      200,
+			New:       20,
+			Changed:   10,
+			Unchanged: 170,
+			Failed:    0,
 		}
 		if err := repo.UpdateProgress(ctx, run.ID, batch2, "cursor-700", now.Add(2*time.Second)); err != nil {
 			t.Fatalf("failed to update run progress batch 2: %v", err)

@@ -259,11 +259,11 @@ func TestIngestionService_RecordBatchAndComplete(t *testing.T) {
 
 	// Record batch
 	err = svc.RecordBatch(ctx, run.ID, ingestion.BatchMetrics{
-		Seen:       1000,
-		New:        100,
-		Changed:    50,
-		Unchanged:  850,
-		Failed:     0,
+		Seen:      1000,
+		New:       100,
+		Changed:   50,
+		Unchanged: 850,
+		Failed:    0,
 	}, "offset-1000")
 	if err != nil {
 		t.Fatalf("failed to record batch: %v", err)

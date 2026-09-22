@@ -12,9 +12,9 @@ import (
 )
 
 type mockComplianceRepo struct {
-	mu         sync.Mutex
-	sanctions  map[string]bool
-	decisions  []*compliance.ComplianceDecision
+	mu        sync.Mutex
+	sanctions map[string]bool
+	decisions []*compliance.ComplianceDecision
 }
 
 func newMockComplianceRepo() *mockComplianceRepo {
