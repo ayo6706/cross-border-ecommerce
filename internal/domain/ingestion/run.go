@@ -1,12 +1,12 @@
 package ingestion
 
 import (
-	"crypto/rand"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/ayo6706/cross-border-ecommerce/internal/domain/source"
+	"github.com/ayo6706/cross-border-ecommerce/internal/platform/uuid"
 )
 
 type RunStatus string
@@ -45,24 +45,14 @@ type IngestionRun struct {
 	UpdatedAt        time.Time
 }
 
-func newUUID() (string, error) {
-	var b [16]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		return "", err
-	}
-	b[6] = (b[6] & 0x0f) | 0x40
-	b[8] = (b[8] & 0x3f) | 0x80
-	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16]), nil
-}
-
 func NewRun(id string, sourceID source.ID, initialCheckpoint string) (*IngestionRun, error) {
 	runID := strings.TrimSpace(id)
 	if runID == "" {
-		genID, err := newUUID()
+		generatedID, err := uuid.NewString()
 		if err != nil {
 			return nil, fmt.Errorf("generate run id: %w", err)
 		}
-		runID = genID
+		runID = generatedID
 	}
 
 	now := time.Now().UTC()

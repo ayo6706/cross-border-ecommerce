@@ -1,8 +1,6 @@
 package http
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -11,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ayo6706/cross-border-ecommerce/internal/platform/logging"
+	"github.com/ayo6706/cross-border-ecommerce/internal/platform/uuid"
 )
 
 type RouterConfig struct {
@@ -50,17 +49,11 @@ func (rec *statusRecorder) Write(b []byte) (int, error) {
 }
 
 func generateRequestID() string {
-	var b [16]byte
-	if _, err := rand.Read(b[:]); err != nil {
+	id, err := uuid.NewString()
+	if err != nil {
 		return fmt.Sprintf("req-%d", time.Now().UnixNano())
 	}
-	b[6] = (b[6] & 0x0f) | 0x40
-	b[8] = (b[8] & 0x3f) | 0x80
-	return hex.EncodeToString(b[0:4]) + "-" +
-		hex.EncodeToString(b[4:6]) + "-" +
-		hex.EncodeToString(b[6:8]) + "-" +
-		hex.EncodeToString(b[8:10]) + "-" +
-		hex.EncodeToString(b[10:16])
+	return id
 }
 
 func requestIDMiddleware(next http.Handler) http.Handler {
