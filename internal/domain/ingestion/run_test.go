@@ -49,6 +49,12 @@ func TestIngestionRun_NewRun(t *testing.T) {
 	if !errors.Is(err, ingestion.ErrInvalidSourceID) {
 		t.Fatalf("expected ErrInvalidSourceID, got %v", err)
 	}
+
+	// Nil receiver validation
+	var nilRun *ingestion.IngestionRun
+	if !errors.Is(nilRun.Validate(), ingestion.ErrInvalidRunState) {
+		t.Fatalf("expected ErrInvalidRunState on nil run validation, got %v", nilRun.Validate())
+	}
 }
 
 func TestIngestionRun_LifecycleSuccess(t *testing.T) {

@@ -45,7 +45,12 @@ func setupLiveProductDB(t *testing.T) (*pgxpool.Pool, *postgres.ProductRepositor
 		t.Skipf("skipping live database test: unable to connect to %s: %v", connStr, err)
 		return nil, nil
 	}
-	t.Cleanup(pool.Close)
+	t.Cleanup(func() {
+		cleanCtx, cleanCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cleanCancel()
+		_, _ = pool.Exec(cleanCtx, "TRUNCATE products, product_versions CASCADE")
+		pool.Close()
+	})
 
 	if err := pool.Ping(ctx); err != nil {
 		t.Fatalf("expected successful pool ping: %v", err)
