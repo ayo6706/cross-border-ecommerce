@@ -17,4 +17,9 @@ var (
 	ErrInvalidExternalProductID = errors.New("external product id cannot be empty")
 	ErrEmptyPayload             = errors.New("raw payload cannot be empty")
 	ErrInvalidPayloadJSON       = errors.New("raw payload must be valid json")
+
+	ErrInvalidCheckpoint  = errors.New("invalid checkpoint format")
+	ErrAdapterUnavailable = errors.New("source adapter unavailable")
+	ErrRateLimitExceeded  = errors.New("source adapter rate limit exceeded")
+	ErrMalformedRecord    = errors.New("malformed record in source feed")
 )
