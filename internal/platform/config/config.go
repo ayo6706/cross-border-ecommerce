@@ -133,7 +133,7 @@ func LoadFromLookup(lookup func(string) string) (*Config, error) {
 			ShutdownTimeout: shutdownTimeout,
 		},
 		Database: DatabaseConfig{
-			URL:             getEnvString(lookup, "DATABASE_URL", "postgres://cross_border_user:secret_password@localhost:5432/cross_border_db?sslmode=disable"),
+			URL:             getEnvString(lookup, "DATABASE_URL", "postgres://postgres:postgres@localhost:5432/cross_border_db?sslmode=disable"),
 			MaxConns:        maxConns,
 			MinConns:        minConns,
 			MaxConnIdleTime: maxConnIdleTime,
