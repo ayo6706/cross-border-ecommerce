@@ -39,12 +39,6 @@ func (r *SourceRepository) WithTx(tx pgx.Tx) *SourceRepository {
 }
 
 func (r *SourceRepository) FindByID(ctx context.Context, id source.ID) (*source.Source, error) {
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	default:
-	}
-
 	trimmed := strings.TrimSpace(string(id))
 	if trimmed == "" {
 		return nil, source.ErrSourceNotFound
@@ -62,12 +56,6 @@ func (r *SourceRepository) FindByID(ctx context.Context, id source.ID) (*source.
 }
 
 func (r *SourceRepository) FindActive(ctx context.Context) ([]*source.Source, error) {
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	default:
-	}
-
 	rows, err := r.queries.ListActiveSources(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list active sources: %w", err)
@@ -86,12 +74,6 @@ func (r *SourceRepository) FindActive(ctx context.Context) ([]*source.Source, er
 }
 
 func (r *SourceRepository) List(ctx context.Context) ([]*source.Source, error) {
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	default:
-	}
-
 	rows, err := r.queries.ListSources(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list sources: %w", err)
@@ -110,12 +92,6 @@ func (r *SourceRepository) List(ctx context.Context) ([]*source.Source, error) {
 }
 
 func (r *SourceRepository) Delete(ctx context.Context, id source.ID) error {
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
-	}
-
 	trimmed := strings.TrimSpace(string(id))
 	if trimmed == "" {
 		return source.ErrSourceNotFound
@@ -129,12 +105,6 @@ func (r *SourceRepository) Delete(ctx context.Context, id source.ID) error {
 }
 
 func (r *SourceRepository) Save(ctx context.Context, s *source.Source) error {
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
-	}
-
 	if s == nil || strings.TrimSpace(string(s.ID)) == "" {
 		return source.ErrInvalidSourceState
 	}
@@ -143,7 +113,7 @@ func (r *SourceRepository) Save(ctx context.Context, s *source.Source) error {
 	if len(s.Config) > 0 {
 		b, err := json.Marshal(s.Config)
 		if err != nil {
-			return fmt.Errorf("%w: marshal config: %v", source.ErrInvalidSourceState, err)
+			return fmt.Errorf("%w: marshal config: %w", source.ErrInvalidSourceState, err)
 		}
 		configBytes = b
 	}

@@ -40,12 +40,6 @@ func (r *IngestionRepository) WithTx(tx pgx.Tx) *IngestionRepository {
 }
 
 func (r *IngestionRepository) CreateRun(ctx context.Context, run *ingestion.IngestionRun) error {
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
-	}
-
 	if run == nil {
 		return ingestion.ErrInvalidRunState
 	}
@@ -112,12 +106,6 @@ func (r *IngestionRepository) CreateRun(ctx context.Context, run *ingestion.Inge
 }
 
 func (r *IngestionRepository) FindRunByID(ctx context.Context, id string) (*ingestion.IngestionRun, error) {
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	default:
-	}
-
 	uuidVal, err := parseUUID(id)
 	if err != nil {
 		return nil, ingestion.ErrRunNotFound
@@ -135,12 +123,6 @@ func (r *IngestionRepository) FindRunByID(ctx context.Context, id string) (*inge
 }
 
 func (r *IngestionRepository) UpdateProgress(ctx context.Context, id string, metrics ingestion.BatchMetrics, checkpoint string, updatedAt time.Time) error {
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
-	}
-
 	uuidVal, err := parseUUID(id)
 	if err != nil {
 		return ingestion.ErrRunNotFound
@@ -171,12 +153,6 @@ func (r *IngestionRepository) UpdateProgress(ctx context.Context, id string, met
 }
 
 func (r *IngestionRepository) UpdateStatus(ctx context.Context, id string, status ingestion.RunStatus, errorSummary string, checkpoint string, completedAt time.Time, updatedAt time.Time) error {
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
-	}
-
 	uuidVal, err := parseUUID(id)
 	if err != nil {
 		return ingestion.ErrRunNotFound
@@ -210,12 +186,6 @@ func (r *IngestionRepository) UpdateStatus(ctx context.Context, id string, statu
 }
 
 func (r *IngestionRepository) ListRunsBySource(ctx context.Context, sourceID source.ID, limit int) ([]*ingestion.IngestionRun, error) {
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	default:
-	}
-
 	if strings.TrimSpace(string(sourceID)) == "" {
 		return nil, ingestion.ErrInvalidSourceID
 	}
@@ -243,12 +213,6 @@ func (r *IngestionRepository) ListRunsBySource(ctx context.Context, sourceID sou
 }
 
 func (r *IngestionRepository) FindLatestRunBySource(ctx context.Context, sourceID source.ID) (*ingestion.IngestionRun, error) {
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	default:
-	}
-
 	if strings.TrimSpace(string(sourceID)) == "" {
 		return nil, ingestion.ErrInvalidSourceID
 	}

@@ -38,15 +38,9 @@ func (r *ProductRepository) WithTx(tx pgx.Tx) *ProductRepository {
 }
 
 func (r *ProductRepository) FindByID(ctx context.Context, id product.ID) (*product.Product, error) {
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	default:
-	}
-
 	uid, err := parseUUID(string(id))
 	if err != nil {
-		return nil, fmt.Errorf("%w: invalid product id: %v", product.ErrProductNotFound, err)
+		return nil, fmt.Errorf("%w: invalid product id: %w", product.ErrProductNotFound, err)
 	}
 
 	row, err := r.queries.GetProductByID(ctx, uid)
@@ -61,12 +55,6 @@ func (r *ProductRepository) FindByID(ctx context.Context, id product.ID) (*produ
 }
 
 func (r *ProductRepository) FindByFingerprint(ctx context.Context, fingerprint string) (*product.Product, error) {
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	default:
-	}
-
 	trimmed := strings.TrimSpace(fingerprint)
 	if trimmed == "" {
 		return nil, product.ErrProductNotFound
@@ -84,12 +72,6 @@ func (r *ProductRepository) FindByFingerprint(ctx context.Context, fingerprint s
 }
 
 func (r *ProductRepository) Save(ctx context.Context, p *product.Product) error {
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
-	}
-
 	if p == nil {
 		return product.ErrInvalidProductState
 	}
@@ -108,7 +90,7 @@ func (r *ProductRepository) Save(ctx context.Context, p *product.Product) error 
 	} else {
 		parsed, err := parseUUID(string(p.ID))
 		if err != nil {
-			return fmt.Errorf("%w: invalid uuid: %v", product.ErrInvalidProductState, err)
+			return fmt.Errorf("%w: invalid uuid: %w", product.ErrInvalidProductState, err)
 		}
 		idUUID = parsed
 	}
@@ -117,7 +99,7 @@ func (r *ProductRepository) Save(ctx context.Context, p *product.Product) error 
 	if p.CurrentVersionID != nil && strings.TrimSpace(*p.CurrentVersionID) != "" {
 		parsed, err := parseUUID(*p.CurrentVersionID)
 		if err != nil {
-			return fmt.Errorf("%w: invalid current version uuid: %v", product.ErrInvalidProductState, err)
+			return fmt.Errorf("%w: invalid current version uuid: %w", product.ErrInvalidProductState, err)
 		}
 		versionUUID = parsed
 	}
@@ -152,12 +134,6 @@ func (r *ProductRepository) Save(ctx context.Context, p *product.Product) error 
 }
 
 func (r *ProductRepository) List(ctx context.Context, params product.ListParams) ([]*product.Product, error) {
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	default:
-	}
-
 	limit := params.Limit
 	if limit <= 0 {
 		limit = 50

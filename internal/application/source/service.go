@@ -29,12 +29,6 @@ type CreateSourceParams struct {
 }
 
 func (s *Service) CreateSource(ctx context.Context, params CreateSourceParams) (*source.Source, error) {
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	default:
-	}
-
 	src, err := source.NewSource(
 		params.ID,
 		strings.TrimSpace(params.Name),
@@ -54,12 +48,6 @@ func (s *Service) CreateSource(ctx context.Context, params CreateSourceParams) (
 }
 
 func (s *Service) GetSource(ctx context.Context, id source.ID) (*source.Source, error) {
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	default:
-	}
-
 	if strings.TrimSpace(string(id)) == "" {
 		return nil, source.ErrInvalidSourceID
 	}
@@ -73,12 +61,6 @@ func (s *Service) GetSource(ctx context.Context, id source.ID) (*source.Source, 
 }
 
 func (s *Service) ListSources(ctx context.Context) ([]*source.Source, error) {
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	default:
-	}
-
 	sources, err := s.repo.List(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list sources: %w", err)
@@ -88,12 +70,6 @@ func (s *Service) ListSources(ctx context.Context) ([]*source.Source, error) {
 }
 
 func (s *Service) ListActiveSources(ctx context.Context) ([]*source.Source, error) {
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	default:
-	}
-
 	sources, err := s.repo.FindActive(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list active sources: %w", err)
@@ -103,12 +79,6 @@ func (s *Service) ListActiveSources(ctx context.Context) ([]*source.Source, erro
 }
 
 func (s *Service) UpdateRateLimit(ctx context.Context, id source.ID, rateLimit int) (*source.Source, error) {
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	default:
-	}
-
 	src, err := s.GetSource(ctx, id)
 	if err != nil {
 		return nil, err
@@ -126,12 +96,6 @@ func (s *Service) UpdateRateLimit(ctx context.Context, id source.ID, rateLimit i
 }
 
 func (s *Service) SetEnabled(ctx context.Context, id source.ID, enabled bool) (*source.Source, error) {
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	default:
-	}
-
 	src, err := s.GetSource(ctx, id)
 	if err != nil {
 		return nil, err
@@ -151,12 +115,6 @@ func (s *Service) SetEnabled(ctx context.Context, id source.ID, enabled bool) (*
 }
 
 func (s *Service) DeleteSource(ctx context.Context, id source.ID) error {
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
-	}
-
 	if strings.TrimSpace(string(id)) == "" {
 		return source.ErrInvalidSourceID
 	}

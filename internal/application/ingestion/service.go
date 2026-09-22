@@ -30,12 +30,6 @@ func NewService(runRepo ingestion.Repository, sourceRepo source.Repository) (*Se
 }
 
 func (s *Service) StartRun(ctx context.Context, sourceID source.ID, initialCheckpoint string) (*ingestion.IngestionRun, error) {
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	default:
-	}
-
 	if strings.TrimSpace(string(sourceID)) == "" {
 		return nil, ingestion.ErrInvalidSourceID
 	}
@@ -66,12 +60,6 @@ func (s *Service) StartRun(ctx context.Context, sourceID source.ID, initialCheck
 }
 
 func (s *Service) RecordBatch(ctx context.Context, runID string, metrics ingestion.BatchMetrics, checkpoint string) error {
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
-	}
-
 	if strings.TrimSpace(runID) == "" {
 		return ingestion.ErrInvalidRunID
 	}
@@ -89,12 +77,6 @@ func (s *Service) RecordBatch(ctx context.Context, runID string, metrics ingesti
 }
 
 func (s *Service) CompleteRun(ctx context.Context, runID string, checkpoint string) error {
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
-	}
-
 	run, err := s.runRepo.FindRunByID(ctx, runID)
 	if err != nil {
 		return fmt.Errorf("find run for completion: %w", err)
@@ -118,12 +100,6 @@ func (s *Service) CompleteRun(ctx context.Context, runID string, checkpoint stri
 }
 
 func (s *Service) FailRun(ctx context.Context, runID string, errorSummary string) error {
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
-	}
-
 	run, err := s.runRepo.FindRunByID(ctx, runID)
 	if err != nil {
 		return fmt.Errorf("find run for failure: %w", err)
@@ -142,12 +118,6 @@ func (s *Service) FailRun(ctx context.Context, runID string, errorSummary string
 }
 
 func (s *Service) CancelRun(ctx context.Context, runID string, reason string) error {
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
-	}
-
 	run, err := s.runRepo.FindRunByID(ctx, runID)
 	if err != nil {
 		return fmt.Errorf("find run for cancellation: %w", err)
@@ -166,12 +136,6 @@ func (s *Service) CancelRun(ctx context.Context, runID string, reason string) er
 }
 
 func (s *Service) ResumeRun(ctx context.Context, previousRunID string) (*ingestion.IngestionRun, error) {
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	default:
-	}
-
 	prevRun, err := s.runRepo.FindRunByID(ctx, previousRunID)
 	if err != nil {
 		return nil, fmt.Errorf("find previous run for resume: %w", err)
@@ -181,12 +145,6 @@ func (s *Service) ResumeRun(ctx context.Context, previousRunID string) (*ingesti
 }
 
 func (s *Service) GetRun(ctx context.Context, runID string) (*ingestion.IngestionRun, error) {
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	default:
-	}
-
 	if strings.TrimSpace(runID) == "" {
 		return nil, ingestion.ErrInvalidRunID
 	}
@@ -200,12 +158,6 @@ func (s *Service) GetRun(ctx context.Context, runID string) (*ingestion.Ingestio
 }
 
 func (s *Service) GetLatestRun(ctx context.Context, sourceID source.ID) (*ingestion.IngestionRun, error) {
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	default:
-	}
-
 	if strings.TrimSpace(string(sourceID)) == "" {
 		return nil, ingestion.ErrInvalidSourceID
 	}
@@ -219,12 +171,6 @@ func (s *Service) GetLatestRun(ctx context.Context, sourceID source.ID) (*ingest
 }
 
 func (s *Service) ListRunsBySource(ctx context.Context, sourceID source.ID, limit int) ([]*ingestion.IngestionRun, error) {
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	default:
-	}
-
 	if strings.TrimSpace(string(sourceID)) == "" {
 		return nil, ingestion.ErrInvalidSourceID
 	}
