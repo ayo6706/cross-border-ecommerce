@@ -5,6 +5,7 @@ sql:
       - "migrations/000001_create_sources_and_products.up.sql"
       - "migrations/000002_create_outbox_events.up.sql"
       - "migrations/000003_create_ingestion_runs.up.sql"
+      - "migrations/000004_create_raw_records.up.sql"
     queries: "internal/infrastructure/postgres/queries"
     gen:
       go:

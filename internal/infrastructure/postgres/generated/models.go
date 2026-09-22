@@ -63,6 +63,18 @@ type ProductVersion struct {
 	CreatedAt     pgtype.Timestamptz `json:"created_at"`
 }
 
+type RawRecord struct {
+	ID                pgtype.UUID        `json:"id"`
+	SourceID          string             `json:"source_id"`
+	ExternalProductID string             `json:"external_product_id"`
+	Payload           []byte             `json:"payload"`
+	SourceVersion     string             `json:"source_version"`
+	Etag              string             `json:"etag"`
+	SourceUpdatedAt   pgtype.Timestamptz `json:"source_updated_at"`
+	IngestionRunID    pgtype.UUID        `json:"ingestion_run_id"`
+	ReceivedAt        pgtype.Timestamptz `json:"received_at"`
+}
+
 type Source struct {
 	ID        string             `json:"id"`
 	Name      string             `json:"name"`
