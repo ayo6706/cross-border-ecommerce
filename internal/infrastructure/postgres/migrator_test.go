@@ -153,12 +153,12 @@ func TestMigrator_LiveLifecycle(t *testing.T) {
 	if dirty {
 		t.Fatalf("expected clean state, got dirty=true")
 	}
-	if version != 3 {
-		t.Fatalf("expected version 3, got %d", version)
+	if version != 4 {
+		t.Fatalf("expected version 4, got %d", version)
 	}
 
 	// Step 2: Verify required tables exist
-	requiredTables := []string{"sources", "products", "product_versions", "outbox_events", "ingestion_runs", "schema_migrations"}
+	requiredTables := []string{"sources", "products", "product_versions", "outbox_events", "ingestion_runs", "raw_records", "schema_migrations"}
 	for _, table := range requiredTables {
 		var exists bool
 		query := `SELECT EXISTS (
@@ -178,7 +178,7 @@ func TestMigrator_LiveLifecycle(t *testing.T) {
 		t.Fatalf("re-running migrator.Up should succeed idempotently, got: %v", err)
 	}
 
-	// Step 4: Rollback 1 step (ingestion_runs)
+	// Step 4: Rollback 1 step (raw_records)
 	if err := migrator.Down(ctx, 1); err != nil {
 		t.Fatalf("migrator.Down(1) failed: %v", err)
 	}
@@ -187,26 +187,26 @@ func TestMigrator_LiveLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("migrator.Version after rollback failed: %v", err)
 	}
-	if dirty || version != 2 {
-		t.Fatalf("expected clean version 2 after 1 rollback step, got version=%d dirty=%v", version, dirty)
+	if dirty || version != 3 {
+		t.Fatalf("expected clean version 3 after 1 rollback step, got version=%d dirty=%v", version, dirty)
 	}
 
-	// Verify ingestion_runs was dropped, but outbox_events, products and sources remain
+	// Verify raw_records was dropped, but ingestion_runs, outbox_events, products and sources remain
+	var rawRecordsExists bool
+	_ = pool.QueryRow(ctx, `SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = 'raw_records');`).Scan(&rawRecordsExists)
+	if rawRecordsExists {
+		t.Fatalf("expected raw_records to be dropped after rollback")
+	}
+
 	var ingestionRunsExists bool
 	_ = pool.QueryRow(ctx, `SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = 'ingestion_runs');`).Scan(&ingestionRunsExists)
-	if ingestionRunsExists {
-		t.Fatalf("expected ingestion_runs to be dropped after rollback")
-	}
-
-	var outboxExists bool
-	_ = pool.QueryRow(ctx, `SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = 'outbox_events');`).Scan(&outboxExists)
-	if !outboxExists {
-		t.Fatalf("expected outbox_events table to still exist after rolling back ingestion_runs")
+	if !ingestionRunsExists {
+		t.Fatalf("expected ingestion_runs table to still exist after rolling back raw_records")
 	}
 
 	// Step 5: Rollback remaining steps
-	if err := migrator.Down(ctx, 2); err != nil {
-		t.Fatalf("migrator.Down(2) remaining failed: %v", err)
+	if err := migrator.Down(ctx, 3); err != nil {
+		t.Fatalf("migrator.Down(3) remaining failed: %v", err)
 	}
 
 	version, dirty, err = migrator.Version(ctx)
@@ -229,7 +229,7 @@ func TestMigrator_LiveLifecycle(t *testing.T) {
 	}
 
 	version, _, err = migrator.Version(ctx)
-	if err != nil || version != 3 {
-		t.Fatalf("expected final version 3, got %d (err: %v)", version, err)
+	if err != nil || version != 4 {
+		t.Fatalf("expected final version 4, got %d (err: %v)", version, err)
 	}
 }
