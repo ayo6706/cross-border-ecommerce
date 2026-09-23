@@ -21,6 +21,26 @@ const (
 	cursorPrefix     = "cursor:"
 )
 
+type Checkpoint struct {
+	Type  CheckpointType `json:"type"`
+	Value string         `json:"value"`
+}
+
+func NewCheckpoint(val string) Checkpoint {
+	return Checkpoint{
+		Type:  DetectCheckpointType(val),
+		Value: strings.TrimSpace(val),
+	}
+}
+
+func (c Checkpoint) String() string {
+	return c.Value
+}
+
+func (c Checkpoint) IsEmpty() bool {
+	return strings.TrimSpace(c.Value) == "" || c.Type == CheckpointTypeEmpty
+}
+
 func FormatTimestampCheckpoint(t time.Time) string {
 	if t.IsZero() {
 		return ""
@@ -80,7 +100,10 @@ func FormatCursorCheckpoint(cursor string) string {
 	if trimmed == "" {
 		return ""
 	}
-	return fmt.Sprintf("%s%s", cursorPrefix, trimmed)
+	if strings.HasPrefix(trimmed, cursorPrefix) {
+		return trimmed
+	}
+	return cursorPrefix + trimmed
 }
 
 func ParseCursorCheckpoint(cp string) (string, error) {
@@ -89,7 +112,12 @@ func ParseCursorCheckpoint(cp string) (string, error) {
 		return "", nil
 	}
 
-	if strings.HasPrefix(strings.ToLower(trimmed), cursorPrefix) {
+	lower := strings.ToLower(trimmed)
+	if strings.HasPrefix(lower, byteOffsetPrefix) {
+		return "", fmt.Errorf("%w: byte offset cannot be parsed as cursor: %s", ErrInvalidCheckpoint, trimmed)
+	}
+
+	if strings.HasPrefix(lower, cursorPrefix) {
 		cursorVal := strings.TrimSpace(trimmed[len(cursorPrefix):])
 		if cursorVal == "" {
 			return "", fmt.Errorf("%w: empty cursor value in checkpoint: %s", ErrInvalidCheckpoint, trimmed)

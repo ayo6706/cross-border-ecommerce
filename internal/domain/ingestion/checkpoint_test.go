@@ -209,6 +209,23 @@ func TestFormatAndParseCursorCheckpoint(t *testing.T) {
 			t.Errorf("expected ErrInvalidCheckpoint, got %v", err)
 		}
 	})
+
+	t.Run("FormatCursorIdempotent", func(t *testing.T) {
+		formatted := ingestion.FormatCursorCheckpoint("cursor:already_prefixed")
+		if formatted != "cursor:already_prefixed" {
+			t.Errorf("expected idempotent formatting, got %q", formatted)
+		}
+	})
+
+	t.Run("ByteOffsetRejectedAsCursor", func(t *testing.T) {
+		_, err := ingestion.ParseCursorCheckpoint("offset:1024")
+		if err == nil {
+			t.Fatal("expected error parsing offset as cursor, got nil")
+		}
+		if !errors.Is(err, ingestion.ErrInvalidCheckpoint) {
+			t.Errorf("expected ErrInvalidCheckpoint, got %v", err)
+		}
+	})
 }
 
 func TestDetectCheckpointType(t *testing.T) {
@@ -232,6 +249,146 @@ func TestDetectCheckpointType(t *testing.T) {
 			result := ingestion.DetectCheckpointType(tc.input)
 			if result != tc.expected {
 				t.Errorf("type mismatch for %q: got %v, want %v", tc.input, result, tc.expected)
+			}
+		})
+	}
+}
+
+func TestNewCheckpoint(t *testing.T) {
+	tests := []struct {
+		name          string
+		input         string
+		expectedType  ingestion.CheckpointType
+		expectedValue string
+		expectEmpty   bool
+	}{
+		{
+			name:          "EmptyString",
+			input:         "",
+			expectedType:  ingestion.CheckpointTypeEmpty,
+			expectedValue: "",
+			expectEmpty:   true,
+		},
+		{
+			name:          "WhitespaceString",
+			input:         "   \t\n  ",
+			expectedType:  ingestion.CheckpointTypeEmpty,
+			expectedValue: "",
+			expectEmpty:   true,
+		},
+		{
+			name:          "ByteOffset",
+			input:         "offset:4096",
+			expectedType:  ingestion.CheckpointTypeByteOffset,
+			expectedValue: "offset:4096",
+			expectEmpty:   false,
+		},
+		{
+			name:          "CursorPrefixed",
+			input:         "cursor:tok_xyz",
+			expectedType:  ingestion.CheckpointTypeCursor,
+			expectedValue: "cursor:tok_xyz",
+			expectEmpty:   false,
+		},
+		{
+			name:          "TimestampRFC3339",
+			input:         "2026-09-23T12:00:00Z",
+			expectedType:  ingestion.CheckpointTypeTimestamp,
+			expectedValue: "2026-09-23T12:00:00Z",
+			expectEmpty:   false,
+		},
+		{
+			name:          "OpaqueString",
+			input:         "opaque_cursor_999",
+			expectedType:  ingestion.CheckpointTypeCursor,
+			expectedValue: "opaque_cursor_999",
+			expectEmpty:   false,
+		},
+		{
+			name:          "UntrimmedInput",
+			input:         "  offset:512  ",
+			expectedType:  ingestion.CheckpointTypeByteOffset,
+			expectedValue: "offset:512",
+			expectEmpty:   false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cp := ingestion.NewCheckpoint(tc.input)
+			if cp.Type != tc.expectedType {
+				t.Errorf("type mismatch: got %v, want %v", cp.Type, tc.expectedType)
+			}
+			if cp.Value != tc.expectedValue {
+				t.Errorf("value mismatch: got %q, want %q", cp.Value, tc.expectedValue)
+			}
+			if cp.String() != tc.expectedValue {
+				t.Errorf("String() mismatch: got %q, want %q", cp.String(), tc.expectedValue)
+			}
+			if cp.IsEmpty() != tc.expectEmpty {
+				t.Errorf("IsEmpty() mismatch: got %v, want %v", cp.IsEmpty(), tc.expectEmpty)
+			}
+		})
+	}
+}
+
+func TestCheckpoint_IsEmpty(t *testing.T) {
+	tests := []struct {
+		name        string
+		cp          ingestion.Checkpoint
+		expectEmpty bool
+	}{
+		{
+			name:        "ZeroValueLiteral",
+			cp:          ingestion.Checkpoint{},
+			expectEmpty: true,
+		},
+		{
+			name: "TypeEmptyWithValue",
+			cp: ingestion.Checkpoint{
+				Type:  ingestion.CheckpointTypeEmpty,
+				Value: "ignored_value",
+			},
+			expectEmpty: true,
+		},
+		{
+			name: "TypeCursorWithEmptyValue",
+			cp: ingestion.Checkpoint{
+				Type:  ingestion.CheckpointTypeCursor,
+				Value: "",
+			},
+			expectEmpty: true,
+		},
+		{
+			name: "TypeCursorWithWhitespaceValue",
+			cp: ingestion.Checkpoint{
+				Type:  ingestion.CheckpointTypeCursor,
+				Value: "   ",
+			},
+			expectEmpty: true,
+		},
+		{
+			name: "ValidCursor",
+			cp: ingestion.Checkpoint{
+				Type:  ingestion.CheckpointTypeCursor,
+				Value: "cursor:abc",
+			},
+			expectEmpty: false,
+		},
+		{
+			name: "ValidByteOffset",
+			cp: ingestion.Checkpoint{
+				Type:  ingestion.CheckpointTypeByteOffset,
+				Value: "offset:1024",
+			},
+			expectEmpty: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.cp.IsEmpty(); got != tc.expectEmpty {
+				t.Errorf("IsEmpty() mismatch for %v: got %v, want %v", tc.cp, got, tc.expectEmpty)
 			}
 		})
 	}
