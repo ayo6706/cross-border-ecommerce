@@ -2,17 +2,17 @@ package product
 
 import (
 	"context"
+	"time"
 )
 
 type ListParams struct {
-	LastCreatedAt *string
+	LastCreatedAt *time.Time
 	LastID        *ID
 	Limit         int
 }
 
 type Repository interface {
 	FindByID(ctx context.Context, id ID) (*Product, error)
-	FindByFingerprint(ctx context.Context, fingerprint string) (*Product, error)
 	Save(ctx context.Context, p *Product) error
 	List(ctx context.Context, params ListParams) ([]*Product, error)
 }

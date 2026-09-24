@@ -109,6 +109,23 @@ func TestNewProduct(t *testing.T) {
 			},
 		},
 		{
+			name:          "empty ID generates UUID",
+			id:            "",
+			canonicalName: "Auto ID Item",
+			description:   "Desc",
+			brand:         "Brand",
+			originCountry: "US",
+			expectErr:     nil,
+			verify: func(t *testing.T, p *product.Product) {
+				if p.ID == "" {
+					t.Errorf("expected auto-generated ID, got empty string")
+				}
+				if len(p.ID) != 36 {
+					t.Errorf("expected UUID string length 36, got %d (%s)", len(p.ID), p.ID)
+				}
+			},
+		},
+		{
 			name:          "empty canonical name returns validation error",
 			id:            "prod-002",
 			canonicalName: "   ",

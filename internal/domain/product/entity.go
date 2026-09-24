@@ -4,7 +4,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/shopspring/decimal"
+	"github.com/ayo6706/cross-border-ecommerce/internal/platform/uuid"
 )
 
 type ID string
@@ -32,9 +32,18 @@ type Product struct {
 }
 
 func NewProduct(id ID, canonicalName, description, brand, originCountry string) (*Product, error) {
+	trimmedID := strings.TrimSpace(string(id))
+	if trimmedID == "" {
+		generatedID, err := uuid.NewString()
+		if err != nil {
+			return nil, err
+		}
+		trimmedID = generatedID
+	}
+
 	now := time.Now().UTC()
 	p := &Product{
-		ID:            id,
+		ID:            ID(trimmedID),
 		CanonicalName: strings.TrimSpace(canonicalName),
 		Description:   strings.TrimSpace(description),
 		Brand:         strings.TrimSpace(brand),
@@ -57,19 +66,4 @@ func (p *Product) Validate() error {
 		return ErrEmptyCanonicalName
 	}
 	return nil
-}
-
-type ProductPrice struct {
-	ProductID ID
-	SourceID  string
-	Currency  string
-	Amount    decimal.Decimal
-	UpdatedAt time.Time
-}
-
-type ProductInventory struct {
-	ProductID ID
-	SourceID  string
-	Quantity  int64
-	UpdatedAt time.Time
 }

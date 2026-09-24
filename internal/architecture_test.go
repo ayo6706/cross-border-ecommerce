@@ -9,49 +9,79 @@ import (
 	"testing"
 )
 
-// TestDomainLayerPurity enforces the hexagonal architecture rule that internal/domain
-// packages MUST remain pure Go without importing infrastructure, adapters, or external drivers.
-func TestDomainLayerPurity(t *testing.T) {
-	domainRoot := filepath.Join(".", "domain")
+// LayerRule defines layer boundary assertions.
+type LayerRule struct {
+	Name              string
+	Directory         string
+	ForbiddenPrefixes []string
+}
 
-	fset := token.NewFileSet()
-	err := filepath.WalkDir(domainRoot, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-			return nil
-		}
-
-		node, err := parser.ParseFile(fset, path, nil, parser.ImportsOnly)
-		if err != nil {
-			t.Fatalf("failed to parse file %s: %v", path, err)
-		}
-
-		for _, imp := range node.Imports {
-			importPath := strings.Trim(imp.Path.Value, `"`)
-
-			// Forbidden imports in pure domain:
-			forbiddenPrefixes := []string{
+func TestHexagonalArchitectureLayers(t *testing.T) {
+	rules := []LayerRule{
+		{
+			Name:      "Domain Layer Purity",
+			Directory: filepath.Join(".", "domain"),
+			ForbiddenPrefixes: []string{
 				"database/sql",
 				"net/http",
 				"github.com/jackc/pgx",
 				"github.com/ayo6706/cross-border-ecommerce/internal/infrastructure",
 				"github.com/ayo6706/cross-border-ecommerce/internal/adapters",
 				"github.com/ayo6706/cross-border-ecommerce/internal/application",
-			}
+			},
+		},
+		{
+			Name:      "Application Layer Purity",
+			Directory: filepath.Join(".", "application"),
+			ForbiddenPrefixes: []string{
+				"database/sql",
+				"github.com/jackc/pgx",
+				"github.com/ayo6706/cross-border-ecommerce/internal/infrastructure",
+				"github.com/ayo6706/cross-border-ecommerce/internal/adapters",
+			},
+		},
+		{
+			Name:      "Adapters Layer Purity",
+			Directory: filepath.Join(".", "adapters"),
+			ForbiddenPrefixes: []string{
+				"github.com/jackc/pgx",
+				"github.com/ayo6706/cross-border-ecommerce/internal/infrastructure",
+			},
+		},
+	}
 
-			for _, forbidden := range forbiddenPrefixes {
-				if strings.HasPrefix(importPath, forbidden) {
-					t.Errorf("Architecture violation in %s: domain must not import '%s'", path, importPath)
+	fset := token.NewFileSet()
+
+	for _, rule := range rules {
+		t.Run(rule.Name, func(t *testing.T) {
+			err := filepath.WalkDir(rule.Directory, func(path string, d fs.DirEntry, err error) error {
+				if err != nil {
+					return err
 				}
+				if d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+					return nil
+				}
+
+				node, err := parser.ParseFile(fset, path, nil, parser.ImportsOnly)
+				if err != nil {
+					t.Fatalf("failed to parse file %s: %v", path, err)
+				}
+
+				for _, imp := range node.Imports {
+					importPath := strings.Trim(imp.Path.Value, `"`)
+					for _, forbidden := range rule.ForbiddenPrefixes {
+						if strings.HasPrefix(importPath, forbidden) {
+							t.Errorf("Architecture boundary violation in %s: %s must not import '%s'", path, rule.Name, importPath)
+						}
+					}
+				}
+
+				return nil
+			})
+
+			if err != nil {
+				t.Fatalf("error walking %s directory: %v", rule.Directory, err)
 			}
-		}
-
-		return nil
-	})
-
-	if err != nil {
-		t.Fatalf("error walking domain directory: %v", err)
+		})
 	}
 }
