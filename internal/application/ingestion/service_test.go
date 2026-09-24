@@ -70,22 +70,25 @@ func (m *memoryRunRepo) UpdateProgress(_ context.Context, id string, metrics ing
 	return nil
 }
 
-func (m *memoryRunRepo) UpdateStatus(_ context.Context, id string, status ingestion.RunStatus, errorSummary string, checkpoint string, completedAt time.Time, updatedAt time.Time) error {
+func (m *memoryRunRepo) UpdateStatus(_ context.Context, run *ingestion.IngestionRun, from ingestion.RunStatus) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	r, ok := m.runs[id]
+	r, ok := m.runs[run.ID]
 	if !ok {
 		return ingestion.ErrRunNotFound
 	}
-
-	r.Status = status
-	r.ErrorSummary = errorSummary
-	if checkpoint != "" {
-		r.Checkpoint = checkpoint
+	if r.Status != from {
+		return ingestion.ErrInvalidTransition
 	}
-	r.CompletedAt = &completedAt
-	r.UpdatedAt = updatedAt
+
+	r.Status = run.Status
+	r.ErrorSummary = run.ErrorSummary
+	if run.Checkpoint != "" {
+		r.Checkpoint = run.Checkpoint
+	}
+	r.CompletedAt = run.CompletedAt
+	r.UpdatedAt = run.UpdatedAt
 	return nil
 }
 
@@ -237,6 +240,12 @@ func TestIngestionService_StartRun(t *testing.T) {
 	if !errors.Is(err, source.ErrSourceNotFound) {
 		t.Fatalf("expected ErrSourceNotFound, got %v", err)
 	}
+
+	// 4. Error on starting duplicate active run for same source
+	_, err = svc.StartRun(ctx, "active-src", "")
+	if !errors.Is(err, ingestion.ErrRunAlreadyActive) {
+		t.Fatalf("expected ErrRunAlreadyActive, got %v", err)
+	}
 }
 
 func TestIngestionService_RecordBatchAndComplete(t *testing.T) {
@@ -315,5 +324,15 @@ func TestIngestionService_ResumeRun(t *testing.T) {
 	}
 	if resumedRun.Status != ingestion.StatusRunning {
 		t.Fatalf("expected resumed run to be RUNNING, got %s", resumedRun.Status)
+	}
+
+	// Resuming a completed run fails
+	runComp, _ := ingestion.NewRun("run-comp", "src-1", "")
+	_ = runComp.Start(time.Now().UTC())
+	_ = runComp.Complete("cursor-final", time.Now().UTC())
+	_ = runRepo.CreateRun(ctx, runComp)
+	_, err = svc.ResumeRun(ctx, "run-comp")
+	if !errors.Is(err, ingestion.ErrInvalidTransition) {
+		t.Fatalf("expected ErrInvalidTransition resuming completed run, got %v", err)
 	}
 }

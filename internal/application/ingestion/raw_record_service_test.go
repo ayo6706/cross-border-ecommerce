@@ -175,23 +175,31 @@ func (m *memoryRawRecordRepo) ListByRunID(
 func TestRawRecordService_Constructor(t *testing.T) {
 	rawRepo := newMemoryRawRecordRepo()
 	sourceRepo := newMemorySourceRepo()
+	runRepo := newMemoryRunRepo()
 
 	t.Run("NilRawRepo", func(t *testing.T) {
-		svc, err := appingestion.NewRawRecordService(nil, sourceRepo, nil)
+		svc, err := appingestion.NewRawRecordService(nil, sourceRepo, runRepo)
 		if err == nil || svc != nil {
 			t.Fatal("expected error with nil raw record repo")
 		}
 	})
 
 	t.Run("NilSourceRepo", func(t *testing.T) {
-		svc, err := appingestion.NewRawRecordService(rawRepo, nil, nil)
+		svc, err := appingestion.NewRawRecordService(rawRepo, nil, runRepo)
 		if err == nil || svc != nil {
 			t.Fatal("expected error with nil source repo")
 		}
 	})
 
-	t.Run("ValidConstruct", func(t *testing.T) {
+	t.Run("NilRunRepo", func(t *testing.T) {
 		svc, err := appingestion.NewRawRecordService(rawRepo, sourceRepo, nil)
+		if err == nil || svc != nil {
+			t.Fatal("expected error with nil run repo")
+		}
+	})
+
+	t.Run("ValidConstruct", func(t *testing.T) {
+		svc, err := appingestion.NewRawRecordService(rawRepo, sourceRepo, runRepo)
 		if err != nil || svc == nil {
 			t.Fatalf("unexpected error creating service: %v", err)
 		}
@@ -203,10 +211,11 @@ func TestRawRecordService_StoreRawRecord(t *testing.T) {
 	sourceRepo := newMemorySourceRepo()
 	runRepo := newMemoryRunRepo()
 
-	activeSrc, _ := source.NewSource("src-active", "Active Supplier", source.TypeAPI, nil, 100)
+	apiCfg := map[string]any{"base_url": "https://api.example.com"}
+	activeSrc, _ := source.NewSource("src-active", "Active Supplier", source.TypeAPI, apiCfg, 100)
 	_ = sourceRepo.Save(context.Background(), activeSrc)
 
-	disabledSrc, _ := source.NewSource("src-disabled", "Disabled Supplier", source.TypeAPI, nil, 100)
+	disabledSrc, _ := source.NewSource("src-disabled", "Disabled Supplier", source.TypeAPI, apiCfg, 100)
 	disabledSrc.Enabled = false
 	_ = sourceRepo.Save(context.Background(), disabledSrc)
 
@@ -292,7 +301,8 @@ func TestRawRecordService_StoreRawRecordBatch(t *testing.T) {
 	sourceRepo := newMemorySourceRepo()
 	runRepo := newMemoryRunRepo()
 
-	activeSrc, _ := source.NewSource("src-active", "Active Supplier", source.TypeAPI, nil, 100)
+	apiCfg := map[string]any{"base_url": "https://api.example.com"}
+	activeSrc, _ := source.NewSource("src-active", "Active Supplier", source.TypeAPI, apiCfg, 100)
 	_ = sourceRepo.Save(context.Background(), activeSrc)
 
 	run, _ := ingestion.NewRun("run-200", "src-active", "")
@@ -317,20 +327,10 @@ func TestRawRecordService_StoreRawRecordBatch(t *testing.T) {
 	})
 
 	t.Run("SuccessBatch", func(t *testing.T) {
-		items := []appingestion.RawRecordItem{
-			{
-				ExternalProductID: "SKU-B1",
-				Payload:           []byte(`{"name": "Item 1"}`),
-				SourceVersion:     "v1",
-			},
-			{
-				ExternalProductID: "SKU-B2",
-				Payload:           []byte(`{"name": "Item 2"}`),
-				SourceVersion:     "v1",
-			},
-		}
+		r1, _ := ingestion.NewRawRecord(ingestion.RawRecordParams{SourceID: "src-active", ExternalProductID: "SKU-B1", Payload: []byte(`{"name": "Item 1"}`), SourceVersion: "v1"})
+		r2, _ := ingestion.NewRawRecord(ingestion.RawRecordParams{SourceID: "src-active", ExternalProductID: "SKU-B2", Payload: []byte(`{"name": "Item 2"}`), SourceVersion: "v1"})
 
-		records, err := svc.StoreRawRecordBatch(ctx, "src-active", "run-200", items)
+		records, err := svc.StoreRawRecordBatch(ctx, "src-active", "run-200", []*ingestion.RawRecord{r1, r2})
 		if err != nil {
 			t.Fatalf("expected success, got: %v", err)
 		}
@@ -345,18 +345,13 @@ func TestRawRecordService_StoreRawRecordBatch(t *testing.T) {
 	})
 
 	t.Run("InvalidItemInBatchFailsFast", func(t *testing.T) {
-		items := []appingestion.RawRecordItem{
-			{
-				ExternalProductID: "SKU-GOOD",
-				Payload:           []byte(`{"name": "Good"}`),
-			},
-			{
-				ExternalProductID: "", // invalid
-				Payload:           []byte(`{"name": "Bad"}`),
-			},
+		r1, _ := ingestion.NewRawRecord(ingestion.RawRecordParams{SourceID: "src-active", ExternalProductID: "SKU-GOOD", Payload: []byte(`{"name": "Good"}`)})
+		r2 := &ingestion.RawRecord{
+			ExternalProductID: "", // invalid
+			Payload:           []byte(`{"name": "Bad"}`),
 		}
 
-		_, err := svc.StoreRawRecordBatch(ctx, "src-active", "run-200", items)
+		_, err := svc.StoreRawRecordBatch(ctx, "src-active", "run-200", []*ingestion.RawRecord{r1, r2})
 		if err == nil {
 			t.Fatal("expected error on invalid item in batch")
 		}
@@ -368,7 +363,8 @@ func TestRawRecordService_Queries(t *testing.T) {
 	sourceRepo := newMemorySourceRepo()
 	runRepo := newMemoryRunRepo()
 
-	activeSrc, _ := source.NewSource("src-query", "Query Supplier", source.TypeAPI, nil, 100)
+	apiCfg := map[string]any{"base_url": "https://api.example.com"}
+	activeSrc, _ := source.NewSource("src-query", "Query Supplier", source.TypeAPI, apiCfg, 100)
 	_ = sourceRepo.Save(context.Background(), activeSrc)
 
 	svc, err := appingestion.NewRawRecordService(rawRepo, sourceRepo, runRepo)

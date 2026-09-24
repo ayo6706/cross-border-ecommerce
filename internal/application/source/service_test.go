@@ -97,16 +97,16 @@ func TestSourceService_CRUD(t *testing.T) {
 
 	// 1. Create Source
 	src, err := svc.CreateSource(ctx, appsource.CreateSourceParams{
-		ID:        "src-api-01",
-		Name:      "Supplier API 1",
-		Type:      source.TypeAPI,
-		Config:    map[string]any{"url": "https://api.supplier.com"},
-		RateLimit: 50,
+		ID:                 "src-api-01",
+		Name:               "Supplier API 1",
+		Type:               source.TypeAPI,
+		Config:             map[string]any{"base_url": "https://api.supplier.com"},
+		RateLimitPerSecond: 50,
 	})
 	if err != nil {
 		t.Fatalf("failed to create source: %v", err)
 	}
-	if src.ID != "src-api-01" || !src.Enabled || src.RateLimit != 50 {
+	if src.ID != "src-api-01" || !src.Enabled || src.RateLimitPerSecond != 50 {
 		t.Fatalf("unexpected source created: %+v", src)
 	}
 
@@ -124,8 +124,8 @@ func TestSourceService_CRUD(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to update rate limit: %v", err)
 	}
-	if updated.RateLimit != 200 {
-		t.Fatalf("expected rate limit 200, got %d", updated.RateLimit)
+	if updated.RateLimitPerSecond != 200 {
+		t.Fatalf("expected rate limit 200, got %d", updated.RateLimitPerSecond)
 	}
 
 	// Invalid rate limit rejected

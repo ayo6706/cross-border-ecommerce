@@ -28,6 +28,9 @@ func NewRawRecordService(
 	if sourceRepo == nil {
 		return nil, errors.New("source repository is required")
 	}
+	if runRepo == nil {
+		return nil, errors.New("ingestion repository is required")
+	}
 	return &RawRecordService{
 		rawRepo:    rawRepo,
 		sourceRepo: sourceRepo,
@@ -44,16 +47,6 @@ type StoreRawRecordParams struct {
 	ETag              string
 	SourceUpdatedAt   *time.Time
 	IngestionRunID    string
-	ReceivedAt        time.Time
-}
-
-type RawRecordItem struct {
-	ID                string
-	ExternalProductID string
-	Payload           []byte
-	SourceVersion     string
-	ETag              string
-	SourceUpdatedAt   *time.Time
 	ReceivedAt        time.Time
 }
 
@@ -74,23 +67,23 @@ func (s *RawRecordService) StoreRawRecord(
 	}
 
 	trimmedRunID := strings.TrimSpace(params.IngestionRunID)
-	if trimmedRunID != "" && s.runRepo != nil {
+	if trimmedRunID != "" {
 		if _, err := s.runRepo.FindRunByID(ctx, trimmedRunID); err != nil {
 			return nil, fmt.Errorf("verify ingestion run for raw record: %w", err)
 		}
 	}
 
-	record, err := ingestion.NewRawRecord(
-		params.ID,
-		params.SourceID,
-		params.ExternalProductID,
-		params.Payload,
-		params.SourceVersion,
-		params.ETag,
-		params.SourceUpdatedAt,
-		trimmedRunID,
-		params.ReceivedAt,
-	)
+	record, err := ingestion.NewRawRecord(ingestion.RawRecordParams{
+		ID:                params.ID,
+		SourceID:          params.SourceID,
+		ExternalProductID: params.ExternalProductID,
+		Payload:           params.Payload,
+		SourceVersion:     params.SourceVersion,
+		ETag:              params.ETag,
+		SourceUpdatedAt:   params.SourceUpdatedAt,
+		IngestionRunID:    trimmedRunID,
+		ReceivedAt:        params.ReceivedAt,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("initialize raw record entity: %w", err)
 	}
@@ -106,13 +99,13 @@ func (s *RawRecordService) StoreRawRecordBatch(
 	ctx context.Context,
 	sourceID source.ID,
 	runID string,
-	items []RawRecordItem,
+	records []*ingestion.RawRecord,
 ) ([]*ingestion.RawRecord, error) {
 	if strings.TrimSpace(string(sourceID)) == "" {
 		return nil, ingestion.ErrInvalidSourceID
 	}
 
-	if len(items) == 0 {
+	if len(records) == 0 {
 		return []*ingestion.RawRecord{}, nil
 	}
 
@@ -125,29 +118,18 @@ func (s *RawRecordService) StoreRawRecordBatch(
 	}
 
 	trimmedRunID := strings.TrimSpace(runID)
-	if trimmedRunID != "" && s.runRepo != nil {
+	if trimmedRunID != "" {
 		if _, err := s.runRepo.FindRunByID(ctx, trimmedRunID); err != nil {
 			return nil, fmt.Errorf("verify ingestion run for batch: %w", err)
 		}
 	}
 
-	records := make([]*ingestion.RawRecord, 0, len(items))
-	for i, item := range items {
-		record, err := ingestion.NewRawRecord(
-			item.ID,
-			sourceID,
-			item.ExternalProductID,
-			item.Payload,
-			item.SourceVersion,
-			item.ETag,
-			item.SourceUpdatedAt,
-			trimmedRunID,
-			item.ReceivedAt,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("initialize batch raw record item %d: %w", i, err)
+	for _, rec := range records {
+		rec.SourceID = sourceID
+		rec.IngestionRunID = trimmedRunID
+		if err := rec.Validate(); err != nil {
+			return nil, fmt.Errorf("validate batch record: %w", err)
 		}
-		records = append(records, record)
 	}
 
 	if err := s.rawRepo.SaveBatch(ctx, records); err != nil {

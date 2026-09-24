@@ -21,11 +21,11 @@ func NewService(repo source.Repository) (*Service, error) {
 }
 
 type CreateSourceParams struct {
-	ID        source.ID
-	Name      string
-	Type      source.Type
-	Config    map[string]any
-	RateLimit int
+	ID                 source.ID
+	Name               string
+	Type               source.Type
+	Config             map[string]any
+	RateLimitPerSecond int
 }
 
 func (s *Service) CreateSource(ctx context.Context, params CreateSourceParams) (*source.Source, error) {
@@ -34,7 +34,7 @@ func (s *Service) CreateSource(ctx context.Context, params CreateSourceParams) (
 		strings.TrimSpace(params.Name),
 		params.Type,
 		params.Config,
-		params.RateLimit,
+		params.RateLimitPerSecond,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("create source entity: %w", err)

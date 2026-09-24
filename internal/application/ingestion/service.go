@@ -42,6 +42,14 @@ func (s *Service) StartRun(ctx context.Context, sourceID source.ID, initialCheck
 		return nil, ingestion.ErrInactiveSource
 	}
 
+	latestRun, err := s.runRepo.FindLatestRunBySource(ctx, sourceID)
+	if err != nil && !errors.Is(err, ingestion.ErrRunNotFound) {
+		return nil, fmt.Errorf("check active run: %w", err)
+	}
+	if err == nil && latestRun != nil && (latestRun.Status == ingestion.StatusRunning || latestRun.Status == ingestion.StatusPending) {
+		return nil, ingestion.ErrRunAlreadyActive
+	}
+
 	now := time.Now().UTC()
 	run, err := ingestion.NewRun("", sourceID, initialCheckpoint)
 	if err != nil {
@@ -77,61 +85,42 @@ func (s *Service) RecordBatch(ctx context.Context, runID string, metrics ingesti
 }
 
 func (s *Service) CompleteRun(ctx context.Context, runID string, checkpoint string) error {
-	run, err := s.runRepo.FindRunByID(ctx, runID)
-	if err != nil {
-		return fmt.Errorf("find run for completion: %w", err)
-	}
-
-	if run.Status != ingestion.StatusRunning {
-		return ingestion.ErrInvalidTransition
-	}
-
-	now := time.Now().UTC()
-	status := ingestion.StatusCompleted
-	if run.RecordsFailed > 0 {
-		status = ingestion.StatusPartial
-	}
-
-	if err := s.runRepo.UpdateStatus(ctx, runID, status, "", strings.TrimSpace(checkpoint), now, now); err != nil {
-		return fmt.Errorf("complete run status: %w", err)
-	}
-
-	return nil
+	return s.transitionRun(ctx, runID, "complete", func(run *ingestion.IngestionRun, now time.Time) error {
+		return run.Complete(checkpoint, now)
+	})
 }
 
 func (s *Service) FailRun(ctx context.Context, runID string, errorSummary string) error {
-	run, err := s.runRepo.FindRunByID(ctx, runID)
-	if err != nil {
-		return fmt.Errorf("find run for failure: %w", err)
-	}
-
-	if run.Status == ingestion.StatusCompleted || run.Status == ingestion.StatusCancelled {
-		return ingestion.ErrInvalidTransition
-	}
-
-	now := time.Now().UTC()
-	if err := s.runRepo.UpdateStatus(ctx, runID, ingestion.StatusFailed, strings.TrimSpace(errorSummary), "", now, now); err != nil {
-		return fmt.Errorf("fail run status: %w", err)
-	}
-
-	return nil
+	return s.transitionRun(ctx, runID, "fail", func(run *ingestion.IngestionRun, now time.Time) error {
+		return run.Fail(errorSummary, now)
+	})
 }
 
 func (s *Service) CancelRun(ctx context.Context, runID string, reason string) error {
+	return s.transitionRun(ctx, runID, "cancel", func(run *ingestion.IngestionRun, now time.Time) error {
+		return run.Cancel(reason, now)
+	})
+}
+
+func (s *Service) transitionRun(
+	ctx context.Context,
+	runID string,
+	op string,
+	apply func(run *ingestion.IngestionRun, now time.Time) error,
+) error {
 	run, err := s.runRepo.FindRunByID(ctx, runID)
 	if err != nil {
-		return fmt.Errorf("find run for cancellation: %w", err)
+		return fmt.Errorf("find run to %s: %w", op, err)
 	}
 
-	if run.Status == ingestion.StatusCompleted || run.Status == ingestion.StatusFailed {
-		return ingestion.ErrInvalidTransition
+	from := run.Status
+	if err := apply(run, time.Now().UTC()); err != nil {
+		return err
 	}
 
-	now := time.Now().UTC()
-	if err := s.runRepo.UpdateStatus(ctx, runID, ingestion.StatusCancelled, strings.TrimSpace(reason), "", now, now); err != nil {
-		return fmt.Errorf("cancel run status: %w", err)
+	if err := s.runRepo.UpdateStatus(ctx, run, from); err != nil {
+		return fmt.Errorf("%s run: %w", op, err)
 	}
-
 	return nil
 }
 
@@ -139,6 +128,10 @@ func (s *Service) ResumeRun(ctx context.Context, previousRunID string) (*ingesti
 	prevRun, err := s.runRepo.FindRunByID(ctx, previousRunID)
 	if err != nil {
 		return nil, fmt.Errorf("find previous run for resume: %w", err)
+	}
+
+	if prevRun.Status != ingestion.StatusPartial && prevRun.Status != ingestion.StatusFailed {
+		return nil, fmt.Errorf("%w: only PARTIAL or FAILED runs can be resumed (current status: %s)", ingestion.ErrInvalidTransition, prevRun.Status)
 	}
 
 	return s.StartRun(ctx, prevRun.SourceID, prevRun.Checkpoint)
