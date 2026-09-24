@@ -135,8 +135,8 @@ func TestMigrator_LiveLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to discover migrations: %v", err)
 	}
-	if len(discovered) < 12 {
-		t.Fatalf("expected at least 12 migration files (6 up, 6 down), got %d", len(discovered))
+	if len(discovered) < 14 {
+		t.Fatalf("expected at least 14 migration files (7 up, 7 down), got %d", len(discovered))
 	}
 	latestVersion := discovered[len(discovered)-1].Version
 

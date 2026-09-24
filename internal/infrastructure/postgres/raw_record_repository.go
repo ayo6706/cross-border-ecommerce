@@ -261,6 +261,48 @@ func (r *RawRecordRepository) ListByRunID(
 	return records, nil
 }
 
+func (r *RawRecordRepository) ListKeysetByRunID(
+	ctx context.Context,
+	runID string,
+	cursorID *string,
+	limit int,
+) ([]*ingestion.RawRecord, error) {
+	runUUID, err := parseUUID(runID)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ingestion.ErrInvalidRunID, err)
+	}
+
+	clampedLimit := listLimit(limit, 50)
+	var rows []generated.RawRecord
+
+	if cursorID != nil && strings.TrimSpace(*cursorID) != "" {
+		cUUID, parseErr := parseUUID(*cursorID)
+		if parseErr != nil {
+			return nil, fmt.Errorf("invalid cursor id: %w", parseErr)
+		}
+		rows, err = r.queries.ListRawRecordsByRunIDKeysetAfterCursor(ctx, generated.ListRawRecordsByRunIDKeysetAfterCursorParams{
+			IngestionRunID: runUUID,
+			CursorID:       cUUID,
+			Limit:          clampedLimit,
+		})
+	} else {
+		rows, err = r.queries.ListRawRecordsByRunIDKeysetFirstPage(ctx, generated.ListRawRecordsByRunIDKeysetFirstPageParams{
+			IngestionRunID: runUUID,
+			Limit:          clampedLimit,
+		})
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("list raw records keyset by run id: %w", err)
+	}
+
+	records := make([]*ingestion.RawRecord, 0, len(rows))
+	for _, row := range rows {
+		records = append(records, toDomainRawRecord(row))
+	}
+	return records, nil
+}
+
 func toDomainRawRecord(row generated.RawRecord) *ingestion.RawRecord {
 	return &ingestion.RawRecord{
 		ID:                uuidToString(row.ID),

@@ -49,7 +49,7 @@ func setupLiveProductDB(t *testing.T) (*pgxpool.Pool, *postgres.ProductRepositor
 	t.Cleanup(func() {
 		cleanCtx, cleanCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cleanCancel()
-		_, _ = pool.Exec(cleanCtx, "TRUNCATE products, product_versions CASCADE")
+		_, _ = pool.Exec(cleanCtx, "TRUNCATE products, product_versions, product_sources, product_changes, ingestion_run_processing CASCADE")
 		pool.Close()
 	})
 
