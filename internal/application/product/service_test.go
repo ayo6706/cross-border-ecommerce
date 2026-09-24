@@ -13,13 +13,11 @@ import (
 type mockProductRepository struct {
 	mu       sync.RWMutex
 	products map[product.ID]*product.Product
-	byFp     map[string]product.ID
 }
 
 func newMockProductRepository() *mockProductRepository {
 	return &mockProductRepository{
 		products: make(map[product.ID]*product.Product),
-		byFp:     make(map[string]product.ID),
 	}
 }
 
@@ -34,18 +32,6 @@ func (m *mockProductRepository) FindByID(ctx context.Context, id product.ID) (*p
 	return &cp, nil
 }
 
-func (m *mockProductRepository) FindByFingerprint(ctx context.Context, fp string) (*product.Product, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	id, ok := m.byFp[fp]
-	if !ok {
-		return nil, product.ErrProductNotFound
-	}
-	p := m.products[id]
-	cp := *p
-	return &cp, nil
-}
-
 func (m *mockProductRepository) Save(ctx context.Context, p *product.Product) error {
 	if p == nil {
 		return product.ErrInvalidProductState
@@ -54,9 +40,6 @@ func (m *mockProductRepository) Save(ctx context.Context, p *product.Product) er
 	defer m.mu.Unlock()
 	cp := *p
 	m.products[p.ID] = &cp
-	if p.CurrentFingerprint != "" {
-		m.byFp[p.CurrentFingerprint] = p.ID
-	}
 	return nil
 }
 

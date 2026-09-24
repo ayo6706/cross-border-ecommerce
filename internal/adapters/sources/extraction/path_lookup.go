@@ -5,44 +5,15 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+
+	"github.com/ayo6706/cross-border-ecommerce/internal/platform/jsonpath"
 )
 
 // LookupPath traverses a parsed JSON structure (map[string]any or []any) using dot notation.
 // Supports array indexing via dot notation or bracket notation (e.g. "items.0.sku" or "items[0].sku").
 // Returns nil if any key or index in the path is not found.
 func LookupPath(val any, path string) (any, bool) {
-	tokens := tokenizePath(path)
-	if len(tokens) == 0 {
-		return val, true
-	}
-
-	current := val
-	for _, token := range tokens {
-		if current == nil {
-			return nil, false
-		}
-
-		switch node := current.(type) {
-		case map[string]any:
-			next, ok := node[token]
-			if !ok {
-				return nil, false
-			}
-			current = next
-
-		case []any:
-			idx, err := strconv.Atoi(token)
-			if err != nil || idx < 0 || idx >= len(node) {
-				return nil, false
-			}
-			current = node[idx]
-
-		default:
-			return nil, false
-		}
-	}
-
-	return current, true
+	return jsonpath.LookupPath(val, path)
 }
 
 // LookupString traverses the path and returns the resolved value as a string.
@@ -75,38 +46,4 @@ func LookupString(val any, path string) (string, bool) {
 	default:
 		return "", false
 	}
-}
-
-// tokenizePath splits a dot/bracket path into normalized step tokens.
-// e.g. "payload.items[0].sku" -> ["payload", "items", "0", "sku"]
-func tokenizePath(path string) []string {
-	trimmed := strings.TrimSpace(path)
-	if trimmed == "" || trimmed == "." {
-		return nil
-	}
-
-	// Normalize bracket notation: "items[0]" -> "items.0"
-	var sb strings.Builder
-	sb.Grow(len(trimmed))
-	for i := 0; i < len(trimmed); i++ {
-		c := trimmed[i]
-		switch c {
-		case '[':
-			sb.WriteByte('.')
-		case ']':
-			// omit closing bracket
-		default:
-			sb.WriteByte(c)
-		}
-	}
-
-	rawTokens := strings.Split(sb.String(), ".")
-	tokens := make([]string, 0, len(rawTokens))
-	for _, t := range rawTokens {
-		token := strings.TrimSpace(t)
-		if token != "" {
-			tokens = append(tokens, token)
-		}
-	}
-	return tokens
 }
