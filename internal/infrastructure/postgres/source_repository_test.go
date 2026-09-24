@@ -28,9 +28,10 @@ func TestSourceRepository_ConstructorValidation(t *testing.T) {
 func setupLiveSourceDB(t *testing.T) (*pgxpool.Pool, *postgres.SourceRepository) {
 	t.Helper()
 
-	connStr := os.Getenv("DATABASE_URL")
+	connStr := os.Getenv("TEST_DATABASE_URL")
 	if connStr == "" {
-		connStr = "postgres://postgres:postgres@127.0.0.1:5433/crossborder_test?sslmode=disable"
+		t.Skip("skipping live database test: TEST_DATABASE_URL not set")
+		return nil, nil
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -82,12 +83,12 @@ func TestSourceRepository_LiveIntegration(t *testing.T) {
 
 	t.Run("Save_And_FindByID", func(t *testing.T) {
 		s := &source.Source{
-			ID:        source.ID("shopify-us-live-test"),
-			Name:      "Shopify US Merchant Store",
-			Type:      source.TypeAPI,
-			Config:    map[string]any{"store_domain": "us-merchant.myshopify.com", "sync_interval_sec": float64(300)},
-			RateLimit: 50,
-			Enabled:   true,
+			ID:                 source.ID("shopify-us-live-test"),
+			Name:               "Shopify US Merchant Store",
+			Type:               source.TypeAPI,
+			Config:             map[string]any{"store_domain": "us-merchant.myshopify.com", "sync_interval_sec": float64(300)},
+			RateLimitPerSecond: 50,
+			Enabled:            true,
 		}
 		t.Cleanup(func() {
 			cleanCtx, cleanCancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -113,18 +114,18 @@ func TestSourceRepository_LiveIntegration(t *testing.T) {
 
 	t.Run("FindActive_FiltersCorrectly", func(t *testing.T) {
 		sActive := &source.Source{
-			ID:        source.ID("active-test-source"),
-			Name:      "Active Source",
-			Type:      source.TypeAPI,
-			RateLimit: 20,
-			Enabled:   true,
+			ID:                 source.ID("active-test-source"),
+			Name:               "Active Source",
+			Type:               source.TypeAPI,
+			RateLimitPerSecond: 20,
+			Enabled:            true,
 		}
 		sDisabled := &source.Source{
-			ID:        source.ID("disabled-test-source"),
-			Name:      "Disabled Source",
-			Type:      source.TypeFeed,
-			RateLimit: 10,
-			Enabled:   false,
+			ID:                 source.ID("disabled-test-source"),
+			Name:               "Disabled Source",
+			Type:               source.TypeFeed,
+			RateLimitPerSecond: 10,
+			Enabled:            false,
 		}
 
 		t.Cleanup(func() {
@@ -161,11 +162,11 @@ func TestSourceRepository_LiveIntegration(t *testing.T) {
 
 	t.Run("List_And_Delete", func(t *testing.T) {
 		s := &source.Source{
-			ID:        source.ID("delete-test-source"),
-			Name:      "To Delete",
-			Type:      source.TypeFile,
-			RateLimit: 30,
-			Enabled:   true,
+			ID:                 source.ID("delete-test-source"),
+			Name:               "To Delete",
+			Type:               source.TypeFile,
+			RateLimitPerSecond: 30,
+			Enabled:            true,
 		}
 		_ = repo.Save(ctx, s)
 

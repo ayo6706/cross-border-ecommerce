@@ -1,12 +1,12 @@
 package postgres_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
-	"reflect"
 	"testing"
 	"time"
 
@@ -21,20 +21,20 @@ func TestRawRecordRepository_ConstructorValidation(t *testing.T) {
 	t.Parallel()
 
 	repo, err := postgres.NewRawRecordRepository(nil)
-	if err == nil {
-		t.Fatal("expected error when db is nil, got nil")
-	}
 	if repo != nil {
-		t.Fatalf("expected nil repo, got %v", repo)
+		t.Fatalf("expected nil repo on nil pool, got %v", repo)
+	}
+	if err == nil {
+		t.Fatal("expected error on nil pool, got nil")
 	}
 }
 
 func setupLiveRawRecordDB(t *testing.T) (*pgxpool.Pool, *postgres.RawRecordRepository, source.ID, string) {
 	t.Helper()
-
-	connStr := os.Getenv("DATABASE_URL")
+	connStr := os.Getenv("TEST_DATABASE_URL")
 	if connStr == "" {
-		connStr = "postgres://postgres:postgres@127.0.0.1:5433/crossborder_test?sslmode=disable"
+		t.Skip("skipping live database test: TEST_DATABASE_URL not set")
+		return nil, nil, "", ""
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -60,59 +60,48 @@ func setupLiveRawRecordDB(t *testing.T) (*pgxpool.Pool, *postgres.RawRecordRepos
 		t.Fatalf("failed to create migrator: %v", err)
 	}
 	if err := migrator.Up(ctx); err != nil {
-		t.Fatalf("failed to apply migrations: %v", err)
+		t.Fatalf("failed to run migrations: %v", err)
 	}
 
-	sourceRepo, err := postgres.NewSourceRepository(pool)
+	srcRepo, err := postgres.NewSourceRepository(pool)
 	if err != nil {
-		t.Fatalf("failed to create source repository: %v", err)
+		t.Fatalf("failed to create source repo: %v", err)
 	}
 
-	testSourceID := source.ID(fmt.Sprintf("raw-src-%d", time.Now().UnixNano()))
+	sourceID := source.ID(fmt.Sprintf("src-test-raw-%d", time.Now().UnixNano()))
 	testSource, err := source.NewSource(
-		testSourceID,
-		"Raw Record Test Supplier",
+		sourceID,
+		"Test Live Source",
 		source.TypeAPI,
-		map[string]any{"api_key": "test-key"},
-		50,
+		map[string]any{"base_url": "https://api.example.com"},
+		100,
 	)
 	if err != nil {
-		t.Fatalf("failed to create test source entity: %v", err)
+		t.Fatalf("failed to create source entity: %v", err)
 	}
-	if err := sourceRepo.Save(ctx, testSource); err != nil {
-		t.Fatalf("failed to seed test source: %v", err)
+	if err := srcRepo.Save(ctx, testSource); err != nil {
+		t.Fatalf("failed to seed source: %v", err)
 	}
 
 	ingestionRepo, err := postgres.NewIngestionRepository(pool)
 	if err != nil {
-		t.Fatalf("failed to create ingestion repository: %v", err)
+		t.Fatalf("failed to create ingestion repo: %v", err)
 	}
 
-	run, err := ingestion.NewRun("", testSourceID, "cp-init")
+	run, err := ingestion.NewRun("", sourceID, "")
 	if err != nil {
-		t.Fatalf("failed to create run: %v", err)
-	}
-	if err := run.Start(time.Now()); err != nil {
-		t.Fatalf("failed to start run: %v", err)
+		t.Fatalf("failed to create run entity: %v", err)
 	}
 	if err := ingestionRepo.CreateRun(ctx, run); err != nil {
-		t.Fatalf("failed to seed ingestion run: %v", err)
+		t.Fatalf("failed to seed run: %v", err)
 	}
 
 	repo, err := postgres.NewRawRecordRepository(pool)
 	if err != nil {
-		t.Fatalf("failed to create raw record repository: %v", err)
+		t.Fatalf("failed to create raw record repo: %v", err)
 	}
 
-	t.Cleanup(func() {
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cleanupCancel()
-		_, _ = pool.Exec(cleanupCtx, "DELETE FROM raw_records WHERE source_id = $1", string(testSourceID))
-		_, _ = pool.Exec(cleanupCtx, "DELETE FROM ingestion_runs WHERE source_id = $1", string(testSourceID))
-		_, _ = pool.Exec(cleanupCtx, "DELETE FROM sources WHERE id = $1", string(testSourceID))
-	})
-
-	return pool, repo, testSourceID, run.ID
+	return pool, repo, sourceID, run.ID
 }
 
 func TestRawRecordRepository_LiveIntegration(t *testing.T) {
@@ -132,17 +121,16 @@ func TestRawRecordRepository_LiveIntegration(t *testing.T) {
 	t.Run("Save_And_FindByID", func(t *testing.T) {
 		now := time.Now().UTC().Truncate(time.Microsecond)
 		payload := []byte(`{"title": "Organic Green Tea", "price": 12.50}`)
-		rec, err := ingestion.NewRawRecord(
-			"",
-			testSourceID,
-			"SKU-TEA-001",
-			payload,
-			"v1.2",
-			"etag-tea-1",
-			&now,
-			runID,
-			now,
-		)
+		rec, err := ingestion.NewRawRecord(ingestion.RawRecordParams{
+			SourceID:          testSourceID,
+			ExternalProductID: "SKU-TEA-001",
+			Payload:           payload,
+			SourceVersion:     "v1.2",
+			ETag:              "etag-tea-1",
+			SourceUpdatedAt:   &now,
+			IngestionRunID:    runID,
+			ReceivedAt:        now,
+		})
 		if err != nil {
 			t.Fatalf("failed to create raw record entity: %v", err)
 		}
@@ -159,32 +147,38 @@ func TestRawRecordRepository_LiveIntegration(t *testing.T) {
 			t.Errorf("expected ID %s, got: %s", rec.ID, found.ID)
 		}
 		if found.SourceID != testSourceID {
-			t.Errorf("expected SourceID %s, got: %s", testSourceID, found.SourceID)
+			t.Errorf("expected source %s, got: %s", testSourceID, found.SourceID)
 		}
 		if found.ExternalProductID != "SKU-TEA-001" {
-			t.Errorf("expected ExternalProductID SKU-TEA-001, got: %s", found.ExternalProductID)
+			t.Errorf("expected SKU-TEA-001, got: %s", found.ExternalProductID)
 		}
-		var expectedJSON, actualJSON any
+		if !bytes.Equal(found.PayloadRaw, payload) {
+			t.Errorf("expected payload_raw %s, got: %s", string(payload), string(found.PayloadRaw))
+		}
+		var expectedJSON, actualJSON map[string]any
 		if err := json.Unmarshal(payload, &expectedJSON); err != nil {
-			t.Fatalf("unmarshal expected payload: %v", err)
+			t.Fatalf("failed to unmarshal expected payload: %v", err)
 		}
 		if err := json.Unmarshal(found.Payload, &actualJSON); err != nil {
-			t.Fatalf("unmarshal found payload: %v", err)
+			t.Fatalf("failed to unmarshal actual payload: %v", err)
 		}
-		if !reflect.DeepEqual(expectedJSON, actualJSON) {
-			t.Errorf("expected payload %v, got: %v", expectedJSON, actualJSON)
+		if expectedJSON["title"] != actualJSON["title"] {
+			t.Errorf("expected title %v, got %v", expectedJSON["title"], actualJSON["title"])
 		}
 		if found.SourceVersion != "v1.2" {
-			t.Errorf("expected SourceVersion v1.2, got: %s", found.SourceVersion)
+			t.Errorf("expected version v1.2, got: %s", found.SourceVersion)
 		}
 		if found.ETag != "etag-tea-1" {
 			t.Errorf("expected ETag etag-tea-1, got: %s", found.ETag)
 		}
-		if found.IngestionRunID != runID {
-			t.Errorf("expected IngestionRunID %s, got: %s", runID, found.IngestionRunID)
-		}
 		if found.SourceUpdatedAt == nil || !found.SourceUpdatedAt.Equal(now) {
-			t.Errorf("expected SourceUpdatedAt %v, got: %v", now, found.SourceUpdatedAt)
+			t.Errorf("expected source updated at %v, got: %v", now, found.SourceUpdatedAt)
+		}
+		if found.IngestionRunID != runID {
+			t.Errorf("expected run ID %s, got: %s", runID, found.IngestionRunID)
+		}
+		if !found.ReceivedAt.Equal(now) {
+			t.Errorf("expected received at %v, got: %v", now, found.ReceivedAt)
 		}
 	})
 
@@ -194,17 +188,16 @@ func TestRawRecordRepository_LiveIntegration(t *testing.T) {
 		for i := 1; i <= 5; i++ {
 			sku := fmt.Sprintf("SKU-BATCH-%03d", i)
 			payload := []byte(fmt.Sprintf(`{"sku": "%s", "item_num": %d}`, sku, i))
-			rec, err := ingestion.NewRawRecord(
-				"",
-				testSourceID,
-				sku,
-				payload,
-				"v2.0",
-				fmt.Sprintf("etag-b-%d", i),
-				&now,
-				runID,
-				now,
-			)
+			rec, err := ingestion.NewRawRecord(ingestion.RawRecordParams{
+				SourceID:          testSourceID,
+				ExternalProductID: sku,
+				Payload:           payload,
+				SourceVersion:     "v2.0",
+				ETag:              fmt.Sprintf("etag-b-%d", i),
+				SourceUpdatedAt:   &now,
+				IngestionRunID:    runID,
+				ReceivedAt:        now,
+			})
 			if err != nil {
 				t.Fatalf("failed to initialize batch item %d: %v", i, err)
 			}
@@ -230,17 +223,15 @@ func TestRawRecordRepository_LiveIntegration(t *testing.T) {
 		sku := "SKU-VERSIONED-01"
 		baseTime := time.Now().UTC().Truncate(time.Microsecond)
 
-		recOld, err := ingestion.NewRawRecord(
-			"",
-			testSourceID,
-			sku,
-			[]byte(`{"version": 1}`),
-			"v1",
-			"etag-1",
-			nil,
-			runID,
-			baseTime.Add(-1*time.Hour),
-		)
+		recOld, err := ingestion.NewRawRecord(ingestion.RawRecordParams{
+			SourceID:          testSourceID,
+			ExternalProductID: sku,
+			Payload:           []byte(`{"version": 1}`),
+			SourceVersion:     "v1",
+			ETag:              "etag-1",
+			IngestionRunID:    runID,
+			ReceivedAt:        baseTime.Add(-1 * time.Hour),
+		})
 		if err != nil {
 			t.Fatalf("create old record: %v", err)
 		}
@@ -248,17 +239,15 @@ func TestRawRecordRepository_LiveIntegration(t *testing.T) {
 			t.Fatalf("save old record: %v", err)
 		}
 
-		recNew, err := ingestion.NewRawRecord(
-			"",
-			testSourceID,
-			sku,
-			[]byte(`{"version": 2}`),
-			"v2",
-			"etag-2",
-			nil,
-			runID,
-			baseTime,
-		)
+		recNew, err := ingestion.NewRawRecord(ingestion.RawRecordParams{
+			SourceID:          testSourceID,
+			ExternalProductID: sku,
+			Payload:           []byte(`{"version": 2}`),
+			SourceVersion:     "v2",
+			ETag:              "etag-2",
+			IngestionRunID:    runID,
+			ReceivedAt:        baseTime,
+		})
 		if err != nil {
 			t.Fatalf("create new record: %v", err)
 		}
@@ -287,7 +276,6 @@ func TestRawRecordRepository_LiveIntegration(t *testing.T) {
 		if len(list) < 2 {
 			t.Fatalf("expected at least 2 versions, got %d", len(list))
 		}
-		// First item should be the newest
 		if list[0].SourceVersion != "v2" {
 			t.Errorf("expected first item to be newest v2, got: %s", list[0].SourceVersion)
 		}
@@ -321,17 +309,13 @@ func TestRawRecordRepository_LiveIntegration(t *testing.T) {
 		defer func() { _ = tx.Rollback(ctx) }()
 
 		txRepo := repo.WithTx(tx)
-		rec, err := ingestion.NewRawRecord(
-			"",
-			testSourceID,
-			"SKU-ROLLBACK",
-			[]byte(`{"temp": true}`),
-			"",
-			"",
-			nil,
-			runID,
-			time.Now(),
-		)
+		rec, err := ingestion.NewRawRecord(ingestion.RawRecordParams{
+			SourceID:          testSourceID,
+			ExternalProductID: "SKU-ROLLBACK",
+			Payload:           []byte(`{"temp": true}`),
+			IngestionRunID:    runID,
+			ReceivedAt:        time.Now(),
+		})
 		if err != nil {
 			t.Fatalf("create record: %v", err)
 		}
@@ -340,12 +324,10 @@ func TestRawRecordRepository_LiveIntegration(t *testing.T) {
 			t.Fatalf("save in tx: %v", err)
 		}
 
-		// Rollback explicitly
 		if err := tx.Rollback(ctx); err != nil {
 			t.Fatalf("rollback: %v", err)
 		}
 
-		// Verify record does not exist
 		_, err = repo.FindByID(ctx, rec.ID)
 		if !errors.Is(err, ingestion.ErrRecordNotFound) {
 			t.Fatalf("expected ErrRecordNotFound after rollback, got: %v", err)

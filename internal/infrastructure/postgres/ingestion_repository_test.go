@@ -27,12 +27,13 @@ func TestIngestionRepository_ConstructorValidation(t *testing.T) {
 	}
 }
 
-func setupLiveIngestionDB(t *testing.T) (*pgxpool.Pool, *postgres.IngestionRepository, source.ID) {
+func setupLiveIngestionDB(t *testing.T) (*pgxpool.Pool, *postgres.IngestionRepository) {
 	t.Helper()
 
-	connStr := os.Getenv("DATABASE_URL")
+	connStr := os.Getenv("TEST_DATABASE_URL")
 	if connStr == "" {
-		connStr = "postgres://postgres:postgres@127.0.0.1:5433/crossborder_test?sslmode=disable"
+		t.Skip("skipping live database test: TEST_DATABASE_URL not set")
+		return nil, nil
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -45,7 +46,7 @@ func setupLiveIngestionDB(t *testing.T) (*pgxpool.Pool, *postgres.IngestionRepos
 	)
 	if err != nil {
 		t.Skipf("skipping live database test: unable to connect to %s: %v", connStr, err)
-		return nil, nil, ""
+		return nil, nil
 	}
 	t.Cleanup(pool.Close)
 
@@ -61,14 +62,20 @@ func setupLiveIngestionDB(t *testing.T) (*pgxpool.Pool, *postgres.IngestionRepos
 		t.Fatalf("failed to apply migrations: %v", err)
 	}
 
-	sourceRepo, err := postgres.NewSourceRepository(pool)
-	if err != nil {
-		t.Fatalf("failed to create source repo: %v", err)
-	}
-
 	ingestionRepo, err := postgres.NewIngestionRepository(pool)
 	if err != nil {
 		t.Fatalf("failed to create ingestion repo: %v", err)
+	}
+
+	return pool, ingestionRepo
+}
+
+func newTestSource(t *testing.T, pool *pgxpool.Pool) source.ID {
+	t.Helper()
+
+	sourceRepo, err := postgres.NewSourceRepository(pool)
+	if err != nil {
+		t.Fatalf("failed to create source repo: %v", err)
 	}
 
 	testSourceID := source.ID(fmt.Sprintf("src-ingest-%d", time.Now().UnixNano()))
@@ -78,22 +85,22 @@ func setupLiveIngestionDB(t *testing.T) (*pgxpool.Pool, *postgres.IngestionRepos
 		_ = sourceRepo.Delete(cleanupCtx, testSourceID)
 	})
 
-	err = sourceRepo.Save(ctx, &source.Source{
-		ID:        testSourceID,
-		Name:      "Ingestion Run Test Source",
-		Type:      source.TypeAPI,
-		RateLimit: 100,
-		Enabled:   true,
+	err = sourceRepo.Save(context.Background(), &source.Source{
+		ID:                 testSourceID,
+		Name:               "Ingestion Run Test Source",
+		Type:               source.TypeAPI,
+		RateLimitPerSecond: 100,
+		Enabled:            true,
 	})
 	if err != nil {
-		t.Fatalf("failed to seed source: %v", err)
+		t.Fatalf("failed to seed test source: %v", err)
 	}
 
-	return pool, ingestionRepo, testSourceID
+	return testSourceID
 }
 
 func TestIngestionRepository_LiveIntegration(t *testing.T) {
-	pool, repo, sourceID := setupLiveIngestionDB(t)
+	pool, repo := setupLiveIngestionDB(t)
 	ctx := context.Background()
 
 	t.Run("Validation_NilRun", func(t *testing.T) {
@@ -104,6 +111,7 @@ func TestIngestionRepository_LiveIntegration(t *testing.T) {
 	})
 
 	t.Run("Create_And_FindByID", func(t *testing.T) {
+		sourceID := newTestSource(t, pool)
 		now := time.Now().UTC()
 		run, err := ingestion.NewRun("", sourceID, "cursor-init")
 		if err != nil {
@@ -136,6 +144,7 @@ func TestIngestionRepository_LiveIntegration(t *testing.T) {
 	})
 
 	t.Run("UpdateProgress_AtomicIncrements", func(t *testing.T) {
+		sourceID := newTestSource(t, pool)
 		now := time.Now().UTC()
 		run, err := ingestion.NewRun("", sourceID, "")
 		if err != nil {
@@ -181,6 +190,7 @@ func TestIngestionRepository_LiveIntegration(t *testing.T) {
 	})
 
 	t.Run("UpdateStatus_Completed", func(t *testing.T) {
+		sourceID := newTestSource(t, pool)
 		now := time.Now().UTC()
 		run, err := ingestion.NewRun("", sourceID, "")
 		if err != nil {
@@ -191,9 +201,16 @@ func TestIngestionRepository_LiveIntegration(t *testing.T) {
 			t.Fatalf("failed to create run: %v", err)
 		}
 
-		completedAt := now.Add(3 * time.Second)
-		if err := repo.UpdateStatus(ctx, run.ID, ingestion.StatusCompleted, "", "cursor-done", completedAt, completedAt); err != nil {
+		if err := run.Complete("cursor-done", now.Add(3*time.Second)); err != nil {
+			t.Fatalf("failed to complete run: %v", err)
+		}
+		if err := repo.UpdateStatus(ctx, run, ingestion.StatusRunning); err != nil {
 			t.Fatalf("failed to update status to COMPLETED: %v", err)
+		}
+
+		// A second transition from the stale RUNNING status must be rejected.
+		if err := repo.UpdateStatus(ctx, run, ingestion.StatusRunning); !errors.Is(err, ingestion.ErrInvalidTransition) {
+			t.Fatalf("expected ErrInvalidTransition for stale transition, got %v", err)
 		}
 
 		completedRun, err := repo.FindRunByID(ctx, run.ID)
@@ -209,16 +226,30 @@ func TestIngestionRepository_LiveIntegration(t *testing.T) {
 	})
 
 	t.Run("ListAndLatestRuns", func(t *testing.T) {
+		sourceID := newTestSource(t, pool)
 		now := time.Now().UTC()
+
+		// Run A: created and completed first
 		runA, _ := ingestion.NewRun("", sourceID, "cursor-A")
 		runA.CreatedAt = now.Add(-10 * time.Second)
 		_ = runA.Start(runA.CreatedAt)
-		_ = repo.CreateRun(ctx, runA)
+		if err := repo.CreateRun(ctx, runA); err != nil {
+			t.Fatalf("failed to create runA: %v", err)
+		}
+		if err := runA.Complete("cursor-A-done", runA.CreatedAt.Add(2*time.Second)); err != nil {
+			t.Fatalf("failed to complete runA in domain: %v", err)
+		}
+		if err := repo.UpdateStatus(ctx, runA, ingestion.StatusRunning); err != nil {
+			t.Fatalf("failed to complete runA: %v", err)
+		}
 
+		// Run B: newer running run
 		runB, _ := ingestion.NewRun("", sourceID, "cursor-B")
 		runB.CreatedAt = now
 		_ = runB.Start(runB.CreatedAt)
-		_ = repo.CreateRun(ctx, runB)
+		if err := repo.CreateRun(ctx, runB); err != nil {
+			t.Fatalf("failed to create runB: %v", err)
+		}
 
 		latest, err := repo.FindLatestRunBySource(ctx, sourceID)
 		if err != nil {
@@ -240,6 +271,28 @@ func TestIngestionRepository_LiveIntegration(t *testing.T) {
 		}
 	})
 
+	t.Run("UniqueActiveRun_ConstraintEnforced", func(t *testing.T) {
+		sourceID := newTestSource(t, pool)
+		now := time.Now().UTC()
+
+		run1, _ := ingestion.NewRun("", sourceID, "")
+		_ = run1.Start(now)
+		if err := repo.CreateRun(ctx, run1); err != nil {
+			t.Fatalf("expected run1 creation to succeed: %v", err)
+		}
+
+		// Attempt to create another RUNNING run for the same source
+		run2, _ := ingestion.NewRun("", sourceID, "")
+		_ = run2.Start(now)
+		err := repo.CreateRun(ctx, run2)
+		if err == nil {
+			t.Fatal("expected error creating second active run for same source, got nil")
+		}
+		if !errors.Is(err, ingestion.ErrRunAlreadyActive) {
+			t.Fatalf("expected ErrRunAlreadyActive on unique constraint violation, got: %v", err)
+		}
+	})
+
 	t.Run("FindRunByID_NotFound", func(t *testing.T) {
 		_, err := repo.FindRunByID(ctx, "00000000-0000-0000-0000-000000000000")
 		if !errors.Is(err, ingestion.ErrRunNotFound) {
@@ -248,6 +301,7 @@ func TestIngestionRepository_LiveIntegration(t *testing.T) {
 	})
 
 	t.Run("Transaction_Rollback", func(t *testing.T) {
+		sourceID := newTestSource(t, pool)
 		tx, err := pool.Begin(ctx)
 		if err != nil {
 			t.Fatalf("failed to begin tx: %v", err)

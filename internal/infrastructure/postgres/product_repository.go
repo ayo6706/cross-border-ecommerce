@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/ayo6706/cross-border-ecommerce/internal/domain/product"
 	"github.com/ayo6706/cross-border-ecommerce/internal/infrastructure/postgres/generated"
@@ -16,7 +15,6 @@ import (
 var _ product.Repository = (*ProductRepository)(nil)
 
 type ProductRepository struct {
-	db      generated.DBTX
 	queries *generated.Queries
 }
 
@@ -25,14 +23,12 @@ func NewProductRepository(db generated.DBTX) (*ProductRepository, error) {
 		return nil, errors.New("database connection cannot be nil")
 	}
 	return &ProductRepository{
-		db:      db,
 		queries: generated.New(db),
 	}, nil
 }
 
 func (r *ProductRepository) WithTx(tx pgx.Tx) *ProductRepository {
 	return &ProductRepository{
-		db:      tx,
 		queries: r.queries.WithTx(tx),
 	}
 }
@@ -54,23 +50,6 @@ func (r *ProductRepository) FindByID(ctx context.Context, id product.ID) (*produ
 	return toDomainProduct(row), nil
 }
 
-func (r *ProductRepository) FindByFingerprint(ctx context.Context, fingerprint string) (*product.Product, error) {
-	trimmed := strings.TrimSpace(fingerprint)
-	if trimmed == "" {
-		return nil, product.ErrProductNotFound
-	}
-
-	row, err := r.queries.GetProductByFingerprint(ctx, trimmed)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, product.ErrProductNotFound
-		}
-		return nil, fmt.Errorf("find product by fingerprint: %w", err)
-	}
-
-	return toDomainProduct(row), nil
-}
-
 func (r *ProductRepository) Save(ctx context.Context, p *product.Product) error {
 	if p == nil {
 		return product.ErrInvalidProductState
@@ -80,19 +59,13 @@ func (r *ProductRepository) Save(ctx context.Context, p *product.Product) error 
 		return fmt.Errorf("validate product: %w", err)
 	}
 
-	var idUUID pgtype.UUID
 	if strings.TrimSpace(string(p.ID)) == "" {
-		generatedUUID, err := newUUID()
-		if err != nil {
-			return fmt.Errorf("generate product id: %w", err)
-		}
-		idUUID = generatedUUID
-	} else {
-		parsed, err := parseUUID(string(p.ID))
-		if err != nil {
-			return fmt.Errorf("%w: invalid uuid: %w", product.ErrInvalidProductState, err)
-		}
-		idUUID = parsed
+		return fmt.Errorf("%w: product id cannot be empty", product.ErrInvalidProductState)
+	}
+
+	idUUID, err := parseUUID(string(p.ID))
+	if err != nil {
+		return fmt.Errorf("%w: invalid uuid: %w", product.ErrInvalidProductState, err)
 	}
 
 	var versionUUID pgtype.UUID
@@ -104,13 +77,6 @@ func (r *ProductRepository) Save(ctx context.Context, p *product.Product) error 
 		versionUUID = parsed
 	}
 
-	now := time.Now().UTC()
-	createdAt := p.CreatedAt
-	if createdAt.IsZero() {
-		createdAt = now
-	}
-	updatedAt := now
-
 	saved, err := r.queries.UpsertProduct(ctx, generated.UpsertProductParams{
 		ID:                 idUUID,
 		CanonicalName:      p.CanonicalName,
@@ -120,8 +86,8 @@ func (r *ProductRepository) Save(ctx context.Context, p *product.Product) error 
 		Status:             string(p.Status),
 		CurrentVersionID:   versionUUID,
 		CurrentFingerprint: p.CurrentFingerprint,
-		CreatedAt:          pgtype.Timestamptz{Time: createdAt, Valid: true},
-		UpdatedAt:          pgtype.Timestamptz{Time: updatedAt, Valid: true},
+		CreatedAt:          requiredTimestamptz(p.CreatedAt),
+		UpdatedAt:          requiredTimestamptz(p.UpdatedAt),
 	})
 	if err != nil {
 		return fmt.Errorf("upsert product: %w", err)
@@ -134,12 +100,7 @@ func (r *ProductRepository) Save(ctx context.Context, p *product.Product) error 
 }
 
 func (r *ProductRepository) List(ctx context.Context, params product.ListParams) ([]*product.Product, error) {
-	limit := params.Limit
-	if limit <= 0 {
-		limit = 50
-	} else if limit > 1000 {
-		limit = 1000
-	}
+	limit := listLimit(params.Limit, 50)
 
 	if (params.LastCreatedAt != nil && params.LastID == nil) || (params.LastCreatedAt == nil && params.LastID != nil) {
 		return nil, errors.New("invalid cursor: both LastCreatedAt and LastID must be specified together")
@@ -149,26 +110,18 @@ func (r *ProductRepository) List(ctx context.Context, params product.ListParams)
 	var err error
 
 	if params.LastCreatedAt != nil && params.LastID != nil {
-		cursorTime, parseErr := time.Parse(time.RFC3339Nano, *params.LastCreatedAt)
-		if parseErr != nil {
-			cursorTime, parseErr = time.Parse(time.RFC3339, *params.LastCreatedAt)
-		}
-		if parseErr != nil {
-			return nil, fmt.Errorf("invalid cursor timestamp format: %w", parseErr)
-		}
-
 		cursorID, parseErr := parseUUID(string(*params.LastID))
 		if parseErr != nil {
 			return nil, fmt.Errorf("invalid cursor id format: %w", parseErr)
 		}
 
 		rows, err = r.queries.ListProductsAfterCursor(ctx, generated.ListProductsAfterCursorParams{
-			Limit:           int32(limit),
-			CursorCreatedAt: pgtype.Timestamptz{Time: cursorTime, Valid: true},
+			Limit:           limit,
+			CursorCreatedAt: toTimestamptz(params.LastCreatedAt),
 			CursorID:        cursorID,
 		})
 	} else {
-		rows, err = r.queries.ListProductsFirstPage(ctx, int32(limit))
+		rows, err = r.queries.ListProductsFirstPage(ctx, limit)
 	}
 
 	if err != nil {

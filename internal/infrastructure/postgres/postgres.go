@@ -16,13 +16,15 @@ var (
 	ErrMinConnsExceedsMax = errors.New("min conns cannot exceed max conns")
 )
 
+// Fallbacks for callers that do not pass options (e.g. tests). The API and
+// migrate commands pass explicit values; platform/config owns the app defaults.
 const (
-	DefaultMaxConns          int32         = 25
-	DefaultMinConns          int32         = 5
-	DefaultMaxConnIdleTime   time.Duration = 15 * time.Minute
-	DefaultMaxConnLifetime   time.Duration = 1 * time.Hour
-	DefaultHealthCheckPeriod time.Duration = 1 * time.Minute
-	DefaultConnectTimeout    time.Duration = 5 * time.Second
+	defaultMaxConns          int32         = 25
+	defaultMinConns          int32         = 5
+	defaultMaxConnIdleTime   time.Duration = 15 * time.Minute
+	defaultMaxConnLifetime   time.Duration = 1 * time.Hour
+	defaultHealthCheckPeriod time.Duration = 1 * time.Minute
+	defaultConnectTimeout    time.Duration = 5 * time.Second
 )
 
 type config struct {
@@ -81,12 +83,12 @@ func NewPool(ctx context.Context, connString string, opts ...Option) (*pgxpool.P
 	}
 
 	cfg := config{
-		maxConns:          DefaultMaxConns,
-		minConns:          DefaultMinConns,
-		maxConnIdleTime:   DefaultMaxConnIdleTime,
-		maxConnLifetime:   DefaultMaxConnLifetime,
-		healthCheckPeriod: DefaultHealthCheckPeriod,
-		connectTimeout:    DefaultConnectTimeout,
+		maxConns:          defaultMaxConns,
+		minConns:          defaultMinConns,
+		maxConnIdleTime:   defaultMaxConnIdleTime,
+		maxConnLifetime:   defaultMaxConnLifetime,
+		healthCheckPeriod: defaultHealthCheckPeriod,
+		connectTimeout:    defaultConnectTimeout,
 	}
 
 	for _, opt := range opts {

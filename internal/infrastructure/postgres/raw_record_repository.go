@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/ayo6706/cross-border-ecommerce/internal/domain/ingestion"
 	"github.com/ayo6706/cross-border-ecommerce/internal/domain/source"
@@ -79,6 +78,8 @@ func (r *RawRecordRepository) SaveBatch(ctx context.Context, records []*ingestio
 				p.SourceID,
 				p.ExternalProductID,
 				p.Payload,
+				p.PayloadRaw,
+				p.PayloadSha256,
 				p.SourceVersion,
 				p.Etag,
 				p.SourceUpdatedAt,
@@ -95,6 +96,8 @@ func (r *RawRecordRepository) SaveBatch(ctx context.Context, records []*ingestio
 				"source_id",
 				"external_product_id",
 				"payload",
+				"payload_raw",
+				"payload_sha256",
 				"source_version",
 				"etag",
 				"source_updated_at",
@@ -141,15 +144,9 @@ func toCreateParams(record *ingestion.RawRecord) (generated.CreateRawRecordParam
 		}
 	}
 
-	var sourceUpdatedAt pgtype.Timestamptz
-	if record.SourceUpdatedAt != nil && !record.SourceUpdatedAt.IsZero() {
-		sourceUpdatedAt = pgtype.Timestamptz{Time: record.SourceUpdatedAt.UTC(), Valid: true}
-	}
-
-	receivedAt := record.ReceivedAt
-	if receivedAt.IsZero() {
-		receivedAt = time.Now().UTC()
-		record.ReceivedAt = receivedAt
+	rawBytes := record.PayloadRaw
+	if len(rawBytes) == 0 {
+		rawBytes = record.Payload
 	}
 
 	return generated.CreateRawRecordParams{
@@ -157,11 +154,13 @@ func toCreateParams(record *ingestion.RawRecord) (generated.CreateRawRecordParam
 		SourceID:          string(record.SourceID),
 		ExternalProductID: record.ExternalProductID,
 		Payload:           record.Payload,
+		PayloadRaw:        rawBytes,
+		PayloadSha256:     record.PayloadSHA256,
 		SourceVersion:     record.SourceVersion,
 		Etag:              record.ETag,
-		SourceUpdatedAt:   sourceUpdatedAt,
+		SourceUpdatedAt:   toTimestamptz(record.SourceUpdatedAt),
 		IngestionRunID:    runUUID,
-		ReceivedAt:        pgtype.Timestamptz{Time: receivedAt.UTC(), Valid: true},
+		ReceivedAt:        requiredTimestamptz(record.ReceivedAt),
 	}, nil
 }
 
@@ -221,14 +220,10 @@ func (r *RawRecordRepository) ListBySourceAndExternalID(
 		return nil, ingestion.ErrInvalidExternalProductID
 	}
 
-	if limit <= 0 {
-		limit = 50
-	}
-
 	rows, err := r.queries.ListRawRecordsBySourceAndExternalID(ctx, generated.ListRawRecordsBySourceAndExternalIDParams{
 		SourceID:          string(sourceID),
 		ExternalProductID: strings.TrimSpace(externalProductID),
-		Limit:             safeInt32(limit),
+		Limit:             listLimit(limit, 50),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("list raw records by source and external id: %w", err)
@@ -251,13 +246,9 @@ func (r *RawRecordRepository) ListByRunID(
 		return nil, fmt.Errorf("%w: %v", ingestion.ErrInvalidRunID, err)
 	}
 
-	if limit <= 0 {
-		limit = 50
-	}
-
 	rows, err := r.queries.ListRawRecordsByRunID(ctx, generated.ListRawRecordsByRunIDParams{
 		IngestionRunID: runUUID,
-		Limit:          safeInt32(limit),
+		Limit:          listLimit(limit, 50),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("list raw records by run id: %w", err)
@@ -271,20 +262,16 @@ func (r *RawRecordRepository) ListByRunID(
 }
 
 func toDomainRawRecord(row generated.RawRecord) *ingestion.RawRecord {
-	var sourceUpdatedAt *time.Time
-	if row.SourceUpdatedAt.Valid {
-		t := row.SourceUpdatedAt.Time.UTC()
-		sourceUpdatedAt = &t
-	}
-
 	return &ingestion.RawRecord{
 		ID:                uuidToString(row.ID),
 		SourceID:          source.ID(row.SourceID),
 		ExternalProductID: row.ExternalProductID,
 		Payload:           row.Payload,
+		PayloadRaw:        row.PayloadRaw,
+		PayloadSHA256:     row.PayloadSha256,
 		SourceVersion:     row.SourceVersion,
 		ETag:              row.Etag,
-		SourceUpdatedAt:   sourceUpdatedAt,
+		SourceUpdatedAt:   fromTimestamptz(row.SourceUpdatedAt),
 		IngestionRunID:    uuidToString(row.IngestionRunID),
 		ReceivedAt:        row.ReceivedAt.Time.UTC(),
 	}

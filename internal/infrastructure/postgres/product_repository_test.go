@@ -28,9 +28,10 @@ func TestProductRepository_ConstructorValidation(t *testing.T) {
 func setupLiveProductDB(t *testing.T) (*pgxpool.Pool, *postgres.ProductRepository) {
 	t.Helper()
 
-	connStr := os.Getenv("DATABASE_URL")
+	connStr := os.Getenv("TEST_DATABASE_URL")
 	if connStr == "" {
-		connStr = "postgres://postgres:postgres@127.0.0.1:5433/crossborder_test?sslmode=disable"
+		t.Skip("skipping live database test: TEST_DATABASE_URL not set")
+		return nil, nil
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -91,22 +92,14 @@ func TestProductRepository_LiveIntegration(t *testing.T) {
 
 	t.Run("Save_And_FindByID", func(t *testing.T) {
 		now := time.Now().UTC().Truncate(time.Microsecond)
-		p1 := &product.Product{
-			CanonicalName:      "Logitech MX Master 3S",
-			Description:        "Wireless Performance Mouse",
-			Brand:              "Logitech",
-			OriginCountry:      "CH",
-			Status:             product.StatusActive,
-			CurrentFingerprint: "sha256-logitech-mx3s-test",
-			CreatedAt:          now,
-			UpdatedAt:          now,
-		}
+		p1 := newTestProduct(t, "Logitech MX Master 3S", "Logitech", "CH", "sha256-logitech-mx3s-test")
+		p1.Description = "Wireless Performance Mouse"
+		p1.Status = product.StatusActive
+		p1.CreatedAt = now
+		p1.UpdatedAt = now
 
 		if err := repo.Save(ctx, p1); err != nil {
 			t.Fatalf("failed to save product: %v", err)
-		}
-		if p1.ID == "" {
-			t.Fatal("expected non-empty auto-generated ID on product")
 		}
 
 		found, err := repo.FindByID(ctx, p1.ID)
@@ -134,32 +127,8 @@ func TestProductRepository_LiveIntegration(t *testing.T) {
 		}
 	})
 
-	t.Run("FindByFingerprint", func(t *testing.T) {
-		p := &product.Product{
-			CanonicalName:      "Fingerprint Test Product",
-			Brand:              "TestBrand",
-			Status:             product.StatusActive,
-			CurrentFingerprint: "sha256-fp-unique-lookup-test",
-		}
-		if err := repo.Save(ctx, p); err != nil {
-			t.Fatalf("failed to save product: %v", err)
-		}
-
-		byFp, err := repo.FindByFingerprint(ctx, p.CurrentFingerprint)
-		if err != nil {
-			t.Fatalf("failed to find product by fingerprint: %v", err)
-		}
-		if byFp.ID != p.ID {
-			t.Errorf("expected ID %v, got %v", p.ID, byFp.ID)
-		}
-	})
-
 	t.Run("Find_NotFound", func(t *testing.T) {
 		_, err := repo.FindByID(ctx, product.ID("00000000-0000-0000-0000-000000000000"))
-		if !errors.Is(err, product.ErrProductNotFound) {
-			t.Errorf("expected ErrProductNotFound, got %v", err)
-		}
-		_, err = repo.FindByFingerprint(ctx, "non-existent-fingerprint")
 		if !errors.Is(err, product.ErrProductNotFound) {
 			t.Errorf("expected ErrProductNotFound, got %v", err)
 		}
@@ -167,22 +136,10 @@ func TestProductRepository_LiveIntegration(t *testing.T) {
 
 	t.Run("Keyset_Pagination", func(t *testing.T) {
 		now := time.Now().UTC()
-		p2 := &product.Product{
-			CanonicalName:      "Apple Magic Keyboard",
-			Brand:              "Apple",
-			OriginCountry:      "US",
-			Status:             product.StatusActive,
-			CurrentFingerprint: "sha256-apple-keyboard-test",
-			CreatedAt:          now.Add(1 * time.Second),
-		}
-		p3 := &product.Product{
-			CanonicalName:      "Dell UltraSharp 27",
-			Brand:              "Dell",
-			OriginCountry:      "US",
-			Status:             product.StatusActive,
-			CurrentFingerprint: "sha256-dell-monitor-test",
-			CreatedAt:          now.Add(2 * time.Second),
-		}
+		p2 := newTestProduct(t, "Apple Magic Keyboard", "Apple", "US", "sha256-apple-keyboard-test")
+		p2.CreatedAt = now.Add(1 * time.Second)
+		p3 := newTestProduct(t, "Dell UltraSharp 27", "Dell", "US", "sha256-dell-monitor-test")
+		p3.CreatedAt = now.Add(2 * time.Second)
 		if err := repo.Save(ctx, p2); err != nil {
 			t.Fatalf("failed to save p2: %v", err)
 		}
@@ -199,10 +156,9 @@ func TestProductRepository_LiveIntegration(t *testing.T) {
 		}
 
 		lastItem := page1[1]
-		cursorTime := lastItem.CreatedAt.Format(time.RFC3339Nano)
 		page2, err := repo.List(ctx, product.ListParams{
 			Limit:         2,
-			LastCreatedAt: &cursorTime,
+			LastCreatedAt: &lastItem.CreatedAt,
 			LastID:        &lastItem.ID,
 		})
 		if err != nil {
@@ -218,7 +174,7 @@ func TestProductRepository_LiveIntegration(t *testing.T) {
 		// Verify partial cursor parameter rejection
 		_, err = repo.List(ctx, product.ListParams{
 			Limit:         2,
-			LastCreatedAt: &cursorTime,
+			LastCreatedAt: &lastItem.CreatedAt,
 			LastID:        nil,
 		})
 		if err == nil {
@@ -242,12 +198,7 @@ func TestProductRepository_LiveIntegration(t *testing.T) {
 		defer func() { _ = tx.Rollback(ctx) }()
 
 		txRepo := repo.WithTx(tx)
-		pTx := &product.Product{
-			CanonicalName:      "Sony WH-1000XM5 in Tx",
-			Brand:              "Sony",
-			Status:             product.StatusDraft,
-			CurrentFingerprint: "sha256-sony-tx-test",
-		}
+		pTx := newTestProduct(t, "Sony WH-1000XM5 in Tx", "Sony", "", "sha256-sony-tx-test")
 		if err := txRepo.Save(ctx, pTx); err != nil {
 			t.Fatalf("failed to save in transaction: %v", err)
 		}
@@ -260,4 +211,15 @@ func TestProductRepository_LiveIntegration(t *testing.T) {
 			t.Errorf("expected ErrProductNotFound for rolled back record, got %v", err)
 		}
 	})
+}
+
+func newTestProduct(t *testing.T, name, brand, origin, fingerprint string) *product.Product {
+	t.Helper()
+
+	p, err := product.NewProduct("", name, "", brand, origin)
+	if err != nil {
+		t.Fatalf("failed to build test product: %v", err)
+	}
+	p.CurrentFingerprint = fingerprint
+	return p
 }

@@ -6,18 +6,16 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/ayo6706/cross-border-ecommerce/internal/domain/source"
 	"github.com/ayo6706/cross-border-ecommerce/internal/infrastructure/postgres/generated"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 var _ source.Repository = (*SourceRepository)(nil)
 
 type SourceRepository struct {
-	db      generated.DBTX
 	queries *generated.Queries
 }
 
@@ -26,14 +24,12 @@ func NewSourceRepository(db generated.DBTX) (*SourceRepository, error) {
 		return nil, errors.New("database connection cannot be nil")
 	}
 	return &SourceRepository{
-		db:      db,
 		queries: generated.New(db),
 	}, nil
 }
 
 func (r *SourceRepository) WithTx(tx pgx.Tx) *SourceRepository {
 	return &SourceRepository{
-		db:      tx,
 		queries: r.queries.WithTx(tx),
 	}
 }
@@ -98,6 +94,10 @@ func (r *SourceRepository) Delete(ctx context.Context, id source.ID) error {
 	}
 
 	if err := r.queries.DeleteSource(ctx, trimmed); err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23503" {
+			return source.ErrSourceInUse
+		}
 		return fmt.Errorf("delete source: %w", err)
 	}
 
@@ -118,22 +118,20 @@ func (r *SourceRepository) Save(ctx context.Context, s *source.Source) error {
 		configBytes = b
 	}
 
-	now := time.Now().UTC()
-	createdAt := s.CreatedAt
-	if createdAt.IsZero() {
-		createdAt = now
+	rl32, err := toInt32(s.RateLimitPerSecond)
+	if err != nil {
+		return fmt.Errorf("%w: %v", source.ErrInvalidRateLimit, err)
 	}
-	updatedAt := now
 
 	saved, err := r.queries.UpsertSource(ctx, generated.UpsertSourceParams{
 		ID:        string(s.ID),
 		Name:      s.Name,
 		Type:      string(s.Type),
 		Config:    configBytes,
-		RateLimit: int32(s.RateLimit),
+		RateLimit: rl32,
 		Enabled:   s.Enabled,
-		CreatedAt: pgtype.Timestamptz{Time: createdAt, Valid: true},
-		UpdatedAt: pgtype.Timestamptz{Time: updatedAt, Valid: true},
+		CreatedAt: requiredTimestamptz(s.CreatedAt),
+		UpdatedAt: requiredTimestamptz(s.UpdatedAt),
 	})
 	if err != nil {
 		return fmt.Errorf("upsert source: %w", err)
@@ -153,13 +151,13 @@ func toDomainSource(row generated.Source) (*source.Source, error) {
 	}
 
 	return &source.Source{
-		ID:        source.ID(row.ID),
-		Name:      row.Name,
-		Type:      source.Type(row.Type),
-		Config:    config,
-		RateLimit: int(row.RateLimit),
-		Enabled:   row.Enabled,
-		CreatedAt: row.CreatedAt.Time.UTC(),
-		UpdatedAt: row.UpdatedAt.Time.UTC(),
+		ID:                 source.ID(row.ID),
+		Name:               row.Name,
+		Type:               source.Type(row.Type),
+		Config:             config,
+		RateLimitPerSecond: int(row.RateLimit),
+		Enabled:            row.Enabled,
+		CreatedAt:          row.CreatedAt.Time.UTC(),
+		UpdatedAt:          row.UpdatedAt.Time.UTC(),
 	}, nil
 }
