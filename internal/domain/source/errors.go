@@ -12,4 +12,5 @@ var (
 	ErrInvalidSourceName   = errors.New("source name cannot be empty")
 	ErrInvalidSourceType   = errors.New("unrecognized source type")
 	ErrInvalidRateLimit    = errors.New("rate limit must be greater than zero")
+	ErrSourceInUse         = errors.New("source cannot be deleted because it is referenced by existing runs or records")
 )

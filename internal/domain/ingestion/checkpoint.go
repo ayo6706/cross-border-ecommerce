@@ -7,40 +7,12 @@ import (
 	"time"
 )
 
-type CheckpointType string
-
-const (
-	CheckpointTypeEmpty      CheckpointType = "EMPTY"
-	CheckpointTypeTimestamp  CheckpointType = "TIMESTAMP"
-	CheckpointTypeByteOffset CheckpointType = "BYTE_OFFSET"
-	CheckpointTypeCursor     CheckpointType = "CURSOR"
-)
-
 const (
 	byteOffsetPrefix = "offset:"
 	cursorPrefix     = "cursor:"
 )
 
-type Checkpoint struct {
-	Type  CheckpointType `json:"type"`
-	Value string         `json:"value"`
-}
-
-func NewCheckpoint(val string) Checkpoint {
-	return Checkpoint{
-		Type:  DetectCheckpointType(val),
-		Value: strings.TrimSpace(val),
-	}
-}
-
-func (c Checkpoint) String() string {
-	return c.Value
-}
-
-func (c Checkpoint) IsEmpty() bool {
-	return strings.TrimSpace(c.Value) == "" || c.Type == CheckpointTypeEmpty
-}
-
+// FormatTimestampCheckpoint serializes a UTC time into RFC3339Nano format.
 func FormatTimestampCheckpoint(t time.Time) string {
 	if t.IsZero() {
 		return ""
@@ -48,6 +20,7 @@ func FormatTimestampCheckpoint(t time.Time) string {
 	return t.UTC().Format(time.RFC3339Nano)
 }
 
+// ParseTimestampCheckpoint parses an RFC3339 or RFC3339Nano timestamp string into a UTC time.Time.
 func ParseTimestampCheckpoint(cp string) (time.Time, error) {
 	trimmed := strings.TrimSpace(cp)
 	if trimmed == "" {
@@ -65,6 +38,7 @@ func ParseTimestampCheckpoint(cp string) (time.Time, error) {
 	return parsed.UTC(), nil
 }
 
+// FormatByteOffsetCheckpoint formats a non-negative byte offset as "offset:<bytes>".
 func FormatByteOffsetCheckpoint(offset int64) string {
 	if offset < 0 {
 		return ""
@@ -72,6 +46,7 @@ func FormatByteOffsetCheckpoint(offset int64) string {
 	return fmt.Sprintf("%s%d", byteOffsetPrefix, offset)
 }
 
+// ParseByteOffsetCheckpoint parses an "offset:<bytes>" string into an int64.
 func ParseByteOffsetCheckpoint(cp string) (int64, error) {
 	trimmed := strings.TrimSpace(cp)
 	if trimmed == "" {
@@ -95,6 +70,7 @@ func ParseByteOffsetCheckpoint(cp string) (int64, error) {
 	return offset, nil
 }
 
+// FormatCursorCheckpoint prefixes an opaque token with "cursor:".
 func FormatCursorCheckpoint(cursor string) string {
 	trimmed := strings.TrimSpace(cursor)
 	if trimmed == "" {
@@ -106,6 +82,7 @@ func FormatCursorCheckpoint(cursor string) string {
 	return cursorPrefix + trimmed
 }
 
+// ParseCursorCheckpoint extracts the opaque cursor token from a checkpoint string.
 func ParseCursorCheckpoint(cp string) (string, error) {
 	trimmed := strings.TrimSpace(cp)
 	if trimmed == "" {
@@ -126,28 +103,4 @@ func ParseCursorCheckpoint(cp string) (string, error) {
 	}
 
 	return trimmed, nil
-}
-
-func DetectCheckpointType(cp string) CheckpointType {
-	trimmed := strings.TrimSpace(cp)
-	if trimmed == "" {
-		return CheckpointTypeEmpty
-	}
-
-	lower := strings.ToLower(trimmed)
-	if strings.HasPrefix(lower, byteOffsetPrefix) {
-		return CheckpointTypeByteOffset
-	}
-	if strings.HasPrefix(lower, cursorPrefix) {
-		return CheckpointTypeCursor
-	}
-
-	if _, err := time.Parse(time.RFC3339Nano, trimmed); err == nil {
-		return CheckpointTypeTimestamp
-	}
-	if _, err := time.Parse(time.RFC3339, trimmed); err == nil {
-		return CheckpointTypeTimestamp
-	}
-
-	return CheckpointTypeCursor
 }

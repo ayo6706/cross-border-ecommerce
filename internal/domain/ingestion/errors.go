@@ -1,33 +1,36 @@
 package ingestion
 
-import "errors"
+import (
+	"errors"
+
+	"github.com/ayo6706/cross-border-ecommerce/internal/domain/source"
+)
 
 var (
-	ErrRunNotFound       = errors.New("ingestion run not found")
-	ErrInvalidRunState   = errors.New("invalid ingestion run state")
-	ErrInvalidTransition = errors.New("invalid ingestion run status transition")
-	ErrNegativeMetric    = errors.New("metric counters cannot be negative")
-	ErrInvalidRunID      = errors.New("run id cannot be empty")
-	ErrInvalidSourceID   = errors.New("source id cannot be empty")
-	ErrInactiveSource    = errors.New("cannot start ingestion run for inactive source")
-
-	ErrRecordNotFound           = errors.New("raw record not found")
-	ErrInvalidRecordState       = errors.New("invalid raw record state")
-	ErrInvalidRecordID          = errors.New("raw record id cannot be empty")
-	ErrInvalidExternalProductID = errors.New("external product id cannot be empty")
-	ErrEmptyPayload             = errors.New("raw payload cannot be empty")
-	ErrInvalidPayloadJSON       = errors.New("raw payload must be valid json")
-
-	ErrInvalidCheckpoint     = errors.New("invalid checkpoint format")
-	ErrAdapterUnavailable    = errors.New("source adapter unavailable")
-	ErrRateLimitExceeded     = errors.New("source adapter rate limit exceeded")
-	ErrMalformedRecord       = errors.New("malformed record in source feed")
-	ErrAuthenticationFailed  = errors.New("source adapter authentication failed")
-
-	ErrSourceContractViolation = errors.New("source contract violation")
-	ErrPathNotFound            = errors.New("record path not found in source payload")
-	ErrPathWrongType           = errors.New("record path resolved to invalid type (expected array)")
-	ErrRecordNotObject         = errors.New("extracted record is not a valid json object")
-	ErrIdentityNotFound        = errors.New("external identity could not be resolved from record")
-	ErrQuarantineThreshold     = errors.New("error rate exceeded quarantine threshold")
+	ErrRunNotFound               = errors.New("ingestion run not found")
+	ErrInvalidRunState           = errors.New("invalid ingestion run state")
+	ErrInvalidTransition         = errors.New("invalid ingestion run state transition")
+	ErrInvalidRunID              = errors.New("run id cannot be empty")
+	ErrInvalidSourceID           = source.ErrInvalidSourceID
+	ErrNegativeMetric            = errors.New("metrics cannot be negative")
+	ErrRecordNotFound            = errors.New("raw record not found")
+	ErrInvalidRecordID           = errors.New("raw record id cannot be empty")
+	ErrInvalidExternalProductID  = errors.New("external product id cannot be empty")
+	ErrEmptyPayload              = errors.New("payload cannot be empty")
+	ErrInvalidPayloadJSON        = errors.New("payload must be valid json")
+	ErrInvalidRecordState        = errors.New("invalid raw record state")
+	ErrAdapterUnavailable        = errors.New("source adapter unavailable")
+	ErrAuthenticationFailed      = errors.New("authentication failed")
+	ErrRateLimitExceeded         = errors.New("source rate limit exceeded")
+	ErrSourceContractViolation   = errors.New("source contract violation")
+	ErrMalformedRecord           = errors.New("malformed source record")
+	ErrErrorBudgetExceeded       = errors.New("row error budget exceeded")
+	ErrInvalidCheckpoint         = errors.New("invalid checkpoint format")
+	ErrPathNotFound              = errors.New("configured extraction path not found in payload")
+	ErrIdentityNotFound          = errors.New("unable to resolve external identity from record")
+	ErrUnsupportedIdentityFormat = errors.New("unsupported identity value type")
+	ErrRecordNotObject           = errors.New("record in items array is not a json object")
+	ErrInactiveSource            = errors.New("source is disabled or inactive")
+	ErrRunAlreadyActive          = errors.New("source already has an active ingestion run")
+	ErrPathWrongType             = errors.New("extraction path points to unexpected data type")
 )

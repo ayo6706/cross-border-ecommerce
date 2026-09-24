@@ -6,15 +6,21 @@ import (
 )
 
 // FetchRequest encapsulates the parameters for an incremental ingestion fetch.
+//
+// BatchSize is a hint. Adapters whose checkpoint meaning depends on a fixed
+// page size (e.g. page-number pagination) ignore it, because changing the page
+// size between batches would skip or repeat records on resume.
 type FetchRequest struct {
-	Checkpoint Checkpoint
+	Checkpoint string
 	BatchSize  int
 }
 
 // FetchResult encapsulates the retrieved records and pagination state.
+// Failed counts rows the adapter skipped under its row error policy.
 type FetchResult struct {
 	Records        []*RawRecord
-	NextCheckpoint Checkpoint
+	Failed         int
+	NextCheckpoint string
 	HasMore        bool
 }
 
@@ -24,7 +30,7 @@ type SourceProbeResult struct {
 	Authenticated    bool          `json:"authenticated"`
 	SampleCount      int           `json:"sample_count"`
 	SampleExternalID string        `json:"sample_external_id"`
-	NextCheckpoint   Checkpoint    `json:"next_checkpoint"`
+	NextCheckpoint   string        `json:"next_checkpoint"`
 	Latency          time.Duration `json:"latency"`
 }
 

@@ -14,17 +14,17 @@ func TestNewRawRecord(t *testing.T) {
 	now := time.Now().UTC()
 
 	t.Run("ValidRecord_WithExplicitID", func(t *testing.T) {
-		rec, err := ingestion.NewRawRecord(
-			"c56a4180-65aa-42ec-a945-5fd21dec0538",
-			source.ID("supplier-a"),
-			"PROD-999",
-			validPayload,
-			"v1.0",
-			"etag-xyz",
-			&now,
-			"b88e6e5a-73eb-46f9-b873-61f22e70b741",
-			now,
-		)
+		rec, err := ingestion.NewRawRecord(ingestion.RawRecordParams{
+			ID:                "c56a4180-65aa-42ec-a945-5fd21dec0538",
+			SourceID:          source.ID("supplier-a"),
+			ExternalProductID: "PROD-999",
+			Payload:           validPayload,
+			SourceVersion:     "v1.0",
+			ETag:              "etag-xyz",
+			SourceUpdatedAt:   &now,
+			IngestionRunID:    "b88e6e5a-73eb-46f9-b873-61f22e70b741",
+			ReceivedAt:        now,
+		})
 		if err != nil {
 			t.Fatalf("expected no error, got: %v", err)
 		}
@@ -52,20 +52,20 @@ func TestNewRawRecord(t *testing.T) {
 		if !rec.ReceivedAt.Equal(now) {
 			t.Errorf("expected ReceivedAt %v, got: %v", now, rec.ReceivedAt)
 		}
+		if rec.PayloadSHA256 == "" {
+			t.Errorf("expected computed PayloadSHA256, got empty")
+		}
+		if len(rec.PayloadRaw) == 0 {
+			t.Errorf("expected non-empty PayloadRaw, got empty")
+		}
 	})
 
 	t.Run("ValidRecord_GeneratesIDAndDefaultReceivedAt", func(t *testing.T) {
-		rec, err := ingestion.NewRawRecord(
-			"",
-			source.ID("supplier-b"),
-			"SKU-456",
-			validPayload,
-			"",
-			"",
-			nil,
-			"",
-			time.Time{},
-		)
+		rec, err := ingestion.NewRawRecord(ingestion.RawRecordParams{
+			SourceID:          source.ID("supplier-b"),
+			ExternalProductID: "SKU-456",
+			Payload:           validPayload,
+		})
 		if err != nil {
 			t.Fatalf("expected no error, got: %v", err)
 		}
@@ -149,17 +149,13 @@ func TestNewRawRecord(t *testing.T) {
 
 		for _, tc := range tests {
 			t.Run(tc.name, func(t *testing.T) {
-				_, err := ingestion.NewRawRecord(
-					tc.id,
-					tc.sourceID,
-					tc.externalID,
-					tc.payload,
-					"",
-					"",
-					nil,
-					"",
-					time.Now(),
-				)
+				_, err := ingestion.NewRawRecord(ingestion.RawRecordParams{
+					ID:                tc.id,
+					SourceID:          tc.sourceID,
+					ExternalProductID: tc.externalID,
+					Payload:           tc.payload,
+					ReceivedAt:        time.Now(),
+				})
 				if !errors.Is(err, tc.expectedErr) {
 					t.Fatalf("expected error %v, got %v", tc.expectedErr, err)
 				}

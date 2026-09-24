@@ -157,6 +157,20 @@ func TestIngestionRun_PartialAndFailures(t *testing.T) {
 	if run.Status != ingestion.StatusPartial {
 		t.Fatalf("expected PARTIAL status when records failed, got %s", run.Status)
 	}
+	if !run.IsTerminal() {
+		t.Fatalf("expected partial run to be terminal")
+	}
+
+	// Terminal state immutability: PARTIAL cannot move to FAILED, CANCELLED, or COMPLETED
+	if err := run.Fail("fatal error", now); !errors.Is(err, ingestion.ErrInvalidTransition) {
+		t.Fatalf("expected ErrInvalidTransition failing partial run, got %v", err)
+	}
+	if err := run.Cancel("cancelled", now); !errors.Is(err, ingestion.ErrInvalidTransition) {
+		t.Fatalf("expected ErrInvalidTransition cancelling partial run, got %v", err)
+	}
+	if err := run.Complete("chk", now); !errors.Is(err, ingestion.ErrInvalidTransition) {
+		t.Fatalf("expected ErrInvalidTransition completing partial run, got %v", err)
+	}
 
 	// Scenario 2: Fatal failure
 	run2, _ := ingestion.NewRun("run-201", "src-01", "")
@@ -170,6 +184,15 @@ func TestIngestionRun_PartialAndFailures(t *testing.T) {
 	if run2.ErrorSummary != "supplier api network timeout 504" {
 		t.Fatalf("expected error summary to match, got %s", run2.ErrorSummary)
 	}
+	if !run2.IsTerminal() {
+		t.Fatalf("expected failed run to be terminal")
+	}
+	if err := run2.Cancel("cancel", now); !errors.Is(err, ingestion.ErrInvalidTransition) {
+		t.Fatalf("expected ErrInvalidTransition cancelling failed run, got %v", err)
+	}
+	if err := run2.Complete("chk", now); !errors.Is(err, ingestion.ErrInvalidTransition) {
+		t.Fatalf("expected ErrInvalidTransition completing failed run, got %v", err)
+	}
 
 	// Scenario 3: Cancel run
 	run3, _ := ingestion.NewRun("run-202", "src-01", "")
@@ -179,6 +202,15 @@ func TestIngestionRun_PartialAndFailures(t *testing.T) {
 	}
 	if run3.Status != ingestion.StatusCancelled {
 		t.Fatalf("expected CANCELLED status, got %s", run3.Status)
+	}
+	if !run3.IsTerminal() {
+		t.Fatalf("expected cancelled run to be terminal")
+	}
+	if err := run3.Fail("fail", now); !errors.Is(err, ingestion.ErrInvalidTransition) {
+		t.Fatalf("expected ErrInvalidTransition failing cancelled run, got %v", err)
+	}
+	if err := run3.Complete("chk", now); !errors.Is(err, ingestion.ErrInvalidTransition) {
+		t.Fatalf("expected ErrInvalidTransition completing cancelled run, got %v", err)
 	}
 
 	// Scenario 4: Negative metric rejection

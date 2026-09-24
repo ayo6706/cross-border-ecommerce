@@ -1,6 +1,8 @@
 package ingestion
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -15,6 +17,8 @@ type RawRecord struct {
 	SourceID          source.ID
 	ExternalProductID string
 	Payload           []byte
+	PayloadRaw        []byte
+	PayloadSHA256     string
 	SourceVersion     string
 	ETag              string
 	SourceUpdatedAt   *time.Time
@@ -22,18 +26,22 @@ type RawRecord struct {
 	ReceivedAt        time.Time
 }
 
-func NewRawRecord(
-	id string,
-	sourceID source.ID,
-	externalProductID string,
-	payload []byte,
-	sourceVersion string,
-	etag string,
-	sourceUpdatedAt *time.Time,
-	ingestionRunID string,
-	receivedAt time.Time,
-) (*RawRecord, error) {
-	trimmedID := strings.TrimSpace(id)
+type RawRecordParams struct {
+	ID                string
+	SourceID          source.ID
+	ExternalProductID string
+	Payload           []byte
+	PayloadRaw        []byte
+	PayloadSHA256     string
+	SourceVersion     string
+	ETag              string
+	SourceUpdatedAt   *time.Time
+	IngestionRunID    string
+	ReceivedAt        time.Time
+}
+
+func NewRawRecord(params RawRecordParams) (*RawRecord, error) {
+	trimmedID := strings.TrimSpace(params.ID)
 	if trimmedID == "" {
 		generatedID, err := uuid.NewString()
 		if err != nil {
@@ -42,26 +50,39 @@ func NewRawRecord(
 		trimmedID = generatedID
 	}
 
-	recordTime := receivedAt.UTC()
+	recordTime := params.ReceivedAt.UTC()
 	if recordTime.IsZero() {
 		recordTime = time.Now().UTC()
 	}
 
 	var srcUpdatedAt *time.Time
-	if sourceUpdatedAt != nil && !sourceUpdatedAt.IsZero() {
-		t := sourceUpdatedAt.UTC()
+	if params.SourceUpdatedAt != nil && !params.SourceUpdatedAt.IsZero() {
+		t := params.SourceUpdatedAt.UTC()
 		srcUpdatedAt = &t
+	}
+
+	rawBytes := params.PayloadRaw
+	if len(rawBytes) == 0 && len(params.Payload) > 0 {
+		rawBytes = params.Payload
+	}
+
+	sha := strings.TrimSpace(params.PayloadSHA256)
+	if sha == "" && len(rawBytes) > 0 {
+		sum := sha256.Sum256(rawBytes)
+		sha = hex.EncodeToString(sum[:])
 	}
 
 	record := &RawRecord{
 		ID:                trimmedID,
-		SourceID:          sourceID,
-		ExternalProductID: strings.TrimSpace(externalProductID),
-		Payload:           payload,
-		SourceVersion:     strings.TrimSpace(sourceVersion),
-		ETag:              strings.TrimSpace(etag),
+		SourceID:          params.SourceID,
+		ExternalProductID: strings.TrimSpace(params.ExternalProductID),
+		Payload:           params.Payload,
+		PayloadRaw:        rawBytes,
+		PayloadSHA256:     sha,
+		SourceVersion:     strings.TrimSpace(params.SourceVersion),
+		ETag:              strings.TrimSpace(params.ETag),
 		SourceUpdatedAt:   srcUpdatedAt,
-		IngestionRunID:    strings.TrimSpace(ingestionRunID),
+		IngestionRunID:    strings.TrimSpace(params.IngestionRunID),
 		ReceivedAt:        recordTime,
 	}
 

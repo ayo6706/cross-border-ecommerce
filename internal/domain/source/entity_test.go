@@ -29,13 +29,67 @@ func TestSource_NewSource(t *testing.T) {
 			wantErr:   nil,
 		},
 		{
-			name:      "valid FEED source with nil config initialized",
+			name:      "valid FEED source",
 			id:        "src-feed-01",
+			srcName:   "Product CSV Feed",
+			srcType:   source.TypeFeed,
+			config:    map[string]any{"file_path": "/data/feed.csv", "format": "csv"},
+			rateLimit: 60,
+			wantErr:   nil,
+		},
+		{
+			name:      "FEED source without file_path",
+			id:        "src-feed-02",
 			srcName:   "Product CSV Feed",
 			srcType:   source.TypeFeed,
 			config:    nil,
 			rateLimit: 60,
+			wantErr:   source.ErrInvalidSourceConfig,
+		},
+		{
+			name:      "valid API source with bearer secret reference",
+			id:        "src-api-02",
+			srcName:   "Supplier API",
+			srcType:   source.TypeAPI,
+			config:    map[string]any{"base_url": "https://api.supplier.com", "auth_kind": "bearer", "auth_ref": "env:SUPPLIER_TOKEN"},
+			rateLimit: 120,
 			wantErr:   nil,
+		},
+		{
+			name:      "API source with literal secret",
+			id:        "src-api-03",
+			srcName:   "Supplier API",
+			srcType:   source.TypeAPI,
+			config:    map[string]any{"base_url": "https://api.supplier.com", "auth_kind": "bearer", "auth_ref": "raw-token"},
+			rateLimit: 120,
+			wantErr:   source.ErrInvalidSecretRef,
+		},
+		{
+			name:      "API source with auth_ref but no auth_kind",
+			id:        "src-api-04",
+			srcName:   "Supplier API",
+			srcType:   source.TypeAPI,
+			config:    map[string]any{"base_url": "https://api.supplier.com", "auth_ref": "env:SUPPLIER_TOKEN"},
+			rateLimit: 120,
+			wantErr:   source.ErrInvalidSourceConfig,
+		},
+		{
+			name:      "API source with unsupported auth_kind",
+			id:        "src-api-05",
+			srcName:   "Supplier API",
+			srcType:   source.TypeAPI,
+			config:    map[string]any{"base_url": "https://api.supplier.com", "auth_kind": "oauth"},
+			rateLimit: 120,
+			wantErr:   source.ErrInvalidSourceConfig,
+		},
+		{
+			name:      "API source with relative base_url",
+			id:        "src-api-06",
+			srcName:   "Supplier API",
+			srcType:   source.TypeAPI,
+			config:    map[string]any{"base_url": "api.supplier.com/v1"},
+			rateLimit: 120,
+			wantErr:   source.ErrInvalidSourceConfig,
 		},
 		{
 			name:      "empty ID error",
@@ -118,7 +172,7 @@ func TestSource_NewSource(t *testing.T) {
 func TestSource_Mutations(t *testing.T) {
 	t.Parallel()
 
-	src, err := source.NewSource("src-01", "Supplier 1", source.TypeAPI, nil, 100)
+	src, err := source.NewSource("src-01", "Supplier 1", source.TypeAPI, map[string]any{"base_url": "https://api.example.com"}, 100)
 	if err != nil {
 		t.Fatalf("failed to create source: %v", err)
 	}
@@ -139,8 +193,8 @@ func TestSource_Mutations(t *testing.T) {
 	if err := src.SetRateLimit(250); err != nil {
 		t.Fatalf("unexpected error setting rate limit: %v", err)
 	}
-	if src.RateLimit != 250 {
-		t.Fatalf("expected rate limit 250, got %d", src.RateLimit)
+	if src.RateLimitPerSecond != 250 {
+		t.Fatalf("expected rate limit 250, got %d", src.RateLimitPerSecond)
 	}
 
 	// Set invalid rate limit
