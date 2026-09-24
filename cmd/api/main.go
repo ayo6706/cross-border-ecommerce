@@ -11,20 +11,30 @@ import (
 	"syscall"
 	"time"
 
-	httpAdapter "github.com/ayo6706/cross-border-ecommerce/internal/adapters/http"
+	"github.com/ayo6706/cross-border-ecommerce/internal/adapters/httpapi"
 	"github.com/ayo6706/cross-border-ecommerce/internal/infrastructure/postgres"
 	"github.com/ayo6706/cross-border-ecommerce/internal/platform/config"
 	"github.com/ayo6706/cross-border-ecommerce/internal/platform/logging"
 )
 
 func main() {
-	cfg, err := config.Load()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to load configuration: %v\n", err)
+	if err := run(); err != nil {
+		fmt.Fprintf(os.Stderr, "api error: %v\n", err)
 		os.Exit(1)
 	}
+}
 
-	logger := logging.NewLogger(cfg.Log)
+func run() error {
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("load configuration: %w", err)
+	}
+
+	logger := logging.NewLogger(os.Stdout, logging.Options{
+		Level:     cfg.Log.Level,
+		Format:    cfg.Log.Format,
+		AddSource: cfg.Log.AddSource,
+	})
 	slog.SetDefault(logger)
 
 	logger.Info("starting api server",
@@ -34,7 +44,6 @@ func main() {
 		slog.String("database_url", cfg.Database.RedactedURL()),
 	)
 
-	// Context for initialization
 	initCtx, cancelInit := context.WithTimeout(context.Background(), cfg.Database.ConnectTimeout+5*time.Second)
 	defer cancelInit()
 
@@ -48,25 +57,18 @@ func main() {
 		postgres.WithConnectTimeout(cfg.Database.ConnectTimeout),
 	)
 	if err != nil {
-		logger.Warn("postgres connection failed during startup (readiness probe will report NOT_READY)",
-			slog.String("error", err.Error()),
-		)
-	} else {
-		logger.Info("connected to postgresql successfully",
-			slog.Int("max_conns", int(cfg.Database.MaxConns)),
-			slog.Int("min_conns", int(cfg.Database.MinConns)),
-		)
-		defer dbPool.Close()
+		return fmt.Errorf("connect to postgresql: %w", err)
 	}
+	defer dbPool.Close()
 
-	var pinger httpAdapter.Pinger
-	if dbPool != nil {
-		pinger = dbPool
-	}
+	logger.Info("connected to postgresql successfully",
+		slog.Int("max_conns", int(cfg.Database.MaxConns)),
+		slog.Int("min_conns", int(cfg.Database.MinConns)),
+	)
 
-	handler := httpAdapter.NewRouter(httpAdapter.RouterConfig{
+	handler := httpapi.NewRouter(httpapi.RouterConfig{
 		Logger: logger,
-		DB:     pinger,
+		DB:     dbPool,
 	})
 
 	srv := &http.Server{
@@ -90,8 +92,7 @@ func main() {
 
 	select {
 	case err := <-serverErrors:
-		logger.Error("server fatal runtime error", slog.String("error", err.Error()))
-		os.Exit(1)
+		return fmt.Errorf("server fatal error: %w", err)
 	case sig := <-shutdown:
 		logger.Info("shutdown signal received, commencing graceful shutdown", slog.String("signal", sig.String()))
 
@@ -99,11 +100,12 @@ func main() {
 		defer cancelShutdown()
 
 		if err := srv.Shutdown(shutdownCtx); err != nil {
-			logger.Error("graceful server shutdown failed, forcing close", slog.String("error", err.Error()))
 			_ = srv.Close()
-			os.Exit(1)
+			return fmt.Errorf("graceful server shutdown failed: %w", err)
 		}
 
 		logger.Info("server exited gracefully")
 	}
+
+	return nil
 }

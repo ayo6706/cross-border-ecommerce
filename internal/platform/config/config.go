@@ -11,20 +11,13 @@ import (
 )
 
 var (
-	ErrInvalidPort       = errors.New("invalid port number")
-	ErrEmptyDatabaseURL  = errors.New("database URL cannot be empty")
-	ErrInvalidPoolLimits = errors.New("invalid pool limits: min conns must be >= 0, max conns must be > 0, and min conns <= max conns")
-	ErrInvalidTimeout    = errors.New("timeout durations must be positive")
-	ErrInvalidLogLevel   = errors.New("invalid log level: must be debug, info, warn, or error")
-	ErrInvalidLogFormat  = errors.New("invalid log format: must be json or text")
+	ErrInvalidPort       = errors.New("server port must be a valid integer between 1 and 65535")
+	ErrInvalidTimeout    = errors.New("timeout values must be strictly positive")
+	ErrEmptyDatabaseURL  = errors.New("DATABASE_URL is required")
+	ErrInvalidPoolLimits = errors.New("database connection pool minimum cannot exceed maximum")
+	ErrInvalidLogLevel   = errors.New("log level must be one of 'debug', 'info', 'warn', 'error'")
+	ErrInvalidLogFormat  = errors.New("log format must be one of 'json' or 'text'")
 )
-
-type Config struct {
-	Server   ServerConfig
-	Database DatabaseConfig
-	Log      LogConfig
-	App      AppConfig
-}
 
 type ServerConfig struct {
 	Port            string
@@ -47,11 +40,11 @@ func (d DatabaseConfig) RedactedURL() string {
 	if d.URL == "" {
 		return ""
 	}
-	parsed, err := url.Parse(d.URL)
+	u, err := url.Parse(d.URL)
 	if err != nil {
 		return "[malformed database URL]"
 	}
-	return parsed.Redacted()
+	return u.Redacted()
 }
 
 type LogConfig struct {
@@ -63,6 +56,13 @@ type LogConfig struct {
 type AppConfig struct {
 	Environment string
 	ServiceName string
+}
+
+type Config struct {
+	Server   ServerConfig
+	Database DatabaseConfig
+	Log      LogConfig
+	App      AppConfig
 }
 
 func Load() (*Config, error) {
@@ -124,6 +124,11 @@ func LoadFromLookup(lookup func(string) string) (*Config, error) {
 		return nil, fmt.Errorf("invalid LOG_ADD_SOURCE: %w", err)
 	}
 
+	appEnv := getEnvString(lookup, "APP_ENV", "development")
+
+	logLevel := strings.ToLower(strings.TrimSpace(getEnvString(lookup, "LOG_LEVEL", "info")))
+	logFormat := strings.ToLower(strings.TrimSpace(getEnvString(lookup, "LOG_FORMAT", "json")))
+
 	cfg := &Config{
 		Server: ServerConfig{
 			Port:            getEnvString(lookup, "PORT", "8080"),
@@ -133,7 +138,7 @@ func LoadFromLookup(lookup func(string) string) (*Config, error) {
 			ShutdownTimeout: shutdownTimeout,
 		},
 		Database: DatabaseConfig{
-			URL:             getEnvString(lookup, "DATABASE_URL", "postgres://postgres:postgres@localhost:5432/cross_border_db?sslmode=disable"),
+			URL:             getEnvString(lookup, "DATABASE_URL", ""),
 			MaxConns:        maxConns,
 			MinConns:        minConns,
 			MaxConnIdleTime: maxConnIdleTime,
@@ -141,12 +146,12 @@ func LoadFromLookup(lookup func(string) string) (*Config, error) {
 			ConnectTimeout:  connectTimeout,
 		},
 		Log: LogConfig{
-			Level:     getEnvString(lookup, "LOG_LEVEL", "info"),
-			Format:    getEnvString(lookup, "LOG_FORMAT", "json"),
+			Level:     logLevel,
+			Format:    logFormat,
 			AddSource: addSource,
 		},
 		App: AppConfig{
-			Environment: getEnvString(lookup, "APP_ENV", "development"),
+			Environment: appEnv,
 			ServiceName: getEnvString(lookup, "SERVICE_NAME", "cross-border-api"),
 		},
 	}
@@ -180,18 +185,14 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("%w for database configuration", ErrInvalidTimeout)
 	}
 
-	normalizedLevel := strings.ToLower(strings.TrimSpace(c.Log.Level))
-	switch normalizedLevel {
+	switch strings.ToLower(strings.TrimSpace(c.Log.Level)) {
 	case "debug", "info", "warn", "error":
-		c.Log.Level = normalizedLevel
 	default:
 		return fmt.Errorf("%w: '%s'", ErrInvalidLogLevel, c.Log.Level)
 	}
 
-	normalizedFormat := strings.ToLower(strings.TrimSpace(c.Log.Format))
-	switch normalizedFormat {
+	switch strings.ToLower(strings.TrimSpace(c.Log.Format)) {
 	case "json", "text":
-		c.Log.Format = normalizedFormat
 	default:
 		return fmt.Errorf("%w: '%s'", ErrInvalidLogFormat, c.Log.Format)
 	}

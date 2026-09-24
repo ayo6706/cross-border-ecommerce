@@ -15,13 +15,23 @@ import (
 )
 
 func main() {
-	cfg, err := config.Load()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to load configuration: %v\n", err)
+	if err := run(); err != nil {
+		fmt.Fprintf(os.Stderr, "worker error: %v\n", err)
 		os.Exit(1)
 	}
+}
 
-	logger := logging.NewLogger(cfg.Log)
+func run() error {
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("load configuration: %w", err)
+	}
+
+	logger := logging.NewLogger(os.Stdout, logging.Options{
+		Level:     cfg.Log.Level,
+		Format:    cfg.Log.Format,
+		AddSource: cfg.Log.AddSource,
+	})
 	slog.SetDefault(logger)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -47,15 +57,16 @@ func main() {
 			case <-ctx.Done():
 				return
 			case t := <-ticker.C:
-				logger.Info("worker heartbeat", slog.Time("timestamp", t))
+				logger.Info("worker daemon heartbeat", slog.Time("timestamp", t))
 			}
 		}
 	}()
 
 	sig := <-shutdown
-	logger.Info("shutdown signal received, draining worker pool", slog.String("signal", sig.String()))
+	logger.Info("shutdown signal received, stopping worker", slog.String("signal", sig.String()))
 	cancel()
 
 	wg.Wait()
 	logger.Info("worker daemon stopped gracefully")
+	return nil
 }

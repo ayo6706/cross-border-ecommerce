@@ -1,4 +1,4 @@
-package http_test
+package httpapi_test
 
 import (
 	"bytes"
@@ -6,17 +6,17 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
-	httpAdapter "github.com/ayo6706/cross-border-ecommerce/internal/adapters/http"
-	"github.com/ayo6706/cross-border-ecommerce/internal/platform/config"
+	"github.com/ayo6706/cross-border-ecommerce/internal/adapters/httpapi"
 	"github.com/ayo6706/cross-border-ecommerce/internal/platform/logging"
 )
 
 func TestRouter_RequestIDMiddleware(t *testing.T) {
 	t.Parallel()
 
-	router := httpAdapter.NewRouter(httpAdapter.RouterConfig{})
+	router := httpapi.NewRouter(httpapi.RouterConfig{})
 
 	t.Run("generates request ID if not provided", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/health/live", nil)
@@ -51,10 +51,10 @@ func TestRouter_LoggingAndPanicRecovery(t *testing.T) {
 	t.Parallel()
 
 	var logBuf bytes.Buffer
-	cfg := config.LogConfig{Level: "info", Format: "json"}
-	logger := logging.NewLogger(cfg, &logBuf)
+	opts := logging.Options{Level: "info", Format: "json"}
+	logger := logging.NewLogger(&logBuf, opts)
 
-	router := httpAdapter.NewRouter(httpAdapter.RouterConfig{
+	router := httpapi.NewRouter(httpapi.RouterConfig{
 		Logger: logger,
 	})
 
@@ -91,11 +91,11 @@ func TestPanicRecovery(t *testing.T) {
 	t.Parallel()
 
 	var logBuf bytes.Buffer
-	cfg := config.LogConfig{Level: "info", Format: "json"}
-	logger := logging.NewLogger(cfg, &logBuf)
+	opts := logging.Options{Level: "info", Format: "json"}
+	logger := logging.NewLogger(&logBuf, opts)
 
 	panickingPinger := &panickingPingerMock{}
-	router := httpAdapter.NewRouter(httpAdapter.RouterConfig{
+	router := httpapi.NewRouter(httpapi.RouterConfig{
 		Logger: logger,
 		DB:     panickingPinger,
 	})
@@ -110,23 +110,34 @@ func TestPanicRecovery(t *testing.T) {
 		t.Fatalf("expected 500 status on panic, got %d", rr.Code)
 	}
 
-	var logEntry map[string]any
-	if err := json.Unmarshal(logBuf.Bytes(), &logEntry); err != nil {
-		t.Fatalf("failed to decode log JSON: %v, raw: %s", err, logBuf.String())
+	var errorLogEntry map[string]any
+	lines := strings.Split(strings.TrimSpace(logBuf.String()), "\n")
+	for _, line := range lines {
+		var entry map[string]any
+		if err := json.Unmarshal([]byte(line), &entry); err == nil {
+			if entry["level"] == "ERROR" {
+				errorLogEntry = entry
+				break
+			}
+		}
 	}
 
-	if logEntry["request_id"] != "req-panic-tracing-999" {
-		t.Errorf("expected panic log to retain request_id 'req-panic-tracing-999', got: %v", logEntry["request_id"])
+	if errorLogEntry == nil {
+		t.Fatalf("expected ERROR log entry, got raw: %s", logBuf.String())
 	}
-	if logEntry["level"] != "ERROR" {
-		t.Errorf("expected ERROR level log, got: %v", logEntry["level"])
+
+	if errorLogEntry["request_id"] != "req-panic-tracing-999" {
+		t.Errorf("expected panic log to retain request_id 'req-panic-tracing-999', got: %v", errorLogEntry["request_id"])
 	}
-	if logEntry["panic"] != "catastrophic db hardware failure" {
-		t.Errorf("expected panic details in log, got: %v", logEntry["panic"])
+	if errorLogEntry["level"] != "ERROR" {
+		t.Errorf("expected ERROR level log, got: %v", errorLogEntry["level"])
 	}
-	stackVal, ok := logEntry["stack"].(string)
+	if errorLogEntry["panic"] != "catastrophic db hardware failure" {
+		t.Errorf("expected panic details in log, got: %v", errorLogEntry["panic"])
+	}
+	stackVal, ok := errorLogEntry["stack"].(string)
 	if !ok || stackVal == "" {
-		t.Errorf("expected non-empty stack trace in panic log, got: %v", logEntry["stack"])
+		t.Errorf("expected non-empty stack trace in panic log, got: %v", errorLogEntry["stack"])
 	}
 }
 

@@ -2,10 +2,7 @@ module github.com/ayo6706/cross-border-ecommerce
 
 go 1.25.5
 
-require (
-	github.com/jackc/pgx/v5 v5.11.0
-	github.com/shopspring/decimal v1.4.0
-)
+require github.com/jackc/pgx/v5 v5.11.0
 
 require (
 	github.com/jackc/pgpassfile v1.0.0 // indirect

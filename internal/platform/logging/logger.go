@@ -4,10 +4,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
-	"os"
 	"strings"
-
-	"github.com/ayo6706/cross-border-ecommerce/internal/platform/config"
 )
 
 type contextKey string
@@ -81,7 +78,7 @@ func ParseLevel(levelStr string) slog.Level {
 	switch strings.ToLower(strings.TrimSpace(levelStr)) {
 	case "debug":
 		return slog.LevelDebug
-	case "warn", "warning":
+	case "warn":
 		return slog.LevelWarn
 	case "error":
 		return slog.LevelError
@@ -90,23 +87,27 @@ func ParseLevel(levelStr string) slog.Level {
 	}
 }
 
-func NewLogger(cfg config.LogConfig, out ...io.Writer) *slog.Logger {
-	var targetOut io.Writer = os.Stdout
-	if len(out) > 0 && out[0] != nil {
-		targetOut = out[0]
-	}
+// Options configures NewLogger. Level is one of debug, info, warn, error;
+// Format is "json" (default) or "text".
+type Options struct {
+	Level     string
+	Format    string
+	AddSource bool
+}
 
-	level := ParseLevel(cfg.Level)
-	opts := &slog.HandlerOptions{
-		Level:     level,
-		AddSource: cfg.AddSource,
+// NewLogger builds a structured logger writing to w that also records
+// request and correlation IDs carried in the context.
+func NewLogger(w io.Writer, opts Options) *slog.Logger {
+	handlerOpts := &slog.HandlerOptions{
+		Level:     ParseLevel(opts.Level),
+		AddSource: opts.AddSource,
 	}
 
 	var baseHandler slog.Handler
-	if strings.ToLower(strings.TrimSpace(cfg.Format)) == "text" {
-		baseHandler = slog.NewTextHandler(targetOut, opts)
+	if strings.EqualFold(strings.TrimSpace(opts.Format), "text") {
+		baseHandler = slog.NewTextHandler(w, handlerOpts)
 	} else {
-		baseHandler = slog.NewJSONHandler(targetOut, opts)
+		baseHandler = slog.NewJSONHandler(w, handlerOpts)
 	}
 
 	return slog.New(NewContextHandler(baseHandler))

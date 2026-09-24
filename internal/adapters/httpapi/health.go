@@ -1,9 +1,10 @@
-package http
+package httpapi
 
 import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"time"
 )
 
 type Pinger interface {
@@ -23,21 +24,31 @@ func HandleLiveness() http.HandlerFunc {
 	}
 }
 
+func writeNotReady(w http.ResponseWriter) {
+	w.WriteHeader(http.StatusServiceUnavailable)
+	_ = json.NewEncoder(w).Encode(HealthStatus{
+		Status: "NOT_READY",
+		Details: map[string]string{
+			"database": "unavailable",
+		},
+	})
+}
+
 func HandleReadiness(db Pinger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 
-		if db != nil {
-			if err := db.Ping(r.Context()); err != nil {
-				w.WriteHeader(http.StatusServiceUnavailable)
-				_ = json.NewEncoder(w).Encode(HealthStatus{
-					Status: "NOT_READY",
-					Details: map[string]string{
-						"database": "unavailable",
-					},
-				})
-				return
-			}
+		if db == nil {
+			writeNotReady(w)
+			return
+		}
+
+		pingCtx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+		defer cancel()
+
+		if err := db.Ping(pingCtx); err != nil {
+			writeNotReady(w)
+			return
 		}
 
 		w.WriteHeader(http.StatusOK)

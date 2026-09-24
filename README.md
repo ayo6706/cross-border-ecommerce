@@ -18,41 +18,51 @@ Infrastructure Adapters (internal/infrastructure/)
 
 ### Layer Responsibilities
 
-- **`cmd/`**: Entrypoints for executables (`cmd/api` for REST API, `cmd/worker` for asynchronous queue/stream workers).
+- **`cmd/`**: Entrypoints for executables (`cmd/api` REST API, `cmd/worker` background worker, `cmd/migrate` schema migrations).
 - **`internal/domain/`**: Pure Go domain models, value objects, domain errors, and repository interfaces. Has **zero** external dependencies on HTTP routers, SQL drivers, or messaging brokers.
-  - `product/`: Product canonical entities, lifecycle status, decoupled price/inventory entities.
+  - `product/`: Product canonical entities and lifecycle status.
   - `source/`: Supplier and catalogue ingestion source definitions and configurations.
-  - `compliance/`: HS codes, effective-dated tariff rules, sanctions, and compliance determinations.
+  - `ingestion/`: Ingestion runs, raw records, checkpoints, error budgets, and the source adapter port.
 - **`internal/application/`**: Use case orchestrators coordinating domain operations and calling domain repository ports.
-- **`internal/infrastructure/`**: Secondary / Driven adapters implementing domain repository ports (`postgres`, `outbox`, etc.).
-- **`internal/adapters/`**: Primary / Driving adapters (e.g. `http` router, middleware, health endpoints).
+- **`internal/infrastructure/`**: Secondary / Driven adapters implementing domain and application ports (`postgres` repositories and the transaction runner).
+- **`internal/adapters/`**: Primary / Driving adapters (`httpapi` router, middleware, health endpoints; `sources` REST and feed adapters).
 
 ## Tooling & Commands
 
 ### Prerequisites
 
-- Go 1.23+
-- PostgreSQL 16+ (with `uuid-ossp` extension)
-- Redis 7+ (Streams)
+- Go (version from `go.mod`)
+- Docker (for the local PostgreSQL 16 from `docker-compose.yml`)
+
+### Configuration
+
+`DATABASE_URL` is required; there is no built-in default. The Makefile sets it
+(and `TEST_DATABASE_URL`) to the docker-compose databases, so `make` targets work
+out of the box. Export either variable to point elsewhere.
+
+Source credentials are never stored in source config. API sources reference
+secrets instead, e.g. `"auth_kind": "bearer", "auth_ref": "env:SUPPLIER_TOKEN"`,
+and the value is read from the environment when the adapter is built.
 
 ### Common Commands
 
 ```bash
-# Run automated tests
+# Start local PostgreSQL (dev + test databases)
+make db-up
+
+# Apply migrations to the dev database
+make migrate-up
+
+# Unit tests (integration tests skip without TEST_DATABASE_URL)
 make test
 
-# Run tests with race detection
-make test-race
+# Unit + PostgreSQL integration tests with the race detector (same as CI)
+make test-integration
 
 # Build executables into bin/
 make build
 
-# Run linting
-make lint
-
-# Start API server
+# Start API server / background worker
 make run-api
-
-# Start background worker
 make run-worker
 ```

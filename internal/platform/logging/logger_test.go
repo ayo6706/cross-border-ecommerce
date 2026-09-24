@@ -8,7 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ayo6706/cross-border-ecommerce/internal/platform/config"
 	"github.com/ayo6706/cross-border-ecommerce/internal/platform/logging"
 )
 
@@ -16,12 +15,12 @@ func TestLogger_ContextPropagation(t *testing.T) {
 	t.Parallel()
 
 	var buf bytes.Buffer
-	cfg := config.LogConfig{
+	opts := logging.Options{
 		Level:  "info",
 		Format: "json",
 	}
 
-	logger := logging.NewLogger(cfg, &buf)
+	logger := logging.NewLogger(&buf, opts)
 
 	ctx := context.Background()
 	ctx = logging.WithRequestID(ctx, "req-12345")
@@ -55,12 +54,12 @@ func TestLogger_LevelFiltering(t *testing.T) {
 	t.Parallel()
 
 	var buf bytes.Buffer
-	cfg := config.LogConfig{
+	opts := logging.Options{
 		Level:  "warn",
 		Format: "json",
 	}
 
-	logger := logging.NewLogger(cfg, &buf)
+	logger := logging.NewLogger(&buf, opts)
 
 	ctx := context.Background()
 	logger.DebugContext(ctx, "debug line")
@@ -80,12 +79,12 @@ func TestLogger_WithAttrsAndGroup(t *testing.T) {
 	t.Parallel()
 
 	var buf bytes.Buffer
-	cfg := config.LogConfig{
+	opts := logging.Options{
 		Level:  "info",
 		Format: "json",
 	}
 
-	logger := logging.NewLogger(cfg, &buf)
+	logger := logging.NewLogger(&buf, opts)
 	childLogger := logger.With(slog.String("component", "ingestion_worker"))
 
 	ctx := context.Background()

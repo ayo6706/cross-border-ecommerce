@@ -11,7 +11,7 @@ import (
 func TestLoad_Defaults(t *testing.T) {
 	t.Parallel()
 
-	cfg, err := config.LoadFromLookup(func(s string) string { return "" })
+	cfg, err := config.LoadFromLookup(onlyDatabaseURL)
 	if err != nil {
 		t.Fatalf("unexpected error loading default config: %v", err)
 	}
@@ -196,7 +196,7 @@ func TestConfig_ValidationFailures(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			cfg, err := config.LoadFromLookup(func(s string) string { return "" })
+			cfg, err := config.LoadFromLookup(onlyDatabaseURL)
 			if err != nil {
 				t.Fatalf("failed to load base config: %v", err)
 			}
@@ -261,4 +261,26 @@ func TestDatabaseConfig_RedactedURL(t *testing.T) {
 	if emptyCfg.RedactedURL() != "" {
 		t.Errorf("expected empty string for empty URL, got: %s", emptyCfg.RedactedURL())
 	}
+
+	malformedCfg := config.DatabaseConfig{URL: "postgres://%invalid-url%:pass@/db"}
+	if malformedCfg.RedactedURL() != "[malformed database URL]" {
+		t.Errorf("expected [malformed database URL] on parse error, got: %s", malformedCfg.RedactedURL())
+	}
+}
+
+func TestLoad_RequiresDatabaseURL(t *testing.T) {
+	t.Parallel()
+
+	_, err := config.LoadFromLookup(func(string) string { return "" })
+	if !errors.Is(err, config.ErrEmptyDatabaseURL) {
+		t.Fatalf("expected ErrEmptyDatabaseURL when DATABASE_URL is unset, got %v", err)
+	}
+}
+
+// onlyDatabaseURL sets the one required variable and leaves everything else at its default.
+func onlyDatabaseURL(key string) string {
+	if key == "DATABASE_URL" {
+		return "postgres://user:pass@dbhost:5432/testdb"
+	}
+	return ""
 }

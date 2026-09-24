@@ -1,4 +1,4 @@
-package http
+package httpapi
 
 import (
 	"fmt"
@@ -24,8 +24,9 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	mux.HandleFunc("GET /health/ready", HandleReadiness(cfg.DB))
 
 	var handler http.Handler = mux
-	handler = loggingMiddleware(handler, cfg.Logger)
+	// Order: RequestID -> Logging -> Recovery -> Mux
 	handler = recoveryMiddleware(handler, cfg.Logger)
+	handler = loggingMiddleware(handler, cfg.Logger)
 	handler = requestIDMiddleware(handler)
 
 	return handler
@@ -43,6 +44,9 @@ func (rec *statusRecorder) WriteHeader(code int) {
 }
 
 func (rec *statusRecorder) Write(b []byte) (int, error) {
+	if rec.statusCode == 0 {
+		rec.statusCode = http.StatusOK
+	}
 	n, err := rec.ResponseWriter.Write(b)
 	rec.bytesWritten += int64(n)
 	return n, err
@@ -56,9 +60,23 @@ func generateRequestID() string {
 	return id
 }
 
+func sanitizeHeaderID(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if len(trimmed) == 0 || len(trimmed) > 128 {
+		return ""
+	}
+	for _, r := range trimmed {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' || r == '.' || r == ':' {
+			continue
+		}
+		return ""
+	}
+	return trimmed
+}
+
 func requestIDMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		reqID := strings.TrimSpace(r.Header.Get("X-Request-ID"))
+		reqID := sanitizeHeaderID(r.Header.Get("X-Request-ID"))
 		if reqID == "" {
 			reqID = generateRequestID()
 		}
@@ -66,7 +84,7 @@ func requestIDMiddleware(next http.Handler) http.Handler {
 		ctx := logging.WithRequestID(r.Context(), reqID)
 		w.Header().Set("X-Request-ID", reqID)
 
-		if corrID := strings.TrimSpace(r.Header.Get("X-Correlation-ID")); corrID != "" {
+		if corrID := sanitizeHeaderID(r.Header.Get("X-Correlation-ID")); corrID != "" {
 			ctx = logging.WithCorrelationID(ctx, corrID)
 			w.Header().Set("X-Correlation-ID", corrID)
 		}
