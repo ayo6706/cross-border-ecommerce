@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/ayo6706/cross-border-ecommerce/internal/domain/product"
 )
 
 type ID string
@@ -32,28 +34,30 @@ type PaginationConfig struct {
 
 // APIConfig defines typed configuration for API sources.
 type APIConfig struct {
-	BaseURL         string           `json:"base_url"`
-	RecordsPath     string           `json:"records_path,omitempty"`
-	IDField         string           `json:"id_field,omitempty"`
-	CompositeIDs    []string         `json:"composite_ids,omitempty"`
-	CompositeSep    string           `json:"composite_sep,omitempty"`
-	Pagination      PaginationConfig `json:"pagination,omitempty"`
-	AuthKind        string           `json:"auth_kind,omitempty"` // "none", "bearer", "api_key_header", "basic"
-	AuthRef         string           `json:"auth_ref,omitempty"`  // e.g. "env:SUPPLIER_API_KEY"
-	AuthHeader      string           `json:"auth_header,omitempty"`
-	AuthUser        string           `json:"auth_user,omitempty"`
-	AuthPasswordRef string           `json:"auth_password_ref,omitempty"`
+	BaseURL         string                `json:"base_url"`
+	RecordsPath     string                `json:"records_path,omitempty"`
+	IDField         string                `json:"id_field,omitempty"`
+	CompositeIDs    []string              `json:"composite_ids,omitempty"`
+	CompositeSep    string                `json:"composite_sep,omitempty"`
+	Pagination      PaginationConfig      `json:"pagination,omitempty"`
+	AuthKind        string                `json:"auth_kind,omitempty"` // "none", "bearer", "api_key_header", "basic"
+	AuthRef         string                `json:"auth_ref,omitempty"`  // e.g. "env:SUPPLIER_API_KEY"
+	AuthHeader      string                `json:"auth_header,omitempty"`
+	AuthUser        string                `json:"auth_user,omitempty"`
+	AuthPasswordRef string                `json:"auth_password_ref,omitempty"`
+	FieldMapping    *product.FieldMapping `json:"field_mapping,omitempty"`
 }
 
 // FeedConfig defines typed configuration for Feed/File sources.
 type FeedConfig struct {
-	FilePath      string   `json:"file_path"`
-	Format        string   `json:"format"` // "CSV", "NDJSON"
-	IDField       string   `json:"id_field,omitempty"`
-	CompositeIDs  []string `json:"composite_ids,omitempty"`
-	CompositeSep  string   `json:"composite_sep,omitempty"`
-	BatchSize     int      `json:"batch_size,omitempty"`
-	SkipMalformed bool     `json:"skip_malformed,omitempty"`
+	FilePath      string                `json:"file_path"`
+	Format        string                `json:"format"` // "CSV", "NDJSON"
+	IDField       string                `json:"id_field,omitempty"`
+	CompositeIDs  []string              `json:"composite_ids,omitempty"`
+	CompositeSep  string                `json:"composite_sep,omitempty"`
+	BatchSize     int                   `json:"batch_size,omitempty"`
+	SkipMalformed bool                  `json:"skip_malformed,omitempty"`
+	FieldMapping  *product.FieldMapping `json:"field_mapping,omitempty"`
 }
 
 type Source struct {
@@ -170,6 +174,13 @@ func (s *Source) ParseAPIConfig() (*APIConfig, error) {
 	if err := cfg.validateAuth(); err != nil {
 		return nil, err
 	}
+
+	fm, err := parseFieldMapping(s.Config["field_mapping"])
+	if err != nil {
+		return nil, err
+	}
+	cfg.FieldMapping = fm
+
 	return cfg, nil
 }
 
@@ -239,7 +250,59 @@ func (s *Source) ParseFeedConfig() (*FeedConfig, error) {
 	if cfg.BatchSize <= 0 {
 		return nil, fmt.Errorf("'batch_size' must be positive, got %d", cfg.BatchSize)
 	}
+
+	fm, err := parseFieldMapping(s.Config["field_mapping"])
+	if err != nil {
+		return nil, err
+	}
+	cfg.FieldMapping = fm
+
 	return cfg, nil
+}
+
+func parseFieldMapping(raw any) (*product.FieldMapping, error) {
+	if raw == nil {
+		return nil, nil
+	}
+	m, ok := raw.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("field_mapping must be a JSON object")
+	}
+	attrs, err := parseStringMap(m["attribute_paths"])
+	if err != nil {
+		return nil, err
+	}
+
+	fm := &product.FieldMapping{
+		NamePath:          configString(m, "name_path"),
+		DescriptionPath:   configString(m, "description_path"),
+		BrandPath:         configString(m, "brand_path"),
+		OriginCountryPath: configString(m, "origin_country_path"),
+		AttributePaths:    attrs,
+	}
+	if err := fm.Validate(); err != nil {
+		return nil, err
+	}
+	return fm, nil
+}
+
+func parseStringMap(raw any) (map[string]string, error) {
+	if raw == nil {
+		return nil, nil
+	}
+	m, ok := raw.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("attribute_paths must be a JSON object, got %T", raw)
+	}
+	res := make(map[string]string, len(m))
+	for k, v := range m {
+		str, ok := v.(string)
+		if !ok {
+			return nil, fmt.Errorf("attribute_paths[%q] must be a string path, got %T", k, v)
+		}
+		res[k] = strings.TrimSpace(str)
+	}
+	return res, nil
 }
 
 func configString(cfg map[string]any, key string) string {

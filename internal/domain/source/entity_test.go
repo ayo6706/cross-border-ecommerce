@@ -177,19 +177,16 @@ func TestSource_Mutations(t *testing.T) {
 		t.Fatalf("failed to create source: %v", err)
 	}
 
-	// Disable
 	src.Disable()
 	if src.Enabled {
 		t.Fatalf("expected source to be disabled")
 	}
 
-	// Enable
 	src.Enable()
 	if !src.Enabled {
 		t.Fatalf("expected source to be enabled")
 	}
 
-	// Set valid rate limit
 	if err := src.SetRateLimit(250); err != nil {
 		t.Fatalf("unexpected error setting rate limit: %v", err)
 	}
@@ -197,11 +194,113 @@ func TestSource_Mutations(t *testing.T) {
 		t.Fatalf("expected rate limit 250, got %d", src.RateLimitPerSecond)
 	}
 
-	// Set invalid rate limit
 	if err := src.SetRateLimit(0); !errors.Is(err, source.ErrInvalidRateLimit) {
 		t.Fatalf("expected ErrInvalidRateLimit for 0, got %v", err)
 	}
 	if err := src.SetRateLimit(-50); !errors.Is(err, source.ErrInvalidRateLimit) {
 		t.Fatalf("expected ErrInvalidRateLimit for negative, got %v", err)
+	}
+}
+
+func TestSource_FieldMappingValidation(t *testing.T) {
+	t.Parallel()
+
+	validCfg := map[string]any{
+		"base_url": "https://api.example.com",
+		"field_mapping": map[string]any{
+			"name_path": "title",
+			"attribute_paths": map[string]any{
+				"color": "details.color",
+			},
+		},
+	}
+	src, err := source.NewSource("src-01", "Supplier 1", source.TypeAPI, validCfg, 100)
+	if err != nil {
+		t.Fatalf("expected valid source with field_mapping, got: %v", err)
+	}
+	apiCfg, err := src.ParseAPIConfig()
+	if err != nil {
+		t.Fatalf("expected ParseAPIConfig to succeed, got: %v", err)
+	}
+	if apiCfg.FieldMapping == nil || apiCfg.FieldMapping.NamePath != "title" {
+		t.Fatalf("expected FieldMapping to be parsed with name_path 'title'")
+	}
+
+	missingNameCfg := map[string]any{
+		"base_url": "https://api.example.com",
+		"field_mapping": map[string]any{
+			"description_path": "desc",
+		},
+	}
+	_, err = source.NewSource("src-02", "Supplier 2", source.TypeAPI, missingNameCfg, 100)
+	if err == nil {
+		t.Fatal("expected error for field_mapping with missing name_path")
+	}
+	if !errors.Is(err, source.ErrInvalidSourceConfig) {
+		t.Fatalf("expected ErrInvalidSourceConfig, got: %v", err)
+	}
+
+	duplicateAttrCfg := map[string]any{
+		"base_url": "https://api.example.com",
+		"field_mapping": map[string]any{
+			"name_path": "title",
+			"attribute_paths": map[string]any{
+				"Color": "details.color1",
+				"color": "details.color2",
+			},
+		},
+	}
+	_, err = source.NewSource("src-03", "Supplier 3", source.TypeAPI, duplicateAttrCfg, 100)
+	if err == nil {
+		t.Fatal("expected error for field_mapping with colliding attribute keys")
+	}
+	if !errors.Is(err, source.ErrInvalidSourceConfig) {
+		t.Fatalf("expected ErrInvalidSourceConfig, got: %v", err)
+	}
+
+	invalidPathCfg := map[string]any{
+		"base_url": "https://api.example.com",
+		"field_mapping": map[string]any{
+			"name_path": "title[0",
+		},
+	}
+	_, err = source.NewSource("src-04", "Supplier 4", source.TypeAPI, invalidPathCfg, 100)
+	if err == nil {
+		t.Fatal("expected error for field_mapping with invalid path syntax")
+	}
+	if !errors.Is(err, source.ErrInvalidSourceConfig) {
+		t.Fatalf("expected ErrInvalidSourceConfig, got: %v", err)
+	}
+
+	nonStringAttrCfg := map[string]any{
+		"base_url": "https://api.example.com",
+		"field_mapping": map[string]any{
+			"name_path": "title",
+			"attribute_paths": map[string]any{
+				"color": 123,
+			},
+		},
+	}
+	_, err = source.NewSource("src-05", "Supplier 5", source.TypeAPI, nonStringAttrCfg, 100)
+	if err == nil {
+		t.Fatal("expected error for non-string entry in attribute_paths")
+	}
+	if !errors.Is(err, source.ErrInvalidSourceConfig) {
+		t.Fatalf("expected ErrInvalidSourceConfig, got: %v", err)
+	}
+
+	nonObjectAttrCfg := map[string]any{
+		"base_url": "https://api.example.com",
+		"field_mapping": map[string]any{
+			"name_path":       "title",
+			"attribute_paths": "not-an-object",
+		},
+	}
+	_, err = source.NewSource("src-06", "Supplier 6", source.TypeAPI, nonObjectAttrCfg, 100)
+	if err == nil {
+		t.Fatal("expected error for non-object attribute_paths")
+	}
+	if !errors.Is(err, source.ErrInvalidSourceConfig) {
+		t.Fatalf("expected ErrInvalidSourceConfig, got: %v", err)
 	}
 }
