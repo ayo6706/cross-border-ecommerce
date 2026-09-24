@@ -141,7 +141,48 @@ SELECT
     brand,
     origin_country,
     attributes,
+    ingestion_run_id,
     created_at
 FROM product_versions
 WHERE product_id = $1
 ORDER BY version_number DESC;
+
+-- name: CreateProductVersionWithRun :one
+INSERT INTO product_versions (
+    id,
+    product_id,
+    version_number,
+    fingerprint,
+    canonical_name,
+    description,
+    brand,
+    origin_country,
+    attributes,
+    ingestion_run_id,
+    created_at
+) VALUES (
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11
+)
+RETURNING *;
+
+-- name: GuardedUpdateProductVersion :one
+UPDATE products
+SET current_version_id = @to_version_id::uuid,
+    current_fingerprint = @current_fingerprint::varchar,
+    canonical_name = @canonical_name::varchar,
+    description = @description::text,
+    brand = @brand::varchar,
+    origin_country = @origin_country::varchar,
+    updated_at = @updated_at::timestamptz
+WHERE id = @id::uuid
+  AND current_version_id IS NOT DISTINCT FROM @expected_version_id::uuid
+RETURNING *;
+
+-- name: GuardedUpdateProductFingerprintOnly :one
+UPDATE products
+SET current_fingerprint = @current_fingerprint::varchar,
+    updated_at = @updated_at::timestamptz
+WHERE id = @id::uuid
+  AND current_version_id IS NOT DISTINCT FROM @expected_version_id::uuid
+RETURNING *;
+

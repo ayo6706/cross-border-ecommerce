@@ -220,6 +220,120 @@ func (q *Queries) ListRawRecordsByRunID(ctx context.Context, arg ListRawRecordsB
 	return items, nil
 }
 
+const listRawRecordsByRunIDKeysetAfterCursor = `-- name: ListRawRecordsByRunIDKeysetAfterCursor :many
+SELECT
+    id,
+    source_id,
+    external_product_id,
+    payload,
+    source_version,
+    etag,
+    source_updated_at,
+    ingestion_run_id,
+    received_at,
+    payload_raw,
+    payload_sha256
+FROM raw_records
+WHERE ingestion_run_id = $1
+  AND id > $3::uuid
+ORDER BY id ASC
+LIMIT $2
+`
+
+type ListRawRecordsByRunIDKeysetAfterCursorParams struct {
+	IngestionRunID pgtype.UUID `json:"ingestion_run_id"`
+	Limit          int32       `json:"limit"`
+	CursorID       pgtype.UUID `json:"cursor_id"`
+}
+
+func (q *Queries) ListRawRecordsByRunIDKeysetAfterCursor(ctx context.Context, arg ListRawRecordsByRunIDKeysetAfterCursorParams) ([]RawRecord, error) {
+	rows, err := q.db.Query(ctx, listRawRecordsByRunIDKeysetAfterCursor, arg.IngestionRunID, arg.Limit, arg.CursorID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []RawRecord{}
+	for rows.Next() {
+		var i RawRecord
+		if err := rows.Scan(
+			&i.ID,
+			&i.SourceID,
+			&i.ExternalProductID,
+			&i.Payload,
+			&i.SourceVersion,
+			&i.Etag,
+			&i.SourceUpdatedAt,
+			&i.IngestionRunID,
+			&i.ReceivedAt,
+			&i.PayloadRaw,
+			&i.PayloadSha256,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listRawRecordsByRunIDKeysetFirstPage = `-- name: ListRawRecordsByRunIDKeysetFirstPage :many
+SELECT
+    id,
+    source_id,
+    external_product_id,
+    payload,
+    source_version,
+    etag,
+    source_updated_at,
+    ingestion_run_id,
+    received_at,
+    payload_raw,
+    payload_sha256
+FROM raw_records
+WHERE ingestion_run_id = $1
+ORDER BY id ASC
+LIMIT $2
+`
+
+type ListRawRecordsByRunIDKeysetFirstPageParams struct {
+	IngestionRunID pgtype.UUID `json:"ingestion_run_id"`
+	Limit          int32       `json:"limit"`
+}
+
+func (q *Queries) ListRawRecordsByRunIDKeysetFirstPage(ctx context.Context, arg ListRawRecordsByRunIDKeysetFirstPageParams) ([]RawRecord, error) {
+	rows, err := q.db.Query(ctx, listRawRecordsByRunIDKeysetFirstPage, arg.IngestionRunID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []RawRecord{}
+	for rows.Next() {
+		var i RawRecord
+		if err := rows.Scan(
+			&i.ID,
+			&i.SourceID,
+			&i.ExternalProductID,
+			&i.Payload,
+			&i.SourceVersion,
+			&i.Etag,
+			&i.SourceUpdatedAt,
+			&i.IngestionRunID,
+			&i.ReceivedAt,
+			&i.PayloadRaw,
+			&i.PayloadSha256,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listRawRecordsBySourceAndExternalID = `-- name: ListRawRecordsBySourceAndExternalID :many
 SELECT
     id,

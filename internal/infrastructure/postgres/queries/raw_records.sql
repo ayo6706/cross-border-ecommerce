@@ -96,3 +96,41 @@ WHERE ingestion_run_id = $1
 ORDER BY received_at DESC, id DESC
 LIMIT $2;
 
+-- name: ListRawRecordsByRunIDKeysetFirstPage :many
+SELECT
+    id,
+    source_id,
+    external_product_id,
+    payload,
+    source_version,
+    etag,
+    source_updated_at,
+    ingestion_run_id,
+    received_at,
+    payload_raw,
+    payload_sha256
+FROM raw_records
+WHERE ingestion_run_id = $1
+ORDER BY id ASC
+LIMIT $2;
+
+-- name: ListRawRecordsByRunIDKeysetAfterCursor :many
+SELECT
+    id,
+    source_id,
+    external_product_id,
+    payload,
+    source_version,
+    etag,
+    source_updated_at,
+    ingestion_run_id,
+    received_at,
+    payload_raw,
+    payload_sha256
+FROM raw_records
+WHERE ingestion_run_id = $1
+  AND id > @cursor_id::uuid
+ORDER BY id ASC
+LIMIT $2;
+
+

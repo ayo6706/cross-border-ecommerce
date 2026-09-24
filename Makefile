@@ -30,7 +30,7 @@ test-race:
 	$(GOTEST) -v -race ./...
 
 test-integration:
-	TEST_DATABASE_URL="$(TEST_DATABASE_URL)" $(GOTEST) -v -race -count=1 ./...
+	TEST_DATABASE_URL="$(TEST_DATABASE_URL)" $(GOTEST) -v -race -count=1 -p 1 ./... # -p 1: packages share one test DB
 
 # Every mandatory gate; starts a throwaway PostgreSQL when TEST_DATABASE_URL is unset.
 verify:

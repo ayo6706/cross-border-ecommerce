@@ -25,6 +25,24 @@ type IngestionRun struct {
 	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
 }
 
+type IngestionRunProcessing struct {
+	RunID             pgtype.UUID        `json:"run_id"`
+	Status            string             `json:"status"`
+	ClaimToken        pgtype.UUID        `json:"claim_token"`
+	LeaseExpiresAt    pgtype.Timestamptz `json:"lease_expires_at"`
+	CursorRawRecordID pgtype.UUID        `json:"cursor_raw_record_id"`
+	RecordsSeen       int32              `json:"records_seen"`
+	RecordsNew        int32              `json:"records_new"`
+	RecordsChanged    int32              `json:"records_changed"`
+	RecordsUnchanged  int32              `json:"records_unchanged"`
+	RecordsFailed     int32              `json:"records_failed"`
+	ErrorSummary      string             `json:"error_summary"`
+	StartedAt         pgtype.Timestamptz `json:"started_at"`
+	CompletedAt       pgtype.Timestamptz `json:"completed_at"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
+}
+
 type OutboxEvent struct {
 	ID            pgtype.UUID        `json:"id"`
 	AggregateType string             `json:"aggregate_type"`
@@ -50,17 +68,41 @@ type Product struct {
 	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
 }
 
+type ProductChange struct {
+	ID             pgtype.UUID        `json:"id"`
+	ProductID      pgtype.UUID        `json:"product_id"`
+	FromVersionID  pgtype.UUID        `json:"from_version_id"`
+	ToVersionID    pgtype.UUID        `json:"to_version_id"`
+	ChangeType     string             `json:"change_type"`
+	ChangedFields  []byte             `json:"changed_fields"`
+	IngestionRunID pgtype.UUID        `json:"ingestion_run_id"`
+	RawRecordID    pgtype.UUID        `json:"raw_record_id"`
+	DetectedAt     pgtype.Timestamptz `json:"detected_at"`
+}
+
+type ProductSource struct {
+	ID                  pgtype.UUID        `json:"id"`
+	ProductID           pgtype.UUID        `json:"product_id"`
+	SourceID            string             `json:"source_id"`
+	ExternalProductID   string             `json:"external_product_id"`
+	FirstSeenAt         pgtype.Timestamptz `json:"first_seen_at"`
+	LastChangedAt       pgtype.Timestamptz `json:"last_changed_at"`
+	LastSourceUpdatedAt pgtype.Timestamptz `json:"last_source_updated_at"`
+	LastReceivedAt      pgtype.Timestamptz `json:"last_received_at"`
+}
+
 type ProductVersion struct {
-	ID            pgtype.UUID        `json:"id"`
-	ProductID     pgtype.UUID        `json:"product_id"`
-	VersionNumber int32              `json:"version_number"`
-	Fingerprint   string             `json:"fingerprint"`
-	CanonicalName string             `json:"canonical_name"`
-	Description   string             `json:"description"`
-	Brand         string             `json:"brand"`
-	OriginCountry string             `json:"origin_country"`
-	Attributes    []byte             `json:"attributes"`
-	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	ID             pgtype.UUID        `json:"id"`
+	ProductID      pgtype.UUID        `json:"product_id"`
+	VersionNumber  int32              `json:"version_number"`
+	Fingerprint    string             `json:"fingerprint"`
+	CanonicalName  string             `json:"canonical_name"`
+	Description    string             `json:"description"`
+	Brand          string             `json:"brand"`
+	OriginCountry  string             `json:"origin_country"`
+	Attributes     []byte             `json:"attributes"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	IngestionRunID pgtype.UUID        `json:"ingestion_run_id"`
 }
 
 type RawRecord struct {
