@@ -73,6 +73,8 @@ type RawRecord struct {
 	SourceUpdatedAt   pgtype.Timestamptz `json:"source_updated_at"`
 	IngestionRunID    pgtype.UUID        `json:"ingestion_run_id"`
 	ReceivedAt        pgtype.Timestamptz `json:"received_at"`
+	PayloadRaw        []byte             `json:"payload_raw"`
+	PayloadSha256     string             `json:"payload_sha256"`
 }
 
 type Source struct {

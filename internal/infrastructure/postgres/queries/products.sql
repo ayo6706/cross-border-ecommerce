@@ -13,21 +13,6 @@ SELECT
 FROM products
 WHERE id = $1;
 
--- name: GetProductByFingerprint :one
-SELECT 
-    id,
-    canonical_name,
-    description,
-    brand,
-    origin_country,
-    status,
-    current_version_id,
-    current_fingerprint,
-    created_at,
-    updated_at
-FROM products
-WHERE current_fingerprint = $1;
-
 -- name: UpsertProduct :one
 INSERT INTO products (
     id,

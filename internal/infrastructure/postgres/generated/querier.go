@@ -16,17 +16,13 @@ type Querier interface {
 	CreateRawRecord(ctx context.Context, arg CreateRawRecordParams) (RawRecord, error)
 	DeleteProduct(ctx context.Context, id pgtype.UUID) error
 	DeleteSource(ctx context.Context, id string) error
-	FetchPendingOutboxEvents(ctx context.Context, limit int32) ([]OutboxEvent, error)
 	GetIngestionRunByID(ctx context.Context, id pgtype.UUID) (IngestionRun, error)
 	GetLatestIngestionRunBySource(ctx context.Context, sourceID string) (IngestionRun, error)
 	GetLatestProductVersion(ctx context.Context, productID pgtype.UUID) (ProductVersion, error)
 	GetLatestRawRecordBySourceAndExternalID(ctx context.Context, arg GetLatestRawRecordBySourceAndExternalIDParams) (RawRecord, error)
-	GetProductByFingerprint(ctx context.Context, currentFingerprint string) (Product, error)
 	GetProductByID(ctx context.Context, id pgtype.UUID) (Product, error)
 	GetRawRecordByID(ctx context.Context, id pgtype.UUID) (RawRecord, error)
 	GetSourceByID(ctx context.Context, id string) (Source, error)
-	IncrementOutboxEventRetry(ctx context.Context, arg IncrementOutboxEventRetryParams) error
-	InsertOutboxEvent(ctx context.Context, arg InsertOutboxEventParams) (OutboxEvent, error)
 	ListActiveSources(ctx context.Context) ([]Source, error)
 	ListIngestionRunsBySource(ctx context.Context, arg ListIngestionRunsBySourceParams) ([]IngestionRun, error)
 	ListProductVersions(ctx context.Context, productID pgtype.UUID) ([]ProductVersion, error)
@@ -35,7 +31,6 @@ type Querier interface {
 	ListRawRecordsByRunID(ctx context.Context, arg ListRawRecordsByRunIDParams) ([]RawRecord, error)
 	ListRawRecordsBySourceAndExternalID(ctx context.Context, arg ListRawRecordsBySourceAndExternalIDParams) ([]RawRecord, error)
 	ListSources(ctx context.Context) ([]Source, error)
-	MarkOutboxEventProcessed(ctx context.Context, arg MarkOutboxEventProcessedParams) error
 	UpdateIngestionRunProgress(ctx context.Context, arg UpdateIngestionRunProgressParams) (IngestionRun, error)
 	UpdateIngestionRunStatus(ctx context.Context, arg UpdateIngestionRunStatusParams) (IngestionRun, error)
 	UpsertProduct(ctx context.Context, arg UpsertProductParams) (Product, error)

@@ -261,7 +261,7 @@ SET
         ELSE checkpoint 
     END,
     updated_at = $7::timestamptz
-WHERE id = $8::uuid
+WHERE id = $8::uuid AND status = 'RUNNING'
 RETURNING 
     id,
     source_id,
@@ -332,7 +332,7 @@ SET
     END,
     completed_at = $4::timestamptz,
     updated_at = $5::timestamptz
-WHERE id = $6::uuid
+WHERE id = $6::uuid AND status = $7::varchar
 RETURNING 
     id,
     source_id,
@@ -351,12 +351,13 @@ RETURNING
 `
 
 type UpdateIngestionRunStatusParams struct {
-	Status       string             `json:"status"`
-	ErrorSummary string             `json:"error_summary"`
-	Checkpoint   string             `json:"checkpoint"`
-	CompletedAt  pgtype.Timestamptz `json:"completed_at"`
-	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
-	ID           pgtype.UUID        `json:"id"`
+	Status         string             `json:"status"`
+	ErrorSummary   string             `json:"error_summary"`
+	Checkpoint     string             `json:"checkpoint"`
+	CompletedAt    pgtype.Timestamptz `json:"completed_at"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+	ID             pgtype.UUID        `json:"id"`
+	ExpectedStatus string             `json:"expected_status"`
 }
 
 func (q *Queries) UpdateIngestionRunStatus(ctx context.Context, arg UpdateIngestionRunStatusParams) (IngestionRun, error) {
@@ -367,6 +368,7 @@ func (q *Queries) UpdateIngestionRunStatus(ctx context.Context, arg UpdateIngest
 		arg.CompletedAt,
 		arg.UpdatedAt,
 		arg.ID,
+		arg.ExpectedStatus,
 	)
 	var i IngestionRun
 	err := row.Scan(

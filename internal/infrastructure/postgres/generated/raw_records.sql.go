@@ -17,14 +17,16 @@ INSERT INTO raw_records (
     source_id,
     external_product_id,
     payload,
+    payload_raw,
+    payload_sha256,
     source_version,
     etag,
     source_updated_at,
     ingestion_run_id,
     received_at
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9
-) RETURNING 
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11
+) RETURNING
     id,
     source_id,
     external_product_id,
@@ -33,7 +35,9 @@ INSERT INTO raw_records (
     etag,
     source_updated_at,
     ingestion_run_id,
-    received_at
+    received_at,
+    payload_raw,
+    payload_sha256
 `
 
 type CreateRawRecordParams struct {
@@ -41,6 +45,8 @@ type CreateRawRecordParams struct {
 	SourceID          string             `json:"source_id"`
 	ExternalProductID string             `json:"external_product_id"`
 	Payload           []byte             `json:"payload"`
+	PayloadRaw        []byte             `json:"payload_raw"`
+	PayloadSha256     string             `json:"payload_sha256"`
 	SourceVersion     string             `json:"source_version"`
 	Etag              string             `json:"etag"`
 	SourceUpdatedAt   pgtype.Timestamptz `json:"source_updated_at"`
@@ -54,6 +60,8 @@ func (q *Queries) CreateRawRecord(ctx context.Context, arg CreateRawRecordParams
 		arg.SourceID,
 		arg.ExternalProductID,
 		arg.Payload,
+		arg.PayloadRaw,
+		arg.PayloadSha256,
 		arg.SourceVersion,
 		arg.Etag,
 		arg.SourceUpdatedAt,
@@ -71,12 +79,14 @@ func (q *Queries) CreateRawRecord(ctx context.Context, arg CreateRawRecordParams
 		&i.SourceUpdatedAt,
 		&i.IngestionRunID,
 		&i.ReceivedAt,
+		&i.PayloadRaw,
+		&i.PayloadSha256,
 	)
 	return i, err
 }
 
 const getLatestRawRecordBySourceAndExternalID = `-- name: GetLatestRawRecordBySourceAndExternalID :one
-SELECT 
+SELECT
     id,
     source_id,
     external_product_id,
@@ -85,7 +95,9 @@ SELECT
     etag,
     source_updated_at,
     ingestion_run_id,
-    received_at
+    received_at,
+    payload_raw,
+    payload_sha256
 FROM raw_records
 WHERE source_id = $1 AND external_product_id = $2
 ORDER BY received_at DESC, id DESC
@@ -110,12 +122,14 @@ func (q *Queries) GetLatestRawRecordBySourceAndExternalID(ctx context.Context, a
 		&i.SourceUpdatedAt,
 		&i.IngestionRunID,
 		&i.ReceivedAt,
+		&i.PayloadRaw,
+		&i.PayloadSha256,
 	)
 	return i, err
 }
 
 const getRawRecordByID = `-- name: GetRawRecordByID :one
-SELECT 
+SELECT
     id,
     source_id,
     external_product_id,
@@ -124,7 +138,9 @@ SELECT
     etag,
     source_updated_at,
     ingestion_run_id,
-    received_at
+    received_at,
+    payload_raw,
+    payload_sha256
 FROM raw_records
 WHERE id = $1
 `
@@ -142,12 +158,14 @@ func (q *Queries) GetRawRecordByID(ctx context.Context, id pgtype.UUID) (RawReco
 		&i.SourceUpdatedAt,
 		&i.IngestionRunID,
 		&i.ReceivedAt,
+		&i.PayloadRaw,
+		&i.PayloadSha256,
 	)
 	return i, err
 }
 
 const listRawRecordsByRunID = `-- name: ListRawRecordsByRunID :many
-SELECT 
+SELECT
     id,
     source_id,
     external_product_id,
@@ -156,7 +174,9 @@ SELECT
     etag,
     source_updated_at,
     ingestion_run_id,
-    received_at
+    received_at,
+    payload_raw,
+    payload_sha256
 FROM raw_records
 WHERE ingestion_run_id = $1
 ORDER BY received_at DESC, id DESC
@@ -187,6 +207,8 @@ func (q *Queries) ListRawRecordsByRunID(ctx context.Context, arg ListRawRecordsB
 			&i.SourceUpdatedAt,
 			&i.IngestionRunID,
 			&i.ReceivedAt,
+			&i.PayloadRaw,
+			&i.PayloadSha256,
 		); err != nil {
 			return nil, err
 		}
@@ -199,7 +221,7 @@ func (q *Queries) ListRawRecordsByRunID(ctx context.Context, arg ListRawRecordsB
 }
 
 const listRawRecordsBySourceAndExternalID = `-- name: ListRawRecordsBySourceAndExternalID :many
-SELECT 
+SELECT
     id,
     source_id,
     external_product_id,
@@ -208,7 +230,9 @@ SELECT
     etag,
     source_updated_at,
     ingestion_run_id,
-    received_at
+    received_at,
+    payload_raw,
+    payload_sha256
 FROM raw_records
 WHERE source_id = $1 AND external_product_id = $2
 ORDER BY received_at DESC, id DESC
@@ -240,6 +264,8 @@ func (q *Queries) ListRawRecordsBySourceAndExternalID(ctx context.Context, arg L
 			&i.SourceUpdatedAt,
 			&i.IngestionRunID,
 			&i.ReceivedAt,
+			&i.PayloadRaw,
+			&i.PayloadSha256,
 		); err != nil {
 			return nil, err
 		}

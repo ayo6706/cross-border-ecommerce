@@ -6,6 +6,8 @@ sql:
       - "migrations/000002_create_outbox_events.up.sql"
       - "migrations/000003_create_ingestion_runs.up.sql"
       - "migrations/000004_create_raw_records.up.sql"
+      - "migrations/000005_uq_ingestion_runs_active_source.up.sql"
+      - "migrations/000006_schema_integrity_hardening.up.sql"
     queries: "internal/infrastructure/postgres/queries"
     gen:
       go:

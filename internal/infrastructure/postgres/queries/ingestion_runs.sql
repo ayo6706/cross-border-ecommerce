@@ -64,7 +64,7 @@ SET
         ELSE checkpoint 
     END,
     updated_at = @updated_at::timestamptz
-WHERE id = @id::uuid
+WHERE id = @id::uuid AND status = 'RUNNING'
 RETURNING 
     id,
     source_id,
@@ -92,7 +92,7 @@ SET
     END,
     completed_at = @completed_at::timestamptz,
     updated_at = @updated_at::timestamptz
-WHERE id = @id::uuid
+WHERE id = @id::uuid AND status = @expected_status::varchar
 RETURNING 
     id,
     source_id,

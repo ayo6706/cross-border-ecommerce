@@ -127,40 +127,6 @@ func (q *Queries) GetLatestProductVersion(ctx context.Context, productID pgtype.
 	return i, err
 }
 
-const getProductByFingerprint = `-- name: GetProductByFingerprint :one
-SELECT 
-    id,
-    canonical_name,
-    description,
-    brand,
-    origin_country,
-    status,
-    current_version_id,
-    current_fingerprint,
-    created_at,
-    updated_at
-FROM products
-WHERE current_fingerprint = $1
-`
-
-func (q *Queries) GetProductByFingerprint(ctx context.Context, currentFingerprint string) (Product, error) {
-	row := q.db.QueryRow(ctx, getProductByFingerprint, currentFingerprint)
-	var i Product
-	err := row.Scan(
-		&i.ID,
-		&i.CanonicalName,
-		&i.Description,
-		&i.Brand,
-		&i.OriginCountry,
-		&i.Status,
-		&i.CurrentVersionID,
-		&i.CurrentFingerprint,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-	)
-	return i, err
-}
-
 const getProductByID = `-- name: GetProductByID :one
 SELECT 
     id,

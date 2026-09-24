@@ -4,14 +4,16 @@ INSERT INTO raw_records (
     source_id,
     external_product_id,
     payload,
+    payload_raw,
+    payload_sha256,
     source_version,
     etag,
     source_updated_at,
     ingestion_run_id,
     received_at
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9
-) RETURNING 
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11
+) RETURNING
     id,
     source_id,
     external_product_id,
@@ -20,10 +22,12 @@ INSERT INTO raw_records (
     etag,
     source_updated_at,
     ingestion_run_id,
-    received_at;
+    received_at,
+    payload_raw,
+    payload_sha256;
 
 -- name: GetRawRecordByID :one
-SELECT 
+SELECT
     id,
     source_id,
     external_product_id,
@@ -32,12 +36,14 @@ SELECT
     etag,
     source_updated_at,
     ingestion_run_id,
-    received_at
+    received_at,
+    payload_raw,
+    payload_sha256
 FROM raw_records
 WHERE id = $1;
 
 -- name: GetLatestRawRecordBySourceAndExternalID :one
-SELECT 
+SELECT
     id,
     source_id,
     external_product_id,
@@ -46,14 +52,16 @@ SELECT
     etag,
     source_updated_at,
     ingestion_run_id,
-    received_at
+    received_at,
+    payload_raw,
+    payload_sha256
 FROM raw_records
 WHERE source_id = $1 AND external_product_id = $2
 ORDER BY received_at DESC, id DESC
 LIMIT 1;
 
 -- name: ListRawRecordsBySourceAndExternalID :many
-SELECT 
+SELECT
     id,
     source_id,
     external_product_id,
@@ -62,14 +70,16 @@ SELECT
     etag,
     source_updated_at,
     ingestion_run_id,
-    received_at
+    received_at,
+    payload_raw,
+    payload_sha256
 FROM raw_records
 WHERE source_id = $1 AND external_product_id = $2
 ORDER BY received_at DESC, id DESC
 LIMIT $3;
 
 -- name: ListRawRecordsByRunID :many
-SELECT 
+SELECT
     id,
     source_id,
     external_product_id,
@@ -78,8 +88,11 @@ SELECT
     etag,
     source_updated_at,
     ingestion_run_id,
-    received_at
+    received_at,
+    payload_raw,
+    payload_sha256
 FROM raw_records
 WHERE ingestion_run_id = $1
 ORDER BY received_at DESC, id DESC
 LIMIT $2;
+

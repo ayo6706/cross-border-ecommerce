@@ -97,15 +97,16 @@ func TestMigrator_DownStepValidation(t *testing.T) {
 	}
 }
 
-func getTestDatabaseURL() string {
-	if url := os.Getenv("TEST_DATABASE_URL"); url != "" {
-		return url
+func getTestDatabaseURL(t *testing.T) string {
+	url := os.Getenv("TEST_DATABASE_URL")
+	if url == "" {
+		t.Skip("TEST_DATABASE_URL not set; skipping live postgres migration test")
 	}
-	return "postgres://postgres:postgres@127.0.0.1:5433/crossborder_test?sslmode=disable"
+	return url
 }
 
 func TestMigrator_LiveLifecycle(t *testing.T) {
-	connStr := getTestDatabaseURL()
+	connStr := getTestDatabaseURL(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -134,9 +135,10 @@ func TestMigrator_LiveLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to discover migrations: %v", err)
 	}
-	if len(discovered) < 6 {
-		t.Fatalf("expected at least 6 migration files (3 up, 3 down), got %d", len(discovered))
+	if len(discovered) < 12 {
+		t.Fatalf("expected at least 12 migration files (6 up, 6 down), got %d", len(discovered))
 	}
+	latestVersion := discovered[len(discovered)-1].Version
 
 	// Clean slate: rollback any existing migrations
 	_ = migrator.Down(ctx, 100)
@@ -145,30 +147,12 @@ func TestMigrator_LiveLifecycle(t *testing.T) {
 	if err := migrator.Up(ctx); err != nil {
 		t.Fatalf("migrator.Up failed: %v", err)
 	}
-
-	version, dirty, err := migrator.Version(ctx)
-	if err != nil {
-		t.Fatalf("migrator.Version failed: %v", err)
-	}
-	if dirty {
-		t.Fatalf("expected clean state, got dirty=true")
-	}
-	if version != 4 {
-		t.Fatalf("expected version 4, got %d", version)
-	}
+	assertMigrationVersion(ctx, t, migrator, latestVersion)
 
 	// Step 2: Verify required tables exist
 	requiredTables := []string{"sources", "products", "product_versions", "outbox_events", "ingestion_runs", "raw_records", "schema_migrations"}
 	for _, table := range requiredTables {
-		var exists bool
-		query := `SELECT EXISTS (
-			SELECT FROM information_schema.tables 
-			WHERE table_schema = 'public' AND table_name = $1
-		);`
-		if err := pool.QueryRow(ctx, query, table).Scan(&exists); err != nil {
-			t.Fatalf("query table %s existence failed: %v", table, err)
-		}
-		if !exists {
+		if !tableExists(ctx, t, pool, table) {
 			t.Fatalf("expected table %s to exist after migration", table)
 		}
 	}
@@ -177,30 +161,18 @@ func TestMigrator_LiveLifecycle(t *testing.T) {
 	if err := migrator.Up(ctx); err != nil {
 		t.Fatalf("re-running migrator.Up should succeed idempotently, got: %v", err)
 	}
+	assertMigrationVersion(ctx, t, migrator, latestVersion)
 
-	// Step 4: Rollback 1 step (raw_records)
-	if err := migrator.Down(ctx, 1); err != nil {
-		t.Fatalf("migrator.Down(1) failed: %v", err)
+	// Step 4: Roll back to version 3 (drops raw_records and everything after it)
+	if err := migrator.Down(ctx, int(latestVersion-3)); err != nil {
+		t.Fatalf("migrator.Down to version 3 failed: %v", err)
 	}
+	assertMigrationVersion(ctx, t, migrator, 3)
 
-	version, dirty, err = migrator.Version(ctx)
-	if err != nil {
-		t.Fatalf("migrator.Version after rollback failed: %v", err)
-	}
-	if dirty || version != 3 {
-		t.Fatalf("expected clean version 3 after 1 rollback step, got version=%d dirty=%v", version, dirty)
-	}
-
-	// Verify raw_records was dropped, but ingestion_runs, outbox_events, products and sources remain
-	var rawRecordsExists bool
-	_ = pool.QueryRow(ctx, `SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = 'raw_records');`).Scan(&rawRecordsExists)
-	if rawRecordsExists {
+	if tableExists(ctx, t, pool, "raw_records") {
 		t.Fatalf("expected raw_records to be dropped after rollback")
 	}
-
-	var ingestionRunsExists bool
-	_ = pool.QueryRow(ctx, `SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = 'ingestion_runs');`).Scan(&ingestionRunsExists)
-	if !ingestionRunsExists {
+	if !tableExists(ctx, t, pool, "ingestion_runs") {
 		t.Fatalf("expected ingestion_runs table to still exist after rolling back raw_records")
 	}
 
@@ -208,18 +180,9 @@ func TestMigrator_LiveLifecycle(t *testing.T) {
 	if err := migrator.Down(ctx, 3); err != nil {
 		t.Fatalf("migrator.Down(3) remaining failed: %v", err)
 	}
+	assertMigrationVersion(ctx, t, migrator, 0)
 
-	version, dirty, err = migrator.Version(ctx)
-	if err != nil {
-		t.Fatalf("migrator.Version after full rollback failed: %v", err)
-	}
-	if version != 0 {
-		t.Fatalf("expected version 0 after full rollback, got %d", version)
-	}
-
-	var productsExists bool
-	_ = pool.QueryRow(ctx, `SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = 'products');`).Scan(&productsExists)
-	if productsExists {
+	if tableExists(ctx, t, pool, "products") {
 		t.Fatalf("expected products table to be dropped after full rollback")
 	}
 
@@ -227,9 +190,31 @@ func TestMigrator_LiveLifecycle(t *testing.T) {
 	if err := migrator.Up(ctx); err != nil {
 		t.Fatalf("re-applying all migrations failed: %v", err)
 	}
+	assertMigrationVersion(ctx, t, migrator, latestVersion)
+}
 
-	version, _, err = migrator.Version(ctx)
-	if err != nil || version != 4 {
-		t.Fatalf("expected final version 4, got %d (err: %v)", version, err)
+func assertMigrationVersion(ctx context.Context, t *testing.T, migrator *postgres.Migrator, want int64) {
+	t.Helper()
+
+	got, err := migrator.Version(ctx)
+	if err != nil {
+		t.Fatalf("migrator.Version failed: %v", err)
 	}
+	if got != want {
+		t.Fatalf("expected migration version %d, got %d", want, got)
+	}
+}
+
+func tableExists(ctx context.Context, t *testing.T, pool *pgxpool.Pool, table string) bool {
+	t.Helper()
+
+	const query = `SELECT EXISTS (
+		SELECT FROM information_schema.tables
+		WHERE table_schema = 'public' AND table_name = $1
+	)`
+	var exists bool
+	if err := pool.QueryRow(ctx, query, table).Scan(&exists); err != nil {
+		t.Fatalf("query table %s existence failed: %v", table, err)
+	}
+	return exists
 }
