@@ -10,15 +10,17 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/ayo6706/cross-border-ecommerce/internal/adapters/sources/identity"
 	"github.com/ayo6706/cross-border-ecommerce/internal/adapters/sources/policy"
 	"github.com/ayo6706/cross-border-ecommerce/internal/domain/ingestion"
 	"github.com/ayo6706/cross-border-ecommerce/internal/domain/source"
+)
+
+const (
+	maxNDJSONLineBytes = 1024 * 1024 // 1 MiB max line length
 )
 
 type FeedFormat string
@@ -28,41 +30,35 @@ const (
 	FeedFormatNDJSON FeedFormat = "NDJSON"
 )
 
-type RowErrorHandler func(rowNumber int, rawRow []byte, err error)
-
 type FeedFileConfig struct {
-	SourceID        source.ID
-	Format          FeedFormat
-	FilePath        string
-	ReaderProvider  func() (io.ReadCloser, error)
-	BatchSize       int
-	IDField         string
-	CompositeIDs    []string
-	CompositeSep    string
-	Identity        identity.IdentityStrategy
-	ErrorTracker    *policy.ErrorTracker
-	SkipMalformed   bool
-	OnRowError      RowErrorHandler
-	SourceVersion   string
+	SourceID       source.ID
+	Format         FeedFormat
+	FilePath       string
+	ReaderProvider func() (io.ReadCloser, error)
+	BatchSize      int
+	IDField        string
+	CompositeIDs   []string
+	CompositeSep   string
+	Identity       identity.IdentityStrategy
+	ErrorPolicy    policy.ErrorPolicy
+	SourceVersion  string
 }
 
 type FeedFileAdapter struct {
-	sourceID        source.ID
-	format          FeedFormat
-	filePath        string
-	readerProvider  func() (io.ReadCloser, error)
-	batchSize       int
-	idField         string
-	compositeIDs    []string
-	compositeSep    string
-	identity        identity.IdentityStrategy
-	errorTracker    *policy.ErrorTracker
-	skipMalformed   bool
-	onRowError      RowErrorHandler
-	sourceVersion   string
-	headerMu        sync.RWMutex
-	cachedHeader    []string
-	cachedHeaderLen int64
+	sourceID       source.ID
+	format         FeedFormat
+	readerProvider func() (io.ReadCloser, error)
+	batchSize      int
+	identity       identity.IdentityStrategy
+	errorPolicy    policy.ErrorPolicy
+	sourceVersion  string
+}
+
+// feedBatch is the result of streaming one batch from a feed.
+type feedBatch struct {
+	records []*ingestion.RawRecord
+	failed  int
+	next    string
 }
 
 func NewFeedFileAdapter(cfg FeedFileConfig) (*FeedFileAdapter, error) {
@@ -85,7 +81,10 @@ func NewFeedFileAdapter(cfg FeedFileConfig) (*FeedFileAdapter, error) {
 		batchSize = 500
 	}
 
-	idField := strings.ToLower(strings.TrimSpace(cfg.IDField))
+	idField := strings.TrimSpace(cfg.IDField)
+	if cfg.Format == FeedFormatCSV {
+		idField = strings.ToLower(idField)
+	}
 	if idField == "" {
 		idField = "id"
 	}
@@ -117,72 +116,80 @@ func NewFeedFileAdapter(cfg FeedFileConfig) (*FeedFileAdapter, error) {
 		idStrat = identity.NewPathIdentityStrategy(idField)
 	}
 
-	tracker := cfg.ErrorTracker
-	if tracker == nil {
-		polType := policy.PolicyFailFast
-		if cfg.SkipMalformed {
-			polType = policy.PolicySkipMalformed
-		}
-		tracker = policy.NewErrorTracker(polType, 0.05, policy.RowErrorCallback(cfg.OnRowError))
-	}
-
 	return &FeedFileAdapter{
-		sourceID:        cfg.SourceID,
-		format:          cfg.Format,
-		filePath:        strings.TrimSpace(cfg.FilePath),
-		readerProvider:  provider,
-		batchSize:       batchSize,
-		idField:         idField,
-		compositeIDs:    cfg.CompositeIDs,
-		compositeSep:    cfg.CompositeSep,
-		identity:        idStrat,
-		errorTracker:    tracker,
-		skipMalformed:   cfg.SkipMalformed,
-		onRowError:      cfg.OnRowError,
-		sourceVersion:   strings.TrimSpace(cfg.SourceVersion),
+		sourceID:       cfg.SourceID,
+		format:         cfg.Format,
+		readerProvider: provider,
+		batchSize:      batchSize,
+		identity:       idStrat,
+		errorPolicy:    cfg.ErrorPolicy,
+		sourceVersion:  strings.TrimSpace(cfg.SourceVersion),
 	}, nil
 }
 
-func (a *FeedFileAdapter) FetchRecords(ctx context.Context, checkpoint string) ([]*ingestion.RawRecord, string, error) {
-	return a.fetchRecordsBounded(ctx, checkpoint, a.batchSize)
-}
-
-func (a *FeedFileAdapter) fetchRecordsBounded(ctx context.Context, checkpoint string, limit int) ([]*ingestion.RawRecord, string, error) {
+// Fetch executes a single batch read against the feed file from the given checkpoint.
+func (a *FeedFileAdapter) Fetch(ctx context.Context, req ingestion.FetchRequest) (ingestion.FetchResult, error) {
 	if a == nil {
-		return nil, "", ingestion.ErrAdapterUnavailable
+		return ingestion.FetchResult{}, ingestion.ErrAdapterUnavailable
 	}
 
 	select {
 	case <-ctx.Done():
-		return nil, "", ctx.Err()
+		return ingestion.FetchResult{}, ctx.Err()
 	default:
 	}
 
-	startOffset, err := ingestion.ParseByteOffsetCheckpoint(checkpoint)
+	limit := a.batchSize
+	if req.BatchSize > 0 {
+		limit = req.BatchSize
+	}
+
+	startOffset, err := ingestion.ParseByteOffsetCheckpoint(req.Checkpoint)
 	if err != nil {
-		return nil, "", fmt.Errorf("parse checkpoint: %w", err)
+		return ingestion.FetchResult{}, fmt.Errorf("parse checkpoint: %w", err)
 	}
 
 	rc, err := a.readerProvider()
 	if err != nil {
-		return nil, "", fmt.Errorf("%w: %w", ingestion.ErrAdapterUnavailable, err)
+		return ingestion.FetchResult{}, fmt.Errorf("%w: %w", ingestion.ErrAdapterUnavailable, err)
 	}
 	defer rc.Close()
 
+	stream := a.streamNDJSON
 	if a.format == FeedFormatCSV {
-		return a.streamCSV(ctx, rc, startOffset, limit)
+		stream = a.streamCSV
 	}
-	return a.streamNDJSON(ctx, rc, startOffset, limit)
+
+	batch, err := stream(ctx, rc, startOffset, limit)
+	if err != nil {
+		return ingestion.FetchResult{}, err
+	}
+
+	return ingestion.FetchResult{
+		Records:        batch.records,
+		Failed:         batch.failed,
+		NextCheckpoint: batch.next,
+		HasMore:        batch.next != "",
+	}, nil
 }
 
-func (a *FeedFileAdapter) streamNDJSON(ctx context.Context, rc io.ReadCloser, startOffset int64, limit int) ([]*ingestion.RawRecord, string, error) {
+// Probe executes a pre-flight dry-run diagnostic query to verify feed accessibility and sample row schema.
+func (a *FeedFileAdapter) Probe(ctx context.Context) (*ingestion.SourceProbeResult, error) {
+	return probeWithFetch(ctx, a)
+}
+
+var _ ingestion.ProbingAdapter = (*FeedFileAdapter)(nil)
+
+var errLineTooLong = errors.New("line exceeds maximum length")
+
+func (a *FeedFileAdapter) streamNDJSON(ctx context.Context, rc io.ReadCloser, startOffset int64, limit int) (feedBatch, error) {
 	if seeker, ok := rc.(io.Seeker); ok {
 		if _, err := seeker.Seek(startOffset, io.SeekStart); err != nil {
-			return nil, "", fmt.Errorf("seek to offset %d: %w", startOffset, err)
+			return feedBatch{}, fmt.Errorf("seek to offset %d: %w", startOffset, err)
 		}
 	} else if startOffset > 0 {
 		if _, err := io.CopyN(io.Discard, rc, startOffset); err != nil && !errors.Is(err, io.EOF) {
-			return nil, "", fmt.Errorf("skip to offset %d: %w", startOffset, err)
+			return feedBatch{}, fmt.Errorf("skip to offset %d: %w", startOffset, err)
 		}
 	}
 
@@ -191,30 +198,38 @@ func (a *FeedFileAdapter) streamNDJSON(ctx context.Context, rc io.ReadCloser, st
 	records := make([]*ingestion.RawRecord, 0, limit)
 	rowNum := 0
 	now := time.Now().UTC()
+	failed := 0
 
 	for len(records) < limit {
 		select {
 		case <-ctx.Done():
-			return nil, "", ctx.Err()
+			return feedBatch{}, ctx.Err()
 		default:
 		}
 
-		lineBytes, err := reader.ReadBytes('\n')
-		lineLen := int64(len(lineBytes))
-		if lineLen == 0 && errors.Is(err, io.EOF) {
-			return records, "", nil
-		}
-		if err != nil && !errors.Is(err, io.EOF) {
-			return nil, "", fmt.Errorf("read ndjson line %d: %w", rowNum+1, err)
+		lineBytes, bytesConsumed, err := readBoundedLine(reader, maxNDJSONLineBytes)
+		if bytesConsumed == 0 && errors.Is(err, io.EOF) {
+			return feedBatch{records: records, failed: failed}, nil
 		}
 
 		rowNum++
-		currentOffset += lineLen
+		currentOffset += int64(bytesConsumed)
+
+		if errors.Is(err, errLineTooLong) {
+			if policyErr := a.errorPolicy.HandleRowError(rowNum, nil, fmt.Errorf("%w: line %d exceeds maximum length of %d bytes", ingestion.ErrMalformedRecord, rowNum, maxNDJSONLineBytes)); policyErr != nil {
+				return feedBatch{}, policyErr
+			}
+			failed++
+			continue
+		}
+		if err != nil && !errors.Is(err, io.EOF) {
+			return feedBatch{}, fmt.Errorf("read ndjson line %d: %w", rowNum, err)
+		}
 
 		trimmed := bytes.TrimSpace(lineBytes)
 		if len(trimmed) == 0 {
 			if errors.Is(err, io.EOF) {
-				return records, "", nil
+				return feedBatch{records: records, failed: failed}, nil
 			}
 			continue
 		}
@@ -223,129 +238,197 @@ func (a *FeedFileAdapter) streamNDJSON(ctx context.Context, rc io.ReadCloser, st
 		dec := json.NewDecoder(bytes.NewReader(trimmed))
 		dec.UseNumber()
 		if jsonErr := dec.Decode(&rowMap); jsonErr != nil {
-			if a.skipMalformed {
-				if a.onRowError != nil {
-					a.onRowError(rowNum, trimmed, jsonErr)
-				}
-				if errors.Is(err, io.EOF) {
-					return records, "", nil
-				}
-				continue
+			if policyErr := a.errorPolicy.HandleRowError(rowNum, trimmed, fmt.Errorf("%w: line %d: %w", ingestion.ErrMalformedRecord, rowNum, jsonErr)); policyErr != nil {
+				return feedBatch{}, policyErr
 			}
-			return nil, "", fmt.Errorf("%w: line %d: %w", ingestion.ErrMalformedRecord, rowNum, jsonErr)
-		}
-
-		extID, idErr := a.identity.Resolve(trimmed)
-		if idErr != nil {
-			recErr := a.errorTracker.RecordError(rowNum, trimmed, idErr)
-			if recErr != nil {
-				return nil, "", recErr
-			}
+			failed++
 			if errors.Is(err, io.EOF) {
-				return records, "", nil
+				return feedBatch{records: records, failed: failed}, nil
 			}
 			continue
 		}
 
-		_, srcVer, srcUpAt := extractRecordMapMetadata(rowMap, a.idField)
+		extID, idErr := a.identity.Resolve(trimmed)
+		if idErr != nil {
+			if policyErr := a.errorPolicy.HandleRowError(rowNum, trimmed, idErr); policyErr != nil {
+				return feedBatch{}, policyErr
+			}
+			failed++
+			if errors.Is(err, io.EOF) {
+				return feedBatch{records: records, failed: failed}, nil
+			}
+			continue
+		}
 
+		srcVer, srcUpAt := extractRecordMapMetadata(rowMap)
 		if srcVer == "" {
 			srcVer = a.sourceVersion
 		}
 
-		rec, errRec := ingestion.NewRawRecord(
-			"",
-			a.sourceID,
-			extID,
-			trimmed,
-			srcVer,
-			"",
-			srcUpAt,
-			"",
-			now,
-		)
+		rec, errRec := ingestion.NewRawRecord(ingestion.RawRecordParams{
+			SourceID:          a.sourceID,
+			ExternalProductID: extID,
+			Payload:           trimmed,
+			PayloadRaw:        trimmed,
+			SourceVersion:     srcVer,
+			SourceUpdatedAt:   srcUpAt,
+			ReceivedAt:        now,
+		})
 		if errRec != nil {
-			if a.skipMalformed {
-				if a.onRowError != nil {
-					a.onRowError(rowNum, trimmed, errRec)
-				}
-				if errors.Is(err, io.EOF) {
-					return records, "", nil
-				}
-				continue
+			if policyErr := a.errorPolicy.HandleRowError(rowNum, trimmed, errRec); policyErr != nil {
+				return feedBatch{}, policyErr
 			}
-			return nil, "", fmt.Errorf("create raw record line %d: %w", rowNum, errRec)
+			failed++
+			if errors.Is(err, io.EOF) {
+				return feedBatch{records: records, failed: failed}, nil
+			}
+			continue
 		}
 
 		records = append(records, rec)
 
 		if errors.Is(err, io.EOF) {
-			return records, "", nil
+			return feedBatch{records: records, failed: failed}, nil
 		}
 	}
 
 	nextCheckpoint := ingestion.FormatByteOffsetCheckpoint(currentOffset)
-	return records, nextCheckpoint, nil
+	return feedBatch{records: records, failed: failed, next: nextCheckpoint}, nil
 }
 
-func (a *FeedFileAdapter) streamCSV(ctx context.Context, rc io.ReadCloser, startOffset int64, limit int) ([]*ingestion.RawRecord, string, error) {
-	header, headerBytesLen, err := a.readCSVHeader()
-	if err != nil {
-		return nil, "", fmt.Errorf("read csv header: %w", err)
-	}
+func readBoundedLine(r *bufio.Reader, maxBytes int) ([]byte, int, error) {
+	var buf bytes.Buffer
+	totalConsumed := 0
+	oversized := false
 
-	actualStartOffset := startOffset
-	if actualStartOffset == 0 {
-		actualStartOffset = headerBytesLen
+	for {
+		chunk, err := r.ReadSlice('\n')
+		chunkLen := len(chunk)
+		totalConsumed += chunkLen
+
+		if !oversized {
+			if buf.Len()+chunkLen > maxBytes {
+				oversized = true
+			} else {
+				buf.Write(chunk)
+			}
+		}
+
+		if err != nil {
+			if errors.Is(err, bufio.ErrBufferFull) {
+				continue
+			}
+			if oversized {
+				return nil, totalConsumed, errLineTooLong
+			}
+			return buf.Bytes(), totalConsumed, err
+		}
+
+		if oversized {
+			return nil, totalConsumed, errLineTooLong
+		}
+		return buf.Bytes(), totalConsumed, nil
 	}
+}
+
+func (a *FeedFileAdapter) streamCSV(ctx context.Context, rc io.ReadCloser, startOffset int64, limit int) (feedBatch, error) {
+	var header []string
+	var headerBytesLen int64
+	var csvReader *csv.Reader
+	var actualOffset int64
 
 	if seeker, ok := rc.(io.Seeker); ok {
+		if _, err := seeker.Seek(0, io.SeekStart); err != nil {
+			return feedBatch{}, fmt.Errorf("seek to start for csv header: %w", err)
+		}
+		reader := bufio.NewReader(rc)
+		headerBytes, err := reader.ReadBytes('\n')
+		if len(headerBytes) == 0 && err != nil {
+			return feedBatch{}, fmt.Errorf("empty csv feed: %w", err)
+		}
+		csvR := csv.NewReader(bytes.NewReader(bytes.TrimSpace(headerBytes)))
+		fields, err := csvR.Read()
+		if err != nil {
+			return feedBatch{}, fmt.Errorf("parse csv header: %w", err)
+		}
+		header = make([]string, 0, len(fields))
+		for _, f := range fields {
+			header = append(header, strings.ToLower(strings.TrimSpace(f)))
+		}
+		headerBytesLen = int64(len(headerBytes))
+
+		actualStartOffset := startOffset
+		if actualStartOffset == 0 {
+			actualStartOffset = headerBytesLen
+		}
 		if _, err := seeker.Seek(actualStartOffset, io.SeekStart); err != nil {
-			return nil, "", fmt.Errorf("seek csv to offset %d: %w", actualStartOffset, err)
+			return feedBatch{}, fmt.Errorf("seek csv to offset %d: %w", actualStartOffset, err)
 		}
-	} else if actualStartOffset > 0 {
-		if _, err := io.CopyN(io.Discard, rc, actualStartOffset); err != nil && !errors.Is(err, io.EOF) {
-			return nil, "", fmt.Errorf("skip csv to offset %d: %w", actualStartOffset, err)
+		actualOffset = actualStartOffset
+		csvReader = csv.NewReader(rc)
+	} else {
+		br := bufio.NewReader(rc)
+		headerBytes, err := br.ReadBytes('\n')
+		if len(headerBytes) == 0 && err != nil {
+			return feedBatch{}, fmt.Errorf("empty csv feed: %w", err)
 		}
+		csvR := csv.NewReader(bytes.NewReader(bytes.TrimSpace(headerBytes)))
+		fields, err := csvR.Read()
+		if err != nil {
+			return feedBatch{}, fmt.Errorf("parse csv header: %w", err)
+		}
+		header = make([]string, 0, len(fields))
+		for _, f := range fields {
+			header = append(header, strings.ToLower(strings.TrimSpace(f)))
+		}
+		headerBytesLen = int64(len(headerBytes))
+
+		if startOffset > headerBytesLen {
+			skipBytes := startOffset - headerBytesLen
+			if _, err := io.CopyN(io.Discard, br, skipBytes); err != nil && !errors.Is(err, io.EOF) {
+				return feedBatch{}, fmt.Errorf("skip csv to offset %d: %w", startOffset, err)
+			}
+			actualOffset = startOffset
+		} else {
+			actualOffset = headerBytesLen
+		}
+		csvReader = csv.NewReader(br)
 	}
 
-	cr := &countingReader{r: rc}
-	csvReader := csv.NewReader(cr)
 	csvReader.FieldsPerRecord = -1
 	csvReader.ReuseRecord = false
 
 	records := make([]*ingestion.RawRecord, 0, limit)
-	currentOffset := actualStartOffset
+	currentOffset := actualOffset
 	rowNum := 0
 	now := time.Now().UTC()
+	failed := 0
 
 	for len(records) < limit {
 		select {
 		case <-ctx.Done():
-			return nil, "", ctx.Err()
+			return feedBatch{}, ctx.Err()
 		default:
 		}
 
 		rowFields, csvErr := csvReader.Read()
 		if errors.Is(csvErr, io.EOF) {
-			return records, "", nil
+			return feedBatch{records: records, failed: failed}, nil
 		}
 
 		rowNum++
-		currentOffset = actualStartOffset + csvReader.InputOffset()
+		currentOffset = actualOffset + csvReader.InputOffset()
 
 		if csvErr != nil {
 			var parseErr *csv.ParseError
 			if errors.As(csvErr, &parseErr) {
-				if a.skipMalformed {
-					if a.onRowError != nil {
-						a.onRowError(rowNum, nil, csvErr)
-					}
-					continue
+				if policyErr := a.errorPolicy.HandleRowError(rowNum, nil, fmt.Errorf("%w: csv row %d: %w", ingestion.ErrMalformedRecord, rowNum, csvErr)); policyErr != nil {
+					return feedBatch{}, policyErr
 				}
-				return nil, "", fmt.Errorf("%w: csv row %d: %w", ingestion.ErrMalformedRecord, rowNum, csvErr)
+				failed++
+				continue
 			}
-			return nil, "", fmt.Errorf("read csv row %d: %w", rowNum, csvErr)
+			return feedBatch{}, fmt.Errorf("read csv row %d: %w", rowNum, csvErr)
 		}
 		if len(rowFields) == 0 {
 			continue
@@ -362,47 +445,42 @@ func (a *FeedFileAdapter) streamCSV(ctx context.Context, rc io.ReadCloser, start
 
 		payloadJSON, errJSON := json.Marshal(rowMap)
 		if errJSON != nil {
-			recErr := a.errorTracker.RecordError(rowNum, nil, errJSON)
-			if recErr != nil {
-				return nil, "", recErr
+			if policyErr := a.errorPolicy.HandleRowError(rowNum, nil, errJSON); policyErr != nil {
+				return feedBatch{}, policyErr
 			}
+			failed++
 			continue
 		}
 
 		extID, idErr := a.identity.Resolve(payloadJSON)
 		if idErr != nil {
-			recErr := a.errorTracker.RecordError(rowNum, payloadJSON, idErr)
-			if recErr != nil {
-				return nil, "", recErr
+			if policyErr := a.errorPolicy.HandleRowError(rowNum, payloadJSON, idErr); policyErr != nil {
+				return feedBatch{}, policyErr
 			}
+			failed++
 			continue
 		}
 
-		_, srcVer, srcUpAt := extractRecordMapMetadata(rowMap, a.idField)
-
+		srcVer, srcUpAt := extractRecordMapMetadata(rowMap)
 		if srcVer == "" {
 			srcVer = a.sourceVersion
 		}
 
-		rec, errRec := ingestion.NewRawRecord(
-			"",
-			a.sourceID,
-			extID,
-			payloadJSON,
-			srcVer,
-			"",
-			srcUpAt,
-			"",
-			now,
-		)
+		rec, errRec := ingestion.NewRawRecord(ingestion.RawRecordParams{
+			SourceID:          a.sourceID,
+			ExternalProductID: extID,
+			Payload:           payloadJSON,
+			PayloadRaw:        payloadJSON,
+			SourceVersion:     srcVer,
+			SourceUpdatedAt:   srcUpAt,
+			ReceivedAt:        now,
+		})
 		if errRec != nil {
-			if a.skipMalformed {
-				if a.onRowError != nil {
-					a.onRowError(rowNum, nil, errRec)
-				}
-				continue
+			if policyErr := a.errorPolicy.HandleRowError(rowNum, nil, errRec); policyErr != nil {
+				return feedBatch{}, policyErr
 			}
-			return nil, "", fmt.Errorf("create raw record for csv row %d: %w", rowNum, errRec)
+			failed++
+			continue
 		}
 
 		records = append(records, rec)
@@ -411,120 +489,15 @@ func (a *FeedFileAdapter) streamCSV(ctx context.Context, rc io.ReadCloser, start
 	if len(records) > 0 {
 		_, nextErr := csvReader.Read()
 		if errors.Is(nextErr, io.EOF) {
-			return records, "", nil
+			return feedBatch{records: records, failed: failed}, nil
 		}
 	}
 
 	nextCheckpoint := ingestion.FormatByteOffsetCheckpoint(currentOffset)
-	return records, nextCheckpoint, nil
+	return feedBatch{records: records, failed: failed, next: nextCheckpoint}, nil
 }
 
-type countingReader struct {
-	r     io.Reader
-	bytes int64
-}
-
-func (c *countingReader) Read(p []byte) (int, error) {
-	n, err := c.r.Read(p)
-	c.bytes += int64(n)
-	return n, err
-}
-
-func (a *FeedFileAdapter) readCSVHeader() ([]string, int64, error) {
-	a.headerMu.RLock()
-	if len(a.cachedHeader) > 0 {
-		headerCopy := make([]string, len(a.cachedHeader))
-		copy(headerCopy, a.cachedHeader)
-		headerLen := a.cachedHeaderLen
-		a.headerMu.RUnlock()
-		return headerCopy, headerLen, nil
-	}
-	a.headerMu.RUnlock()
-
-	a.headerMu.Lock()
-	defer a.headerMu.Unlock()
-
-	if len(a.cachedHeader) > 0 {
-		headerCopy := make([]string, len(a.cachedHeader))
-		copy(headerCopy, a.cachedHeader)
-		return headerCopy, a.cachedHeaderLen, nil
-	}
-
-	rc, err := a.readerProvider()
-	if err != nil {
-		return nil, 0, err
-	}
-	defer rc.Close()
-
-	reader := bufio.NewReader(rc)
-	headerBytes, err := reader.ReadBytes('\n')
-	if len(headerBytes) == 0 && err != nil {
-		return nil, 0, fmt.Errorf("empty csv feed: %w", err)
-	}
-
-	csvReader := csv.NewReader(bytes.NewReader(bytes.TrimSpace(headerBytes)))
-	headerFields, err := csvReader.Read()
-	if err != nil {
-		return nil, 0, fmt.Errorf("parse csv header: %w", err)
-	}
-
-	cleanedHeader := make([]string, 0, len(headerFields))
-	for _, f := range headerFields {
-		cleanedHeader = append(cleanedHeader, strings.ToLower(strings.TrimSpace(f)))
-	}
-
-	a.cachedHeader = cleanedHeader
-	a.cachedHeaderLen = int64(len(headerBytes))
-
-	headerCopy := make([]string, len(cleanedHeader))
-	copy(headerCopy, cleanedHeader)
-	return headerCopy, a.cachedHeaderLen, nil
-}
-
-// Fetch provides the expressive, typed FetchRequest/FetchResult contract.
-func (a *FeedFileAdapter) Fetch(ctx context.Context, req ingestion.FetchRequest) (ingestion.FetchResult, error) {
-	limit := a.batchSize
-	if req.BatchSize > 0 {
-		limit = req.BatchSize
-	}
-	records, nextCPStr, err := a.fetchRecordsBounded(ctx, req.Checkpoint.String(), limit)
-	if err != nil {
-		return ingestion.FetchResult{}, err
-	}
-	nextCP := ingestion.NewCheckpoint(nextCPStr)
-	return ingestion.FetchResult{
-		Records:        records,
-		NextCheckpoint: nextCP,
-		HasMore:        !nextCP.IsEmpty(),
-	}, nil
-}
-
-// Probe executes a pre-flight dry-run diagnostic query to verify feed accessibility and sample row schema.
-func (a *FeedFileAdapter) Probe(ctx context.Context) (*ingestion.SourceProbeResult, error) {
-	return probeWithFetch(ctx, a)
-}
-
-var _ ingestion.ProbingAdapter = (*FeedFileAdapter)(nil)
-
-func extractRecordMapMetadata(m map[string]any, preferredID string) (string, string, *time.Time) {
-	extID := ""
-	idCandidates := []string{preferredID, "id", "sku", "product_id", "item_id", "code"}
-	for _, field := range idCandidates {
-		switch v := m[field].(type) {
-		case string:
-			if s := strings.TrimSpace(v); s != "" {
-				extID = s
-			}
-		case json.Number:
-			if intVal, err := v.Int64(); err == nil {
-				extID = strconv.FormatInt(intVal, 10)
-			}
-		}
-		if extID != "" {
-			break
-		}
-	}
-
+func extractRecordMapMetadata(m map[string]any) (string, *time.Time) {
 	srcVersion := ""
 	for _, field := range []string{"version", "v", "etag", "revision"} {
 		if str, ok := m[field].(string); ok && strings.TrimSpace(str) != "" {
@@ -544,5 +517,5 @@ func extractRecordMapMetadata(m map[string]any, preferredID string) (string, str
 		}
 	}
 
-	return extID, srcVersion, srcUpdatedAt
+	return srcVersion, srcUpdatedAt
 }

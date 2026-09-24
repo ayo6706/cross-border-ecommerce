@@ -89,4 +89,3 @@ func (l *TokenBucketLimiter) reserve(now time.Time) time.Duration {
 }
 
 var _ RateLimiter = (*TokenBucketLimiter)(nil)
-

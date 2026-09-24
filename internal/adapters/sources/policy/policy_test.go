@@ -5,55 +5,40 @@ import (
 	"testing"
 
 	"github.com/ayo6706/cross-border-ecommerce/internal/adapters/sources/policy"
-	"github.com/ayo6706/cross-border-ecommerce/internal/domain/ingestion"
 )
 
-func TestErrorTracker(t *testing.T) {
-	t.Run("FailFastTerminatesImmediately", func(t *testing.T) {
-		tracker := policy.NewErrorTracker(policy.PolicyFailFast, 0.1, nil)
-		errTest := errors.New("malformed row")
-		err := tracker.RecordError(1, []byte("bad-row"), errTest)
-		if !errors.Is(err, errTest) {
-			t.Fatalf("expected error %v, got %v", errTest, err)
+func TestErrorPolicy_HandleRowError(t *testing.T) {
+	t.Parallel()
+
+	rowErr := errors.New("malformed row")
+
+	t.Run("FailFastReturnsError", func(t *testing.T) {
+		p := policy.ErrorPolicy{Policy: policy.PolicyFailFast}
+		if err := p.HandleRowError(1, []byte("bad"), rowErr); !errors.Is(err, rowErr) {
+			t.Fatalf("expected %v, got %v", rowErr, err)
 		}
 	})
 
-	t.Run("SkipMalformedAllowsErrorsUnderThreshold", func(t *testing.T) {
-		var callbackInvoked bool
-		tracker := policy.NewErrorTracker(policy.PolicySkipMalformed, 0.20, func(row int, raw []byte, err error) {
-			callbackInvoked = true
-		})
-
-		// 9 successes, 1 error (10% < 20%)
-		for i := 0; i < 9; i++ {
-			tracker.RecordSuccess()
-		}
-		err := tracker.RecordError(10, []byte("bad"), errors.New("syntax error"))
-		if err != nil {
-			t.Fatalf("expected error to be skipped under threshold, got %v", err)
-		}
-		if !callbackInvoked {
-			t.Error("expected error callback to be called")
+	t.Run("ZeroValueIsFailFast", func(t *testing.T) {
+		var p policy.ErrorPolicy
+		if err := p.HandleRowError(1, nil, rowErr); !errors.Is(err, rowErr) {
+			t.Fatalf("expected zero-value policy to fail fast, got %v", err)
 		}
 	})
 
-	t.Run("ExceedingThresholdReturnsErrQuarantineThreshold", func(t *testing.T) {
-		// 10% threshold
-		tracker := policy.NewErrorTracker(policy.PolicySkipMalformed, 0.10, nil)
-
-		// 6 successes, 5 errors out of 11 (45% > 10%)
-		for i := 0; i < 6; i++ {
-			tracker.RecordSuccess()
+	t.Run("SkipMalformedSkipsAndReports", func(t *testing.T) {
+		var reportedRow int
+		p := policy.ErrorPolicy{
+			Policy: policy.PolicySkipMalformed,
+			OnRowError: func(row int, _ []byte, _ error) {
+				reportedRow = row
+			},
 		}
-		var finalErr error
-		for i := 7; i <= 11; i++ {
-			finalErr = tracker.RecordError(i, []byte("bad"), errors.New("syntax error"))
+		if err := p.HandleRowError(7, []byte("bad"), rowErr); err != nil {
+			t.Fatalf("expected row to be skipped, got %v", err)
 		}
-		if finalErr == nil {
-			t.Fatal("expected error on threshold breach, got nil")
-		}
-		if !errors.Is(finalErr, ingestion.ErrQuarantineThreshold) {
-			t.Errorf("expected ErrQuarantineThreshold, got %v", finalErr)
+		if reportedRow != 7 {
+			t.Fatalf("expected callback for row 7, got %d", reportedRow)
 		}
 	})
 }

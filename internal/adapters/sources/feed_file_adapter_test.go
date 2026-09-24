@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/ayo6706/cross-border-ecommerce/internal/adapters/sources"
+	"github.com/ayo6706/cross-border-ecommerce/internal/adapters/sources/policy"
 	"github.com/ayo6706/cross-border-ecommerce/internal/domain/ingestion"
 	"github.com/ayo6706/cross-border-ecommerce/internal/domain/source"
 )
@@ -63,45 +64,45 @@ P5,Camera,899.00,Canon
 		ctx := context.Background()
 
 		// Batch 1: should return P1, P2
-		records1, cp1, err := adapter.FetchRecords(ctx, "")
+		res1, err := adapter.Fetch(ctx, ingestion.FetchRequest{BatchSize: 2})
 		if err != nil {
 			t.Fatalf("unexpected error fetching batch 1: %v", err)
 		}
-		if len(records1) != 2 {
-			t.Fatalf("expected 2 records in batch 1, got %d", len(records1))
+		if len(res1.Records) != 2 {
+			t.Fatalf("expected 2 records in batch 1, got %d", len(res1.Records))
 		}
-		if records1[0].ExternalProductID != "P1" || records1[1].ExternalProductID != "P2" {
-			t.Errorf("batch 1 records mismatch: %v, %v", records1[0].ExternalProductID, records1[1].ExternalProductID)
+		if res1.Records[0].ExternalProductID != "P1" || res1.Records[1].ExternalProductID != "P2" {
+			t.Errorf("batch 1 records mismatch: %v, %v", res1.Records[0].ExternalProductID, res1.Records[1].ExternalProductID)
 		}
-		if cp1 == "" || !strings.HasPrefix(cp1, "offset:") {
-			t.Fatalf("expected valid byte offset checkpoint, got %q", cp1)
+		if res1.NextCheckpoint == "" || !strings.HasPrefix(res1.NextCheckpoint, "offset:") {
+			t.Fatalf("expected valid byte offset checkpoint, got %q", res1.NextCheckpoint)
 		}
 
 		// Batch 2: should return P3, P4
-		records2, cp2, err := adapter.FetchRecords(ctx, cp1)
+		res2, err := adapter.Fetch(ctx, ingestion.FetchRequest{Checkpoint: res1.NextCheckpoint, BatchSize: 2})
 		if err != nil {
 			t.Fatalf("unexpected error fetching batch 2: %v", err)
 		}
-		if len(records2) != 2 {
-			t.Fatalf("expected 2 records in batch 2, got %d", len(records2))
+		if len(res2.Records) != 2 {
+			t.Fatalf("expected 2 records in batch 2, got %d", len(res2.Records))
 		}
-		if records2[0].ExternalProductID != "P3" || records2[1].ExternalProductID != "P4" {
-			t.Errorf("batch 2 records mismatch: %v, %v", records2[0].ExternalProductID, records2[1].ExternalProductID)
+		if res2.Records[0].ExternalProductID != "P3" || res2.Records[1].ExternalProductID != "P4" {
+			t.Errorf("batch 2 records mismatch: %v, %v", res2.Records[0].ExternalProductID, res2.Records[1].ExternalProductID)
 		}
-		if cp2 == "" {
+		if res2.NextCheckpoint == "" {
 			t.Fatal("expected non-empty checkpoint after batch 2")
 		}
 
 		// Batch 3: should return P5 and empty next checkpoint (EOF)
-		records3, cp3, err := adapter.FetchRecords(ctx, cp2)
+		res3, err := adapter.Fetch(ctx, ingestion.FetchRequest{Checkpoint: res2.NextCheckpoint, BatchSize: 2})
 		if err != nil {
 			t.Fatalf("unexpected error fetching batch 3: %v", err)
 		}
-		if len(records3) != 1 || records3[0].ExternalProductID != "P5" {
-			t.Fatalf("expected 1 record P5 in batch 3, got %v", records3)
+		if len(res3.Records) != 1 || res3.Records[0].ExternalProductID != "P5" {
+			t.Fatalf("expected 1 record P5 in batch 3, got %v", res3.Records)
 		}
-		if cp3 != "" {
-			t.Errorf("expected empty checkpoint at EOF, got %q", cp3)
+		if res3.NextCheckpoint != "" {
+			t.Errorf("expected empty checkpoint at EOF, got %q", res3.NextCheckpoint)
 		}
 	})
 
@@ -117,32 +118,33 @@ P12,Item 12,12.0
 			Format:         sources.FeedFormatCSV,
 			ReaderProvider: newStringProvider(corruptedCSV),
 			BatchSize:      10,
-			SkipMalformed:  true,
-			OnRowError: func(rowNumber int, rawRow []byte, err error) {
-				reportedErrors++
+			ErrorPolicy: policy.ErrorPolicy{
+				Policy: policy.PolicySkipMalformed,
+				OnRowError: func(rowNumber int, rawRow []byte, err error) {
+					reportedErrors++
+				},
 			},
 		})
 		if err != nil {
 			t.Fatalf("unexpected init error: %v", err)
 		}
 
-		records, cp, err := adapter.FetchRecords(context.Background(), "")
+		res, err := adapter.Fetch(context.Background(), ingestion.FetchRequest{BatchSize: 10})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
-		// Only P10 and P12 should be returned (P11 row has empty id)
-		if len(records) != 2 {
-			t.Fatalf("expected 2 valid records, got %d", len(records))
+		if len(res.Records) != 2 {
+			t.Fatalf("expected 2 valid records, got %d", len(res.Records))
 		}
-		if records[0].ExternalProductID != "P10" || records[1].ExternalProductID != "P12" {
-			t.Errorf("records mismatch: %v, %v", records[0].ExternalProductID, records[1].ExternalProductID)
+		if res.Records[0].ExternalProductID != "P10" || res.Records[1].ExternalProductID != "P12" {
+			t.Errorf("records mismatch: %v, %v", res.Records[0].ExternalProductID, res.Records[1].ExternalProductID)
 		}
 		if reportedErrors == 0 {
 			t.Error("expected malformed row callback to be invoked")
 		}
-		if cp != "" {
-			t.Errorf("expected empty checkpoint at EOF, got %q", cp)
+		if res.NextCheckpoint != "" {
+			t.Errorf("expected empty checkpoint at EOF, got %q", res.NextCheckpoint)
 		}
 	})
 
@@ -161,30 +163,30 @@ P12,Item 12,12.0
 		ctx := context.Background()
 
 		// Batch 1: Should read P1 with the multiline description
-		records1, cp1, err := adapter.FetchRecords(ctx, "")
+		res1, err := adapter.Fetch(ctx, ingestion.FetchRequest{BatchSize: 1})
 		if err != nil {
 			t.Fatalf("unexpected error batch 1: %v", err)
 		}
-		if len(records1) != 1 || records1[0].ExternalProductID != "P1" {
-			t.Fatalf("expected 1 record P1, got %v", records1)
+		if len(res1.Records) != 1 || res1.Records[0].ExternalProductID != "P1" {
+			t.Fatalf("expected 1 record P1, got %v", res1.Records)
 		}
-		if !strings.Contains(string(records1[0].Payload), "Line 1\\nLine 2") && !strings.Contains(string(records1[0].Payload), "Line 1\nLine 2") {
-			t.Errorf("expected payload to contain multiline text, got %s", string(records1[0].Payload))
+		if !strings.Contains(string(res1.Records[0].Payload), "Line 1\\nLine 2") && !strings.Contains(string(res1.Records[0].Payload), "Line 1\nLine 2") {
+			t.Errorf("expected payload to contain multiline text, got %s", string(res1.Records[0].Payload))
 		}
-		if cp1 == "" {
+		if res1.NextCheckpoint == "" {
 			t.Fatal("expected non-empty checkpoint after batch 1")
 		}
 
 		// Batch 2: Should resume and read P2
-		records2, cp2, err := adapter.FetchRecords(ctx, cp1)
+		res2, err := adapter.Fetch(ctx, ingestion.FetchRequest{Checkpoint: res1.NextCheckpoint, BatchSize: 1})
 		if err != nil {
 			t.Fatalf("unexpected error batch 2: %v", err)
 		}
-		if len(records2) != 1 || records2[0].ExternalProductID != "P2" {
-			t.Fatalf("expected 1 record P2, got %v", records2)
+		if len(res2.Records) != 1 || res2.Records[0].ExternalProductID != "P2" {
+			t.Fatalf("expected 1 record P2, got %v", res2.Records)
 		}
-		if cp2 != "" {
-			t.Errorf("expected empty checkpoint at EOF, got %q", cp2)
+		if res2.NextCheckpoint != "" {
+			t.Errorf("expected empty checkpoint at EOF, got %q", res2.NextCheckpoint)
 		}
 	})
 
@@ -194,18 +196,18 @@ P12,Item 12,12.0
 			SourceID:       source.ID("src-case-id"),
 			Format:         sources.FeedFormatCSV,
 			ReaderProvider: newStringProvider(csvData),
-			IDField:        "SKU", // Uppercase in config, lowercase in header
+			IDField:        "SKU",
 		})
 		if err != nil {
 			t.Fatalf("unexpected init error: %v", err)
 		}
 
-		records, _, err := adapter.FetchRecords(context.Background(), "")
+		res, err := adapter.Fetch(context.Background(), ingestion.FetchRequest{})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if len(records) != 1 || records[0].ExternalProductID != "SKU-001" {
-			t.Fatalf("expected SKU-001, got %v", records)
+		if len(res.Records) != 1 || res.Records[0].ExternalProductID != "SKU-001" {
+			t.Fatalf("expected SKU-001, got %v", res.Records)
 		}
 	})
 
@@ -217,15 +219,15 @@ P12,Item 12,12.0
 			ReaderProvider: func() (io.ReadCloser, error) {
 				return &errorReaderCloser{readErr: ioErr}, nil
 			},
-			SkipMalformed: true,
+			ErrorPolicy: policy.ErrorPolicy{Policy: policy.PolicySkipMalformed},
 		})
 		if err != nil {
 			t.Fatalf("unexpected init error: %v", err)
 		}
 
-		_, _, err = adapter.FetchRecords(context.Background(), "")
+		_, err = adapter.Fetch(context.Background(), ingestion.FetchRequest{})
 		if err == nil {
-			t.Fatal("expected error on terminal reader error even when SkipMalformed is true, got nil")
+			t.Fatal("expected error on terminal reader error even under the skip-malformed policy, got nil")
 		}
 		if !errors.Is(err, ioErr) {
 			t.Fatalf("expected error to wrap %v, got %v", ioErr, err)
@@ -245,12 +247,12 @@ P12,Item 12,12.0
 			t.Fatalf("unexpected init error: %v", err)
 		}
 
-		records, _, err := adapter.FetchRecords(context.Background(), "")
+		res, err := adapter.Fetch(context.Background(), ingestion.FetchRequest{})
 		if err != nil {
 			t.Fatalf("unexpected fetch error: %v", err)
 		}
-		if len(records) != 1 || records[0].ExternalProductID != "WH-US:PART-99" {
-			t.Fatalf("expected composite id WH-US:PART-99, got %v", records)
+		if len(res.Records) != 1 || res.Records[0].ExternalProductID != "WH-US:PART-99" {
+			t.Fatalf("expected composite id WH-US:PART-99, got %v", res.Records)
 		}
 	})
 }
@@ -275,27 +277,27 @@ func TestFeedFileAdapter_NDJSONStreaming(t *testing.T) {
 		ctx := context.Background()
 
 		// Batch 1
-		records1, cp1, err := adapter.FetchRecords(ctx, "")
+		res1, err := adapter.Fetch(ctx, ingestion.FetchRequest{BatchSize: 2})
 		if err != nil {
 			t.Fatalf("unexpected error batch 1: %v", err)
 		}
-		if len(records1) != 2 {
-			t.Fatalf("expected 2 records, got %d", len(records1))
+		if len(res1.Records) != 2 {
+			t.Fatalf("expected 2 records, got %d", len(res1.Records))
 		}
-		if records1[0].ExternalProductID != "J1" || records1[1].ExternalProductID != "J2" {
-			t.Errorf("batch 1 mismatch: %v, %v", records1[0].ExternalProductID, records1[1].ExternalProductID)
+		if res1.Records[0].ExternalProductID != "J1" || res1.Records[1].ExternalProductID != "J2" {
+			t.Errorf("batch 1 mismatch: %v, %v", res1.Records[0].ExternalProductID, res1.Records[1].ExternalProductID)
 		}
 
 		// Batch 2
-		records2, cp2, err := adapter.FetchRecords(ctx, cp1)
+		res2, err := adapter.Fetch(ctx, ingestion.FetchRequest{Checkpoint: res1.NextCheckpoint, BatchSize: 2})
 		if err != nil {
 			t.Fatalf("unexpected error batch 2: %v", err)
 		}
-		if len(records2) != 1 || records2[0].ExternalProductID != "J3" {
-			t.Fatalf("expected J3, got %v", records2)
+		if len(res2.Records) != 1 || res2.Records[0].ExternalProductID != "J3" {
+			t.Fatalf("expected J3, got %v", res2.Records)
 		}
-		if cp2 != "" {
-			t.Errorf("expected empty checkpoint at EOF, got %q", cp2)
+		if res2.NextCheckpoint != "" {
+			t.Errorf("expected empty checkpoint at EOF, got %q", res2.NextCheckpoint)
 		}
 	})
 
@@ -304,38 +306,39 @@ func TestFeedFileAdapter_NDJSONStreaming(t *testing.T) {
 {not-json-line}
 {"id":"GOOD-2","name":"Ok"}
 `
-		// Case 1: Fail-fast when SkipMalformed is false
+		// Case 1: Fail-fast under the default fail-fast policy
 		failAdapter, _ := sources.NewFeedFileAdapter(sources.FeedFileConfig{
 			SourceID:       source.ID("src-fail"),
 			Format:         sources.FeedFormatNDJSON,
 			ReaderProvider: newStringProvider(badNDJSON),
-			SkipMalformed:  false,
 		})
-		_, _, err := failAdapter.FetchRecords(context.Background(), "")
+		_, err := failAdapter.Fetch(context.Background(), ingestion.FetchRequest{})
 		if err == nil {
-			t.Fatal("expected error on malformed line when SkipMalformed is false, got nil")
+			t.Fatal("expected error on malformed line under the default fail-fast policy, got nil")
 		}
 		if !errors.Is(err, ingestion.ErrMalformedRecord) {
 			t.Errorf("expected ErrMalformedRecord, got %v", err)
 		}
 
-		// Case 2: Skip when SkipMalformed is true
+		// Case 2: Skip under the skip-malformed policy
 		var errorReported bool
 		skipAdapter, _ := sources.NewFeedFileAdapter(sources.FeedFileConfig{
 			SourceID:       source.ID("src-skip"),
 			Format:         sources.FeedFormatNDJSON,
 			ReaderProvider: newStringProvider(badNDJSON),
-			SkipMalformed:  true,
-			OnRowError: func(rowNumber int, rawRow []byte, err error) {
-				errorReported = true
+			ErrorPolicy: policy.ErrorPolicy{
+				Policy: policy.PolicySkipMalformed,
+				OnRowError: func(rowNumber int, rawRow []byte, err error) {
+					errorReported = true
+				},
 			},
 		})
-		records, _, err := skipAdapter.FetchRecords(context.Background(), "")
+		res, err := skipAdapter.Fetch(context.Background(), ingestion.FetchRequest{})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if len(records) != 2 {
-			t.Fatalf("expected 2 records, got %d", len(records))
+		if len(res.Records) != 2 {
+			t.Fatalf("expected 2 records, got %d", len(res.Records))
 		}
 		if !errorReported {
 			t.Error("expected error callback to be fired for malformed line")
@@ -364,12 +367,12 @@ func TestFeedFileAdapter_NDJSONStreaming(t *testing.T) {
 		ctx := context.Background()
 
 		for {
-			batch, nextCp, fetchErr := adapter.FetchRecords(ctx, checkpoint)
+			res, fetchErr := adapter.Fetch(ctx, ingestion.FetchRequest{Checkpoint: checkpoint, BatchSize: 250})
 			if fetchErr != nil {
 				t.Fatalf("unexpected error at checkpoint %s: %v", checkpoint, fetchErr)
 			}
-			totalSeen += len(batch)
-			checkpoint = nextCp
+			totalSeen += len(res.Records)
+			checkpoint = res.NextCheckpoint
 			if checkpoint == "" {
 				break
 			}
@@ -391,12 +394,12 @@ func TestFeedFileAdapter_NDJSONStreaming(t *testing.T) {
 			t.Fatalf("unexpected init error: %v", err)
 		}
 
-		records, _, err := adapter.FetchRecords(context.Background(), "")
+		res, err := adapter.Fetch(context.Background(), ingestion.FetchRequest{})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if len(records) != 1 || records[0].ExternalProductID != "987654321012345678" {
-			t.Fatalf("expected 987654321012345678, got %v", records)
+		if len(res.Records) != 1 || res.Records[0].ExternalProductID != "987654321012345678" {
+			t.Fatalf("expected 987654321012345678, got %v", res.Records)
 		}
 	})
 
@@ -408,13 +411,13 @@ func TestFeedFileAdapter_NDJSONStreaming(t *testing.T) {
 			ReaderProvider: func() (io.ReadCloser, error) {
 				return &errorReaderCloser{readErr: ioErr}, nil
 			},
-			SkipMalformed: true,
+			ErrorPolicy: policy.ErrorPolicy{Policy: policy.PolicySkipMalformed},
 		})
 		if err != nil {
 			t.Fatalf("unexpected init error: %v", err)
 		}
 
-		_, _, err = adapter.FetchRecords(context.Background(), "")
+		_, err = adapter.Fetch(context.Background(), ingestion.FetchRequest{})
 		if err == nil {
 			t.Fatal("expected error on non-EOF reader error, got nil")
 		}
@@ -436,12 +439,213 @@ func TestFeedFileAdapter_NDJSONStreaming(t *testing.T) {
 			t.Fatalf("unexpected init error: %v", err)
 		}
 
-		records, _, err := adapter.FetchRecords(context.Background(), "")
+		res, err := adapter.Fetch(context.Background(), ingestion.FetchRequest{})
 		if err != nil {
 			t.Fatalf("unexpected fetch error: %v", err)
 		}
-		if len(records) != 1 || records[0].ExternalProductID != "UK#SKU-555" {
-			t.Fatalf("expected composite id UK#SKU-555, got %v", records)
+		if len(res.Records) != 1 || res.Records[0].ExternalProductID != "UK#SKU-555" {
+			t.Fatalf("expected composite id UK#SKU-555, got %v", res.Records)
+		}
+	})
+
+	t.Run("NDJSONErrorThresholdCalculatesAccurateRatio", func(t *testing.T) {
+		var b strings.Builder
+		for i := 1; i <= 990; i++ {
+			b.WriteString(fmt.Sprintf(`{"id":"ITEM-%d"}`+"\n", i))
+		}
+		for i := 1; i <= 10; i++ {
+			b.WriteString("{bad-json-row}\n")
+		}
+
+		adapter, err := sources.NewFeedFileAdapter(sources.FeedFileConfig{
+			SourceID:       source.ID("src-ratio"),
+			Format:         sources.FeedFormatNDJSON,
+			ReaderProvider: newStringProvider(b.String()),
+			ErrorPolicy:    policy.ErrorPolicy{Policy: policy.PolicySkipMalformed},
+			BatchSize:      2000,
+		})
+		if err != nil {
+			t.Fatalf("unexpected init error: %v", err)
+		}
+
+		res, err := adapter.Fetch(context.Background(), ingestion.FetchRequest{})
+		if err != nil {
+			t.Fatalf("expected 10 errors out of 1000 rows (1.0%%) to pass 5%% threshold, got error: %v", err)
+		}
+		if len(res.Records) != 990 {
+			t.Fatalf("expected 990 valid records, got %d", len(res.Records))
+		}
+	})
+
+	t.Run("NDJSONPreservesCaseSensitiveIDField", func(t *testing.T) {
+		ndjson := `{"SKU":"MY-UPPERCASE-SKU","name":"Product"}` + "\n"
+		adapter, err := sources.NewFeedFileAdapter(sources.FeedFileConfig{
+			SourceID:       source.ID("src-case-sens"),
+			Format:         sources.FeedFormatNDJSON,
+			ReaderProvider: newStringProvider(ndjson),
+			IDField:        "SKU",
+		})
+		if err != nil {
+			t.Fatalf("unexpected init error: %v", err)
+		}
+
+		res, err := adapter.Fetch(context.Background(), ingestion.FetchRequest{})
+		if err != nil {
+			t.Fatalf("unexpected fetch error: %v", err)
+		}
+		if len(res.Records) != 1 || res.Records[0].ExternalProductID != "MY-UPPERCASE-SKU" {
+			t.Fatalf("expected SKU MY-UPPERCASE-SKU, got %v", res.Records)
+		}
+	})
+
+	t.Run("NonSeekableCSVStreaming", func(t *testing.T) {
+		csvData := "id,name,price\nP1,Item1,10.0\nP2,Item2,20.0\nP3,Item3,30.0\nP4,Item4,40.0\nP5,Item5,50.0\n"
+		adapter, err := sources.NewFeedFileAdapter(sources.FeedFileConfig{
+			SourceID: source.ID("src-csv-nonseekable"),
+			Format:   sources.FeedFormatCSV,
+			ReaderProvider: func() (io.ReadCloser, error) {
+				return &nonSeekableReaderCloser{r: strings.NewReader(csvData)}, nil
+			},
+			BatchSize: 2,
+		})
+		if err != nil {
+			t.Fatalf("unexpected init error: %v", err)
+		}
+
+		ctx := context.Background()
+
+		// Batch 1: should get 2 records
+		res1, err := adapter.Fetch(ctx, ingestion.FetchRequest{BatchSize: 2})
+		if err != nil {
+			t.Fatalf("unexpected error batch 1: %v", err)
+		}
+		if len(res1.Records) != 2 {
+			t.Fatalf("expected 2 records in batch 1, got %d", len(res1.Records))
+		}
+		if res1.Records[0].ExternalProductID != "P1" || res1.Records[1].ExternalProductID != "P2" {
+			t.Errorf("batch 1 records mismatch: %v, %v", res1.Records[0].ExternalProductID, res1.Records[1].ExternalProductID)
+		}
+
+		// Batch 2: resume from checkpoint, should get P3, P4
+		res2, err := adapter.Fetch(ctx, ingestion.FetchRequest{Checkpoint: res1.NextCheckpoint, BatchSize: 2})
+		if err != nil {
+			t.Fatalf("unexpected error batch 2: %v", err)
+		}
+		if len(res2.Records) != 2 {
+			t.Fatalf("expected 2 records in batch 2, got %d", len(res2.Records))
+		}
+		if res2.Records[0].ExternalProductID != "P3" || res2.Records[1].ExternalProductID != "P4" {
+			t.Errorf("batch 2 records mismatch: %v, %v", res2.Records[0].ExternalProductID, res2.Records[1].ExternalProductID)
+		}
+
+		// Batch 3: resume from checkpoint, should get P5
+		res3, err := adapter.Fetch(ctx, ingestion.FetchRequest{Checkpoint: res2.NextCheckpoint, BatchSize: 2})
+		if err != nil {
+			t.Fatalf("unexpected error batch 3: %v", err)
+		}
+		if len(res3.Records) != 1 || res3.Records[0].ExternalProductID != "P5" {
+			t.Fatalf("expected 1 record P5 in batch 3, got %v", res3.Records)
+		}
+		if res3.NextCheckpoint != "" {
+			t.Errorf("expected empty checkpoint at EOF, got %q", res3.NextCheckpoint)
+		}
+	})
+}
+
+type nonSeekableReaderCloser struct {
+	r io.Reader
+}
+
+func (n *nonSeekableReaderCloser) Read(p []byte) (int, error) {
+	return n.r.Read(p)
+}
+
+func (n *nonSeekableReaderCloser) Close() error {
+	return nil
+}
+
+func TestFeedFileAdapter_NDJSON_CRLFAndOversized(t *testing.T) {
+	t.Run("CRLFLineEndingsResumeExactCheckpoint", func(t *testing.T) {
+		crlfNDJSON := "{\"id\":\"A1\"}\r\n{\"id\":\"A2\"}\r\n{\"id\":\"A3\"}\r\n{\"id\":\"A4\"}\r\n{\"id\":\"A5\"}\r\n"
+		adapter, err := sources.NewFeedFileAdapter(sources.FeedFileConfig{
+			SourceID:       source.ID("src-crlf"),
+			Format:         sources.FeedFormatNDJSON,
+			ReaderProvider: newStringProvider(crlfNDJSON),
+			BatchSize:      2,
+		})
+		if err != nil {
+			t.Fatalf("unexpected init error: %v", err)
+		}
+
+		ctx := context.Background()
+
+		// Batch 1: A1, A2
+		res1, err := adapter.Fetch(ctx, ingestion.FetchRequest{BatchSize: 2})
+		if err != nil {
+			t.Fatalf("unexpected error batch 1: %v", err)
+		}
+		if len(res1.Records) != 2 {
+			t.Fatalf("expected 2 records in batch 1, got %d", len(res1.Records))
+		}
+		if res1.Records[0].ExternalProductID != "A1" || res1.Records[1].ExternalProductID != "A2" {
+			t.Errorf("batch 1 mismatch: %v, %v", res1.Records[0].ExternalProductID, res1.Records[1].ExternalProductID)
+		}
+
+		// Batch 2: A3, A4 (must not fail with JSON parse error from misaligned byte offset)
+		res2, err := adapter.Fetch(ctx, ingestion.FetchRequest{Checkpoint: res1.NextCheckpoint, BatchSize: 2})
+		if err != nil {
+			t.Fatalf("unexpected error batch 2 (CRLF checkpoint drift): %v", err)
+		}
+		if len(res2.Records) != 2 {
+			t.Fatalf("expected 2 records in batch 2, got %d", len(res2.Records))
+		}
+		if res2.Records[0].ExternalProductID != "A3" || res2.Records[1].ExternalProductID != "A4" {
+			t.Errorf("batch 2 mismatch: %v, %v", res2.Records[0].ExternalProductID, res2.Records[1].ExternalProductID)
+		}
+
+		// Batch 3: A5
+		res3, err := adapter.Fetch(ctx, ingestion.FetchRequest{Checkpoint: res2.NextCheckpoint, BatchSize: 2})
+		if err != nil {
+			t.Fatalf("unexpected error batch 3: %v", err)
+		}
+		if len(res3.Records) != 1 || res3.Records[0].ExternalProductID != "A5" {
+			t.Fatalf("expected A5 in batch 3, got %v", res3.Records)
+		}
+	})
+
+	t.Run("OversizedLineSkippedWithSkipMalformed", func(t *testing.T) {
+		oversized := strings.Repeat("a", 2*1024*1024)
+		ndjson := fmt.Sprintf("{\"id\":\"PRE\"}\n{\"id\":\"OVERSIZED\",\"data\":\"%s\"}\n{\"id\":\"POST\"}\n", oversized)
+
+		var reportedErrors int
+		adapter, err := sources.NewFeedFileAdapter(sources.FeedFileConfig{
+			SourceID:       source.ID("src-oversized-skip"),
+			Format:         sources.FeedFormatNDJSON,
+			ReaderProvider: newStringProvider(ndjson),
+			ErrorPolicy: policy.ErrorPolicy{
+				Policy: policy.PolicySkipMalformed,
+				OnRowError: func(rowNumber int, rawRow []byte, err error) {
+					reportedErrors++
+				},
+			},
+		})
+		if err != nil {
+			t.Fatalf("unexpected init error: %v", err)
+		}
+
+		res, err := adapter.Fetch(context.Background(), ingestion.FetchRequest{BatchSize: 10})
+		if err != nil {
+			t.Fatalf("expected oversized line to be skipped under the skip-malformed policy, got err: %v", err)
+		}
+
+		if len(res.Records) != 2 {
+			t.Fatalf("expected 2 valid records (PRE and POST), got %d", len(res.Records))
+		}
+		if res.Records[0].ExternalProductID != "PRE" || res.Records[1].ExternalProductID != "POST" {
+			t.Errorf("expected PRE and POST, got %v, %v", res.Records[0].ExternalProductID, res.Records[1].ExternalProductID)
+		}
+		if reportedErrors != 1 {
+			t.Errorf("expected 1 reported error callback for oversized line, got %d", reportedErrors)
 		}
 	})
 }

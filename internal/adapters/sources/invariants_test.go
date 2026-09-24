@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"runtime"
+	"strings"
 	"sync"
 	"testing"
 
@@ -119,8 +120,8 @@ func TestInvariant_EchoedCursorTermination(t *testing.T) {
 	if err != nil {
 		t.Fatalf("fetch 1 failed: %v", err)
 	}
-	if res1.NextCheckpoint.String() != "cursor:cursor_stuck_token" {
-		t.Fatalf("expected next checkpoint cursor:cursor_stuck_token, got %q", res1.NextCheckpoint.String())
+	if res1.NextCheckpoint != "cursor:cursor_stuck_token" {
+		t.Fatalf("expected next checkpoint cursor:cursor_stuck_token, got %q", res1.NextCheckpoint)
 	}
 
 	// Subsequent fetch sends cursor_stuck_token; server echoes it back
@@ -133,8 +134,8 @@ func TestInvariant_EchoedCursorTermination(t *testing.T) {
 	if res2.HasMore {
 		t.Errorf("invariant violated: expected HasMore to be false on echoed cursor")
 	}
-	if !res2.NextCheckpoint.IsEmpty() {
-		t.Errorf("invariant violated: expected empty next checkpoint on echoed cursor, got %q", res2.NextCheckpoint.String())
+	if res2.NextCheckpoint != "" {
+		t.Errorf("invariant violated: expected empty next checkpoint on echoed cursor, got %q", res2.NextCheckpoint)
 	}
 }
 
@@ -198,7 +199,7 @@ func TestInvariant_StreamingBoundedMemory(t *testing.T) {
 	runtime.ReadMemStats(&memBefore)
 
 	ctx := context.Background()
-	cp := ingestion.NewCheckpoint("")
+	cp := ""
 	totalRows := 0
 
 	for {
@@ -291,17 +292,38 @@ func TestInvariant_PreFlightProbe(t *testing.T) {
 }
 
 // Invariant 6: Error Threshold Cut-off Invariant.
-// If the error rate exceeds MaxErrorRate, processing halts deterministically with ErrQuarantineThreshold.
+// Adapters skip bad rows under the skip policy and report them in FetchResult.Failed,
+// so the run-level ingestion.ErrorBudget (enforced by the sync coordinator) sees every skipped row.
 func TestInvariant_ErrorThresholdCutoff(t *testing.T) {
-	tracker := policy.NewErrorTracker(policy.PolicySkipMalformed, 0.05, nil) // 5% max error rate
-	for i := 0; i < 9; i++ {
-		tracker.RecordSuccess()
+	var b strings.Builder
+	for i := 0; i < 90; i++ {
+		fmt.Fprintf(&b, "{\"id\":\"P%d\"}\n", i)
 	}
-	err := tracker.RecordError(10, []byte("bad"), errors.New("malformed"))
-	if err == nil {
-		t.Fatal("expected error on threshold breach, got nil")
+	for i := 0; i < 10; i++ {
+		b.WriteString("{\"no_id\":true}\n")
 	}
-	if !errors.Is(err, ingestion.ErrQuarantineThreshold) {
-		t.Errorf("expected ErrQuarantineThreshold, got %v", err)
+
+	adapter, err := sources.NewFeedFileAdapter(sources.FeedFileConfig{
+		SourceID:       source.ID("src-threshold-inv"),
+		Format:         sources.FeedFormatNDJSON,
+		ReaderProvider: newStringProvider(b.String()),
+		ErrorPolicy:    policy.ErrorPolicy{Policy: policy.PolicySkipMalformed},
+	})
+	if err != nil {
+		t.Fatalf("unexpected init error: %v", err)
+	}
+
+	res, err := adapter.Fetch(context.Background(), ingestion.FetchRequest{BatchSize: 200})
+	if err != nil {
+		t.Fatalf("unexpected fetch error: %v", err)
+	}
+	if len(res.Records) != 90 || res.Failed != 10 {
+		t.Fatalf("expected 90 records and 10 skipped rows, got %d and %d", len(res.Records), res.Failed)
+	}
+
+	budget := ingestion.ErrorBudget{MaxErrorRate: 0.05, MinSampleRows: 10}
+	seen := len(res.Records) + res.Failed
+	if err := budget.Check(seen, res.Failed); !errors.Is(err, ingestion.ErrErrorBudgetExceeded) {
+		t.Fatalf("expected 10%% skipped rows to exceed a 5%% budget, got %v", err)
 	}
 }

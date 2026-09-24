@@ -37,12 +37,12 @@ type RESTAdapterConfig struct {
 	Extractor    extraction.RecordExtractor
 	Identity     identity.IdentityStrategy
 	RateLimiter  RateLimiter
-	ErrorTracker *policy.ErrorTracker
+	ErrorPolicy  policy.ErrorPolicy
 	MaxBodyBytes int64
 }
 
-// RESTAdapter is a composed HTTP source adapter. It coordinates transport, authentication, 
-// rate limiting, pagination, record extraction, and identity resolution without 
+// RESTAdapter is a composed HTTP source adapter. It coordinates transport, authentication,
+// rate limiting, pagination, record extraction, and identity resolution without
 // embedding supplier-specific product schemas.
 type RESTAdapter struct {
 	sourceID     source.ID
@@ -53,7 +53,7 @@ type RESTAdapter struct {
 	extractor    extraction.RecordExtractor
 	identity     identity.IdentityStrategy
 	limiter      RateLimiter
-	errorTracker *policy.ErrorTracker
+	errorPolicy  policy.ErrorPolicy
 	maxBodyBytes int64
 }
 
@@ -88,11 +88,6 @@ func NewRESTAdapter(cfg RESTAdapterConfig) (*RESTAdapter, error) {
 		idStrat = identity.NewPathIdentityStrategy("id")
 	}
 
-	tracker := cfg.ErrorTracker
-	if tracker == nil {
-		tracker = policy.NewErrorTracker(policy.PolicyFailFast, 0.05, nil)
-	}
-
 	maxBytes := cfg.MaxBodyBytes
 	if maxBytes <= 0 {
 		maxBytes = defaultMaxResponseBodyBytes
@@ -107,41 +102,44 @@ func NewRESTAdapter(cfg RESTAdapterConfig) (*RESTAdapter, error) {
 		extractor:    extractor,
 		identity:     idStrat,
 		limiter:      cfg.RateLimiter,
-		errorTracker: tracker,
+		errorPolicy:  cfg.ErrorPolicy,
 		maxBodyBytes: maxBytes,
 	}, nil
 }
 
-// FetchRecords executes a single paginated HTTP fetch against the source endpoint.
-func (a *RESTAdapter) FetchRecords(ctx context.Context, checkpoint string) ([]*ingestion.RawRecord, string, error) {
+// Fetch executes a single paginated HTTP fetch against the source endpoint.
+func (a *RESTAdapter) Fetch(ctx context.Context, req ingestion.FetchRequest) (ingestion.FetchResult, error) {
 	if a.limiter != nil {
 		if err := a.limiter.Wait(ctx); err != nil {
-			return nil, "", err
+			return ingestion.FetchResult{}, err
 		}
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, a.baseURL, nil)
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, a.baseURL, nil)
 	if err != nil {
-		return nil, "", fmt.Errorf("create http request: %w", err)
+		return ingestion.FetchResult{}, fmt.Errorf("create http request: %w", err)
 	}
 
 	if a.pagination != nil {
-		if err := a.pagination.ApplyPagination(req, checkpoint); err != nil {
-			return nil, "", err
+		if err := a.pagination.ApplyPagination(httpReq, req.Checkpoint); err != nil {
+			return ingestion.FetchResult{}, err
 		}
 	}
 
 	if a.auth != nil {
-		if err := a.auth.ApplyAuth(req); err != nil {
-			return nil, "", fmt.Errorf("apply auth: %w", err)
+		if err := a.auth.ApplyAuth(httpReq); err != nil {
+			return ingestion.FetchResult{}, fmt.Errorf("apply auth: %w", err)
 		}
 	}
 
-	req.Header.Set("Accept", "application/json")
+	httpReq.Header.Set("Accept", "application/json")
 
-	resp, err := a.client.Do(req)
+	resp, err := a.client.Do(httpReq)
 	if err != nil {
-		return nil, "", fmt.Errorf("%w: http request failed: %v", ingestion.ErrAdapterUnavailable, err)
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ingestion.FetchResult{}, ctxErr
+		}
+		return ingestion.FetchResult{}, fmt.Errorf("%w: http request failed: %w", ingestion.ErrAdapterUnavailable, err)
 	}
 	defer func() {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, drainLimitBytes))
@@ -150,80 +148,72 @@ func (a *RESTAdapter) FetchRecords(ctx context.Context, checkpoint string) ([]*i
 
 	switch {
 	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
-		return nil, "", fmt.Errorf("%w: status %d from %s", ingestion.ErrAuthenticationFailed, resp.StatusCode, a.baseURL)
+		return ingestion.FetchResult{}, fmt.Errorf("%w: status %d from %s", ingestion.ErrAuthenticationFailed, resp.StatusCode, a.baseURL)
 	case resp.StatusCode == http.StatusTooManyRequests:
-		return nil, "", fmt.Errorf("%w: rate limited by upstream server %s", ingestion.ErrRateLimitExceeded, a.baseURL)
+		return ingestion.FetchResult{}, fmt.Errorf("%w: rate limited by upstream server %s", ingestion.ErrRateLimitExceeded, a.baseURL)
 	case resp.StatusCode >= 500:
-		return nil, "", fmt.Errorf("%w: upstream server error %d from %s", ingestion.ErrAdapterUnavailable, resp.StatusCode, a.baseURL)
+		return ingestion.FetchResult{}, fmt.Errorf("%w: upstream server error %d from %s", ingestion.ErrAdapterUnavailable, resp.StatusCode, a.baseURL)
 	case resp.StatusCode < 200 || resp.StatusCode >= 300:
-		return nil, "", fmt.Errorf("%w: unexpected http status %d from %s", ingestion.ErrSourceContractViolation, resp.StatusCode, a.baseURL)
+		return ingestion.FetchResult{}, fmt.Errorf("%w: unexpected http status %d from %s", ingestion.ErrSourceContractViolation, resp.StatusCode, a.baseURL)
 	}
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, a.maxBodyBytes+1))
 	if err != nil {
-		return nil, "", fmt.Errorf("%w: read response body: %v", ingestion.ErrAdapterUnavailable, err)
+		return ingestion.FetchResult{}, fmt.Errorf("%w: read response body: %v", ingestion.ErrAdapterUnavailable, err)
 	}
 	if int64(len(body)) > a.maxBodyBytes {
-		return nil, "", fmt.Errorf("%w: response body exceeds %d bytes", ingestion.ErrAdapterUnavailable, a.maxBodyBytes)
+		return ingestion.FetchResult{}, fmt.Errorf("%w: response body exceeds %d bytes", ingestion.ErrAdapterUnavailable, a.maxBodyBytes)
 	}
 
 	rawItems, err := a.extractor.ExtractRecords(body)
 	if err != nil {
-		// Contract violations (path not found, wrong type, etc.) fail the run
-		return nil, "", fmt.Errorf("%w: extract records: %w", ingestion.ErrSourceContractViolation, err)
+		return ingestion.FetchResult{}, fmt.Errorf("%w: extract records: %w", ingestion.ErrSourceContractViolation, err)
 	}
 
-	etag := strings.Trim(resp.Header.Get("ETag"), "\"")
 	records := make([]*ingestion.RawRecord, 0, len(rawItems))
+	failed := 0
+	receivedAt := time.Now().UTC()
 
 	for i, rawItem := range rawItems {
-		extID, idErr := a.identity.Resolve(rawItem)
-		if idErr != nil {
-			recErr := a.errorTracker.RecordError(i+1, rawItem, idErr)
-			if recErr != nil {
-				return nil, "", recErr
+		rec, rowErr := a.buildRecord(rawItem, receivedAt)
+		if rowErr != nil {
+			if err := a.errorPolicy.HandleRowError(i+1, rawItem, rowErr); err != nil {
+				return ingestion.FetchResult{}, err
 			}
+			failed++
 			continue
 		}
-
-		rec, recInitErr := ingestion.NewRawRecord(
-			"",
-			a.sourceID,
-			extID,
-			rawItem,
-			"",
-			etag,
-			nil,
-			"",
-			time.Now().UTC(),
-		)
-		if recInitErr != nil {
-			recErr := a.errorTracker.RecordError(i+1, rawItem, recInitErr)
-			if recErr != nil {
-				return nil, "", recErr
-			}
-			continue
-		}
-
 		records = append(records, rec)
-		a.errorTracker.RecordSuccess()
 	}
 
 	var nextCheckpoint string
 	if a.pagination != nil {
-		nextCP, pagErr := a.pagination.ExtractNextCheckpoint(resp, body, checkpoint, len(records))
+		nextCP, pagErr := a.pagination.ExtractNextCheckpoint(resp, body, req.Checkpoint, len(rawItems))
 		if pagErr != nil {
-			return nil, "", fmt.Errorf("%w: extract next checkpoint: %w", ingestion.ErrSourceContractViolation, pagErr)
+			return ingestion.FetchResult{}, fmt.Errorf("%w: extract next checkpoint: %w", ingestion.ErrSourceContractViolation, pagErr)
 		}
 		nextCheckpoint = nextCP
 	}
 
-	return records, nextCheckpoint, nil
+	return ingestion.FetchResult{
+		Records:        records,
+		Failed:         failed,
+		NextCheckpoint: nextCheckpoint,
+		HasMore:        nextCheckpoint != "",
+	}, nil
 }
 
-// Fetch provides the expressive, typed FetchRequest/FetchResult contract.
-func (a *RESTAdapter) Fetch(ctx context.Context, req ingestion.FetchRequest) (ingestion.FetchResult, error) {
-	return fetchWithRecords(ctx, req, a.FetchRecords)
+func (a *RESTAdapter) buildRecord(rawItem []byte, receivedAt time.Time) (*ingestion.RawRecord, error) {
+	extID, err := a.identity.Resolve(rawItem)
+	if err != nil {
+		return nil, err
+	}
+	return ingestion.NewRawRecord(ingestion.RawRecordParams{
+		SourceID:          a.sourceID,
+		ExternalProductID: extID,
+		Payload:           rawItem,
+		ReceivedAt:        receivedAt,
+	})
 }
 
 // Probe executes a pre-flight dry-run diagnostic query to verify reachability, auth, and schema extraction.
