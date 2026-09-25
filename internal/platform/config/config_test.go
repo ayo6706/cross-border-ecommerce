@@ -71,6 +71,30 @@ func TestLoad_Defaults(t *testing.T) {
 	if cfg.Stream.Retention != 168*time.Hour {
 		t.Errorf("expected default Stream Retention 168h, got %v", cfg.Stream.Retention)
 	}
+	if cfg.Stream.ConsumerBlock != 2*time.Second {
+		t.Errorf("expected default Stream ConsumerBlock 2s, got %v", cfg.Stream.ConsumerBlock)
+	}
+	if cfg.Stream.ClaimMinIdle != 30*time.Second {
+		t.Errorf("expected default Stream ClaimMinIdle 30s, got %v", cfg.Stream.ClaimMinIdle)
+	}
+	if cfg.Stream.ClaimInterval != 10*time.Second {
+		t.Errorf("expected default Stream ClaimInterval 10s, got %v", cfg.Stream.ClaimInterval)
+	}
+	if cfg.Stream.ConsumerBatch != 10 {
+		t.Errorf("expected default Stream ConsumerBatch 10, got %d", cfg.Stream.ConsumerBatch)
+	}
+	if cfg.Stream.HandlerTimeout != 5*time.Second {
+		t.Errorf("expected default Stream HandlerTimeout 5s, got %v", cfg.Stream.HandlerTimeout)
+	}
+	if cfg.Worker.Concurrency != 10 {
+		t.Errorf("expected default Worker Concurrency 10, got %d", cfg.Worker.Concurrency)
+	}
+	if cfg.Worker.QueueSize != 10 {
+		t.Errorf("expected default Worker QueueSize 10, got %d", cfg.Worker.QueueSize)
+	}
+	if cfg.Worker.DrainTimeout != 10*time.Second {
+		t.Errorf("expected default Worker DrainTimeout 10s, got %v", cfg.Worker.DrainTimeout)
+	}
 	if cfg.Outbox.BatchSize != 100 {
 		t.Errorf("expected default Outbox BatchSize 100, got %d", cfg.Outbox.BatchSize)
 	}
@@ -113,6 +137,14 @@ func TestLoad_CustomOverrides(t *testing.T) {
 		"SERVICE_NAME":            "trade-api",
 		"REDIS_URL":               "redis://redis.internal:6379",
 		"STREAM_RETENTION":        "72h",
+		"STREAM_CONSUMER_BLOCK":   "5s",
+		"STREAM_CLAIM_MIN_IDLE":   "2m",
+		"STREAM_CLAIM_INTERVAL":   "15s",
+		"STREAM_CONSUMER_BATCH":   "25",
+		"STREAM_HANDLER_TIMEOUT":  "45s",
+		"WORKER_CONCURRENCY":      "30",
+		"WORKER_QUEUE_SIZE":       "50",
+		"WORKER_DRAIN_TIMEOUT":    "20s",
 		"OUTBOX_BATCH_SIZE":       "200",
 		"OUTBOX_POLL_INTERVAL":    "1s",
 		"OUTBOX_LEASE":            "45s",
@@ -154,6 +186,30 @@ func TestLoad_CustomOverrides(t *testing.T) {
 	}
 	if cfg.Stream.Retention != 72*time.Hour {
 		t.Errorf("expected Stream Retention 72h, got %v", cfg.Stream.Retention)
+	}
+	if cfg.Stream.ConsumerBlock != 5*time.Second {
+		t.Errorf("expected Stream ConsumerBlock 5s, got %v", cfg.Stream.ConsumerBlock)
+	}
+	if cfg.Stream.ClaimMinIdle != 2*time.Minute {
+		t.Errorf("expected Stream ClaimMinIdle 2m, got %v", cfg.Stream.ClaimMinIdle)
+	}
+	if cfg.Stream.ClaimInterval != 15*time.Second {
+		t.Errorf("expected Stream ClaimInterval 15s, got %v", cfg.Stream.ClaimInterval)
+	}
+	if cfg.Stream.ConsumerBatch != 25 {
+		t.Errorf("expected Stream ConsumerBatch 25, got %d", cfg.Stream.ConsumerBatch)
+	}
+	if cfg.Stream.HandlerTimeout != 45*time.Second {
+		t.Errorf("expected Stream HandlerTimeout 45s, got %v", cfg.Stream.HandlerTimeout)
+	}
+	if cfg.Worker.Concurrency != 30 {
+		t.Errorf("expected Worker Concurrency 30, got %d", cfg.Worker.Concurrency)
+	}
+	if cfg.Worker.QueueSize != 50 {
+		t.Errorf("expected Worker QueueSize 50, got %d", cfg.Worker.QueueSize)
+	}
+	if cfg.Worker.DrainTimeout != 20*time.Second {
+		t.Errorf("expected Worker DrainTimeout 20s, got %v", cfg.Worker.DrainTimeout)
 	}
 	if cfg.Outbox.BatchSize != 200 {
 		t.Errorf("expected Outbox BatchSize 200, got %d", cfg.Outbox.BatchSize)
@@ -254,6 +310,56 @@ func TestConfig_ValidationFailures(t *testing.T) {
 			},
 			expectedErr: config.ErrInvalidTimeout,
 		},
+		{
+			name: "worker concurrency zero",
+			modify: func(c *config.Config) {
+				c.Worker.Concurrency = 0
+			},
+			expectedErr: config.ErrInvalidWorkerConfig,
+		},
+		{
+			name: "worker queue size negative",
+			modify: func(c *config.Config) {
+				c.Worker.QueueSize = -1
+			},
+			expectedErr: config.ErrInvalidWorkerConfig,
+		},
+		{
+			name: "worker drain timeout negative",
+			modify: func(c *config.Config) {
+				c.Worker.DrainTimeout = 0
+			},
+			expectedErr: config.ErrInvalidTimeout,
+		},
+		{
+			name: "stream consumer batch zero",
+			modify: func(c *config.Config) {
+				c.Stream.ConsumerBatch = 0
+			},
+			expectedErr: config.ErrInvalidStreamConfig,
+		},
+		{
+			name: "stream consumer batch exceeds 1000",
+			modify: func(c *config.Config) {
+				c.Stream.ConsumerBatch = 1001
+			},
+			expectedErr: config.ErrInvalidStreamConfig,
+		},
+		{
+			name: "stream claim interval zero",
+			modify: func(c *config.Config) {
+				c.Stream.ClaimInterval = 0
+			},
+			expectedErr: config.ErrInvalidTimeout,
+		},
+		{
+			name: "stream claim min idle less than or equal to handler timeout",
+			modify: func(c *config.Config) {
+				c.Stream.ClaimMinIdle = 5 * time.Second
+				c.Stream.HandlerTimeout = 10 * time.Second
+			},
+			expectedErr: config.ErrInvalidStreamConfig,
+		},
 	}
 
 	for _, tc := range tests {
@@ -274,6 +380,37 @@ func TestConfig_ValidationFailures(t *testing.T) {
 				t.Errorf("expected error wrapping %v, got %v", tc.expectedErr, err)
 			}
 		})
+	}
+}
+
+func TestWorkerConfig_ValidateWithDBMaxConns(t *testing.T) {
+	t.Parallel()
+
+	w := config.WorkerConfig{
+		Concurrency:  25,
+		QueueSize:    10,
+		DrainTimeout: 5 * time.Second,
+	}
+
+	if err := w.Validate(); err != nil {
+		t.Fatalf("expected valid WorkerConfig, got %v", err)
+	}
+
+	// dbMaxConns <= 0 must fail loudly
+	if err := w.ValidateAgainstDBPool(0); !errors.Is(err, config.ErrInvalidWorkerConfig) {
+		t.Fatalf("expected ErrInvalidWorkerConfig for maxConns=0, got %v", err)
+	}
+
+	// 25 exceeds 80% of 25 (20)
+	err := w.ValidateAgainstDBPool(25)
+	if !errors.Is(err, config.ErrInvalidWorkerConfig) {
+		t.Fatalf("expected ErrInvalidWorkerConfig, got %v", err)
+	}
+
+	// 25 is within 80% of 50 (40)
+	err = w.ValidateAgainstDBPool(50)
+	if err != nil {
+		t.Fatalf("expected nil error when concurrency <= 80%% of db max conns, got %v", err)
 	}
 }
 

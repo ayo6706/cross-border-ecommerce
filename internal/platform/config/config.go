@@ -11,13 +11,15 @@ import (
 )
 
 var (
-	ErrInvalidPort       = errors.New("server port must be a valid integer between 1 and 65535")
-	ErrInvalidTimeout    = errors.New("timeout values must be strictly positive")
-	ErrEmptyDatabaseURL  = errors.New("DATABASE_URL is required")
-	ErrEmptyRedisURL     = errors.New("REDIS_URL is required")
-	ErrInvalidPoolLimits = errors.New("database connection pool minimum cannot exceed maximum")
-	ErrInvalidLogLevel   = errors.New("log level must be one of 'debug', 'info', 'warn', 'error'")
-	ErrInvalidLogFormat  = errors.New("log format must be one of 'json' or 'text'")
+	ErrInvalidPort         = errors.New("server port must be a valid integer between 1 and 65535")
+	ErrInvalidTimeout      = errors.New("timeout values must be strictly positive")
+	ErrEmptyDatabaseURL    = errors.New("DATABASE_URL is required")
+	ErrEmptyRedisURL       = errors.New("REDIS_URL is required")
+	ErrInvalidPoolLimits   = errors.New("database connection pool minimum cannot exceed maximum")
+	ErrInvalidLogLevel     = errors.New("log level must be one of 'debug', 'info', 'warn', 'error'")
+	ErrInvalidLogFormat    = errors.New("log format must be one of 'json' or 'text'")
+	ErrInvalidStreamConfig = errors.New("invalid stream configuration")
+	ErrInvalidWorkerConfig = errors.New("invalid worker configuration")
 )
 
 type ServerConfig struct {
@@ -60,12 +62,58 @@ func (r RedisConfig) Validate() error {
 }
 
 type StreamConfig struct {
-	Retention time.Duration
+	Retention      time.Duration
+	ConsumerBlock  time.Duration
+	ClaimMinIdle   time.Duration
+	ClaimInterval  time.Duration
+	ConsumerBatch  int
+	HandlerTimeout time.Duration
 }
 
 func (s StreamConfig) Validate() error {
-	if s.Retention <= 0 {
+	if s.Retention <= 0 || s.ConsumerBlock <= 0 || s.ClaimMinIdle <= 0 || s.ClaimInterval <= 0 || s.HandlerTimeout <= 0 {
 		return fmt.Errorf("%w for stream configuration", ErrInvalidTimeout)
+	}
+	if s.ConsumerBatch <= 0 || s.ConsumerBatch > 1000 {
+		return fmt.Errorf("%w: consumer batch must be between 1 and 1000, got %d", ErrInvalidStreamConfig, s.ConsumerBatch)
+	}
+	if s.ClaimMinIdle <= s.HandlerTimeout {
+		return fmt.Errorf("%w: claim min idle (%v) must be strictly greater than handler timeout (%v)",
+			ErrInvalidStreamConfig, s.ClaimMinIdle, s.HandlerTimeout)
+	}
+	return nil
+}
+
+type WorkerConfig struct {
+	Concurrency  int
+	QueueSize    int
+	DrainTimeout time.Duration
+}
+
+func (w WorkerConfig) Validate() error {
+	if w.Concurrency <= 0 {
+		return fmt.Errorf("%w: worker concurrency must be strictly positive, got %d", ErrInvalidWorkerConfig, w.Concurrency)
+	}
+	if w.QueueSize < 0 {
+		return fmt.Errorf("%w: worker queue size cannot be negative, got %d", ErrInvalidWorkerConfig, w.QueueSize)
+	}
+	if w.DrainTimeout <= 0 {
+		return fmt.Errorf("%w for worker drain timeout", ErrInvalidTimeout)
+	}
+	return nil
+}
+
+func (w WorkerConfig) ValidateAgainstDBPool(dbMaxConns int32) error {
+	if err := w.Validate(); err != nil {
+		return err
+	}
+	if dbMaxConns <= 0 {
+		return fmt.Errorf("%w: database max connections must be strictly positive, got %d", ErrInvalidWorkerConfig, dbMaxConns)
+	}
+	maxAllowed := int(float64(dbMaxConns) * 0.8)
+	if w.Concurrency > maxAllowed {
+		return fmt.Errorf("%w: WORKER_CONCURRENCY (%d) exceeds 80%% of DB_MAX_CONNS (%d, max %d)",
+			ErrInvalidWorkerConfig, w.Concurrency, dbMaxConns, maxAllowed)
 	}
 	return nil
 }
@@ -98,6 +146,7 @@ type Config struct {
 	Redis    RedisConfig
 	Stream   StreamConfig
 	Outbox   OutboxConfig
+	Worker   WorkerConfig
 }
 
 func Load() (*Config, error) {
@@ -189,6 +238,46 @@ func LoadFromLookup(lookup func(string) string) (*Config, error) {
 		return nil, fmt.Errorf("invalid STREAM_RETENTION: %w", err)
 	}
 
+	streamConsumerBlock, err := getEnvDuration(lookup, "STREAM_CONSUMER_BLOCK", 2*time.Second)
+	if err != nil {
+		return nil, fmt.Errorf("invalid STREAM_CONSUMER_BLOCK: %w", err)
+	}
+
+	streamClaimMinIdle, err := getEnvDuration(lookup, "STREAM_CLAIM_MIN_IDLE", 30*time.Second)
+	if err != nil {
+		return nil, fmt.Errorf("invalid STREAM_CLAIM_MIN_IDLE: %w", err)
+	}
+
+	streamClaimInterval, err := getEnvDuration(lookup, "STREAM_CLAIM_INTERVAL", 10*time.Second)
+	if err != nil {
+		return nil, fmt.Errorf("invalid STREAM_CLAIM_INTERVAL: %w", err)
+	}
+
+	streamConsumerBatch, err := getEnvInt(lookup, "STREAM_CONSUMER_BATCH", 10)
+	if err != nil {
+		return nil, fmt.Errorf("invalid STREAM_CONSUMER_BATCH: %w", err)
+	}
+
+	streamHandlerTimeout, err := getEnvDuration(lookup, "STREAM_HANDLER_TIMEOUT", 5*time.Second)
+	if err != nil {
+		return nil, fmt.Errorf("invalid STREAM_HANDLER_TIMEOUT: %w", err)
+	}
+
+	workerConcurrency, err := getEnvInt(lookup, "WORKER_CONCURRENCY", 10)
+	if err != nil {
+		return nil, fmt.Errorf("invalid WORKER_CONCURRENCY: %w", err)
+	}
+
+	workerQueueSize, err := getEnvInt(lookup, "WORKER_QUEUE_SIZE", 10)
+	if err != nil {
+		return nil, fmt.Errorf("invalid WORKER_QUEUE_SIZE: %w", err)
+	}
+
+	workerDrainTimeout, err := getEnvDuration(lookup, "WORKER_DRAIN_TIMEOUT", 10*time.Second)
+	if err != nil {
+		return nil, fmt.Errorf("invalid WORKER_DRAIN_TIMEOUT: %w", err)
+	}
+
 	addSource, err := getEnvBool(lookup, "LOG_ADD_SOURCE", false)
 	if err != nil {
 		return nil, fmt.Errorf("invalid LOG_ADD_SOURCE: %w", err)
@@ -228,7 +317,17 @@ func LoadFromLookup(lookup func(string) string) (*Config, error) {
 			URL: getEnvString(lookup, "REDIS_URL", ""),
 		},
 		Stream: StreamConfig{
-			Retention: streamRetention,
+			Retention:      streamRetention,
+			ConsumerBlock:  streamConsumerBlock,
+			ClaimMinIdle:   streamClaimMinIdle,
+			ClaimInterval:  streamClaimInterval,
+			ConsumerBatch:  streamConsumerBatch,
+			HandlerTimeout: streamHandlerTimeout,
+		},
+		Worker: WorkerConfig{
+			Concurrency:  workerConcurrency,
+			QueueSize:    workerQueueSize,
+			DrainTimeout: workerDrainTimeout,
 		},
 		Outbox: OutboxConfig{
 			BatchSize:    outboxBatchSize,
@@ -282,6 +381,10 @@ func (c *Config) Validate() error {
 	}
 
 	if err := c.Stream.Validate(); err != nil {
+		return err
+	}
+
+	if err := c.Worker.Validate(); err != nil {
 		return err
 	}
 
