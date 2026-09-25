@@ -8,6 +8,18 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type IdempotencyKey struct {
+	Scope          string             `json:"scope"`
+	Key            string             `json:"key"`
+	Status         string             `json:"status"`
+	PayloadHash    []byte             `json:"payload_hash"`
+	LeaseToken     pgtype.UUID        `json:"lease_token"`
+	LeaseExpiresAt pgtype.Timestamptz `json:"lease_expires_at"`
+	Attempts       int32              `json:"attempts"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	CompletedAt    pgtype.Timestamptz `json:"completed_at"`
+}
+
 type IngestionRun struct {
 	ID               pgtype.UUID        `json:"id"`
 	SourceID         string             `json:"source_id"`

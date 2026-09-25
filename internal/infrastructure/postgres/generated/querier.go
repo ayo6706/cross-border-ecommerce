@@ -11,9 +11,11 @@ import (
 )
 
 type Querier interface {
+	ClaimIdempotencyKey(ctx context.Context, arg ClaimIdempotencyKeyParams) (IdempotencyKey, error)
 	ClaimNextRunProcessing(ctx context.Context, arg ClaimNextRunProcessingParams) (IngestionRunProcessing, error)
 	ClaimOutboxBatch(ctx context.Context, arg ClaimOutboxBatchParams) ([]ClaimOutboxBatchRow, error)
 	ClaimSpecificRunProcessing(ctx context.Context, arg ClaimSpecificRunProcessingParams) (IngestionRunProcessing, error)
+	CompleteIdempotencyKey(ctx context.Context, arg CompleteIdempotencyKeyParams) (int64, error)
 	CompleteRunProcessing(ctx context.Context, arg CompleteRunProcessingParams) (IngestionRunProcessing, error)
 	CreateIngestionRun(ctx context.Context, arg CreateIngestionRunParams) (IngestionRun, error)
 	CreateOutboxEvent(ctx context.Context, arg CreateOutboxEventParams) error
@@ -26,6 +28,7 @@ type Querier interface {
 	DeleteSource(ctx context.Context, id string) error
 	EnsureRunProcessingExists(ctx context.Context, runID pgtype.UUID) (IngestionRunProcessing, error)
 	FailRunProcessing(ctx context.Context, arg FailRunProcessingParams) (IngestionRunProcessing, error)
+	GetIdempotencyKey(ctx context.Context, arg GetIdempotencyKeyParams) (IdempotencyKey, error)
 	GetIngestionRunByID(ctx context.Context, id pgtype.UUID) (IngestionRun, error)
 	GetLatestIngestionRunBySource(ctx context.Context, sourceID string) (IngestionRun, error)
 	GetLatestProductVersion(ctx context.Context, productID pgtype.UUID) (GetLatestProductVersionRow, error)
@@ -50,6 +53,7 @@ type Querier interface {
 	ListSources(ctx context.Context) ([]Source, error)
 	MarkOutboxPublished(ctx context.Context, arg MarkOutboxPublishedParams) (int64, error)
 	RecordOutboxPublishFailure(ctx context.Context, arg RecordOutboxPublishFailureParams) (int64, error)
+	ReleaseIdempotencyKey(ctx context.Context, arg ReleaseIdempotencyKeyParams) (int64, error)
 	ReleaseOutboxClaims(ctx context.Context, arg ReleaseOutboxClaimsParams) (int64, error)
 	ReleaseRunProcessingClaim(ctx context.Context, arg ReleaseRunProcessingClaimParams) (IngestionRunProcessing, error)
 	ResetRunProcessingFromStart(ctx context.Context, runID pgtype.UUID) (IngestionRunProcessing, error)
