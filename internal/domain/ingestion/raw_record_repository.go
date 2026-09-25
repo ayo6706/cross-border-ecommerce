@@ -13,4 +13,5 @@ type RawRecordRepository interface {
 	FindLatestBySourceAndExternalID(ctx context.Context, sourceID source.ID, externalProductID string) (*RawRecord, error)
 	ListBySourceAndExternalID(ctx context.Context, sourceID source.ID, externalProductID string, limit int) ([]*RawRecord, error)
 	ListByRunID(ctx context.Context, runID string, limit int) ([]*RawRecord, error)
+	ListKeysetByRunID(ctx context.Context, runID string, cursorID *string, limit int) ([]*RawRecord, error)
 }

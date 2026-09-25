@@ -13,6 +13,14 @@ type ErrorBudget struct {
 // DefaultErrorBudget allows up to 5% skipped rows once at least 100 rows have been seen.
 var DefaultErrorBudget = ErrorBudget{MaxErrorRate: 0.05, MinSampleRows: 100}
 
+// OrDefault returns DefaultErrorBudget if b is the zero value (or has non-positive configuration).
+func (b ErrorBudget) OrDefault() ErrorBudget {
+	if b.MaxErrorRate <= 0 && b.MinSampleRows <= 0 {
+		return DefaultErrorBudget
+	}
+	return b
+}
+
 // Check returns ErrErrorBudgetExceeded when failed/seen exceeds MaxErrorRate.
 // A zero MaxErrorRate disables the budget.
 func (b ErrorBudget) Check(seen, failed int) error {

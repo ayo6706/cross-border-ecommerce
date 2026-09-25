@@ -260,6 +260,14 @@ func (s *Source) ParseFeedConfig() (*FeedConfig, error) {
 	return cfg, nil
 }
 
+// GetFieldMapping extracts and validates the FieldMapping configured on the source.
+func (s *Source) GetFieldMapping() (*product.FieldMapping, error) {
+	if s == nil {
+		return nil, ErrInvalidSourceState
+	}
+	return parseFieldMapping(s.Config["field_mapping"])
+}
+
 func parseFieldMapping(raw any) (*product.FieldMapping, error) {
 	if raw == nil {
 		return nil, nil
