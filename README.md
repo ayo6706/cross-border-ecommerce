@@ -60,6 +60,9 @@ Stream Consumer & Worker Pool Tuning Variables (with defaults):
 - `WORKER_QUEUE_SIZE`: Buffer capacity of the worker task queue (default: `10`).
 - `WORKER_DRAIN_TIMEOUT`: Graceful shutdown drain timeout before cancelling in-flight tasks (default: `10s`).
 
+Idempotency Tuning Variables (with defaults):
+- `IDEMPOTENCY_LEASE_TTL`: Execution lease TTL for in-flight stream handlers (default: `30s`, must be strictly > `STREAM_HANDLER_TIMEOUT`).
+
 Source credentials are never stored in source config. API sources reference
 secrets instead, e.g. `"auth_kind": "bearer", "auth_ref": "env:SUPPLIER_TOKEN"`,
 and the value is read from the environment when the adapter is built.

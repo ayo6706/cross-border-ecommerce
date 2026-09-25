@@ -14,11 +14,14 @@ import (
 	"testing"
 	"time"
 
+	appIdempotency "github.com/ayo6706/cross-border-ecommerce/internal/application/idempotency"
 	appMessaging "github.com/ayo6706/cross-border-ecommerce/internal/application/messaging"
 	appOutbox "github.com/ayo6706/cross-border-ecommerce/internal/application/outbox"
+	infraPostgres "github.com/ayo6706/cross-border-ecommerce/internal/infrastructure/postgres"
 	infraRedis "github.com/ayo6706/cross-border-ecommerce/internal/infrastructure/redis"
 	"github.com/ayo6706/cross-border-ecommerce/internal/platform/uuid"
 	"github.com/ayo6706/cross-border-ecommerce/internal/platform/worker"
+	"github.com/ayo6706/cross-border-ecommerce/migrations"
 	goredis "github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -1297,14 +1300,17 @@ func TestConsumer_Live(t *testing.T) {
 		require.NoError(t, err)
 
 		handlerBlocked := make(chan struct{})
+		var handlerBlockedOnce sync.Once
 		releaseHandlers := make(chan struct{})
 		var activeHandlers, processed atomic.Int32
 
 		go func() {
 			_ = consumer.Run(ctx, func(handlerCtx context.Context, msg appMessaging.Message) error {
 				count := activeHandlers.Add(1)
+				// After release, the count can reach 2 again; a second close would panic
+				// and leave that message pending past the assertion window.
 				if count == 2 {
-					close(handlerBlocked)
+					handlerBlockedOnce.Do(func() { close(handlerBlocked) })
 				}
 				<-releaseHandlers
 				activeHandlers.Add(-1)
@@ -1619,6 +1625,256 @@ func TestConsumer_Live(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, int64(1), pend.Count, "un-drained message must remain pending")
 	})
+
+	t.Run("idempotent_cross_consumer", func(t *testing.T) {
+		pgConnStr := os.Getenv("TEST_DATABASE_URL")
+		if pgConnStr == "" {
+			t.Skip("skipping postgres integration part of test: TEST_DATABASE_URL not set")
+		}
+
+		ctx := context.Background()
+
+		pgCtx, pgCancel := context.WithTimeout(ctx, 10*time.Second)
+		defer pgCancel()
+
+		pgPool, err := infraPostgres.NewPool(pgCtx, pgConnStr,
+			infraPostgres.WithConnectTimeout(3*time.Second),
+			infraPostgres.WithMaxConns(10),
+			infraPostgres.WithMinConns(2),
+		)
+		require.NoError(t, err)
+		defer pgPool.Close()
+
+		migrator, err := infraPostgres.NewMigrator(pgPool, migrations.FS)
+		require.NoError(t, err)
+		require.NoError(t, migrator.Up(pgCtx))
+
+		idempotencyRepo, err := infraPostgres.NewIdempotencyRepository(pgPool)
+		require.NoError(t, err)
+
+		_, err = pgPool.Exec(pgCtx, `
+			CREATE TABLE IF NOT EXISTS test_e2e_effects (
+				id TEXT PRIMARY KEY,
+				event_id TEXT NOT NULL,
+				consumer TEXT NOT NULL,
+				created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+			);
+			TRUNCATE test_e2e_effects;
+		`)
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			cCtx, cCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cCancel()
+			_, _ = pgPool.Exec(cCtx, "DROP TABLE IF EXISTS test_e2e_effects")
+		})
+
+		stream := uniqueTestStream("idempe2e")
+		group := "e2e-consumer-group"
+		eventID, err := uuid.NewString()
+		require.NoError(t, err)
+		eventID = "evt-e2e-" + eventID
+
+		guard, err := appIdempotency.NewGuard(idempotencyRepo, 10*time.Second, slog.Default())
+		require.NoError(t, err)
+
+		var executionCount int32
+		c1InHandler := make(chan struct{})
+		var c1Signaled sync.Once
+		c1AllowCommit := make(chan struct{})
+
+		// The first invocation deliberately overruns HandlerTimeout (80ms): it ignores ctx while
+		// blocked and writes on a detached context. This simulates a handler that outlives its
+		// timeout (or waited in the queue) past ClaimMinIdle, the case where another consumer
+		// XAUTOCLAIMs a message that is still running. Well-behaved handlers honour ctx.
+		rawHandler := func(ctx context.Context, msg appMessaging.Message) error {
+			atomic.AddInt32(&executionCount, 1)
+
+			c1Signaled.Do(func() {
+				close(c1InHandler)
+				<-c1AllowCommit
+			})
+
+			dbCtx, dbCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			defer dbCancel()
+
+			tx, err := pgPool.Begin(dbCtx)
+			if err != nil {
+				return err
+			}
+			defer func() { _ = tx.Rollback(dbCtx) }()
+
+			_, err = tx.Exec(dbCtx,
+				"INSERT INTO test_e2e_effects (id, event_id, consumer) VALUES ($1, $2, $3)",
+				"effect-"+msg.EventID, msg.EventID, "worker-1",
+			)
+			if err != nil {
+				return err
+			}
+
+			txRepo := idempotencyRepo.WithTx(tx)
+			if err := appIdempotency.CompleteInTx(dbCtx, txRepo); err != nil {
+				return err
+			}
+
+			return tx.Commit(dbCtx)
+
+		}
+
+		wrappedHandler, err := guard.Wrap(group, rawHandler)
+		require.NoError(t, err)
+
+		// 1. Publish event to stream
+		pub := infraRedis.NewPublisherFromClient(client)
+		payload := []byte(`{"order_id":"123","amount":"99.99"}`)
+		err = pub.Publish(ctx, appOutbox.Event{
+			ID:        eventID,
+			EventType: stream,
+			Payload:   payload,
+			CreatedAt: time.Now().UTC(),
+		})
+		require.NoError(t, err)
+
+		// 2. Start Consumer 1: processes the event and pauses in rawHandler before commit
+		cfg1 := infraRedis.ConsumerConfig{
+			Stream:         stream,
+			Group:          group,
+			ConsumerName:   "consumer-1",
+			BatchSize:      10,
+			BlockDuration:  100 * time.Millisecond,
+			ClaimMinIdle:   100 * time.Millisecond,
+			ClaimInterval:  10 * time.Second,
+			ClaimBatchSize: 10,
+			BaseBackoff:    50 * time.Millisecond,
+			MaxBackoff:     200 * time.Millisecond,
+			HandlerTimeout: 80 * time.Millisecond,
+			Concurrency:    2,
+			QueueSize:      2,
+			DrainTimeout:   2 * time.Second,
+		}
+		c1, err := infraRedis.NewConsumer(client, cfg1, slog.Default())
+		require.NoError(t, err)
+
+		c1Ctx, c1Cancel := context.WithCancel(ctx)
+		defer c1Cancel()
+
+		c1Done := make(chan struct{})
+		go func() {
+			defer close(c1Done)
+			_ = c1.Run(c1Ctx, func(ctx context.Context, msg appMessaging.Message) error {
+				hErr := wrappedHandler(ctx, msg)
+				if hErr == nil {
+					c1Cancel()
+				}
+				return hErr
+			})
+		}()
+
+		// Wait until consumer-1 enters handler and acquires Postgres idempotency lease
+		select {
+		case <-c1InHandler:
+		case <-time.After(5 * time.Second):
+			t.Fatal("consumer-1 timed out entering handler")
+		}
+
+		// Verify idempotency key is IN_PROGRESS in Postgres
+		rec, err := idempotencyRepo.GetKey(ctx, group, eventID)
+		require.NoError(t, err)
+		assert.Equal(t, "IN_PROGRESS", rec.Status)
+
+		// Allow idle time to exceed consumer-2's ClaimMinIdle (100ms)
+		time.Sleep(120 * time.Millisecond)
+
+		// 3. Start Consumer 2: claims the message via XAUTOCLAIM while consumer-1 is still processing!
+		c2ConflictSeen := make(chan struct{}, 1)
+		cfg2 := infraRedis.ConsumerConfig{
+			Stream:         stream,
+			Group:          group,
+			ConsumerName:   "consumer-2",
+			BatchSize:      10,
+			BlockDuration:  50 * time.Millisecond,
+			ClaimMinIdle:   100 * time.Millisecond,
+			ClaimInterval:  30 * time.Millisecond,
+			ClaimBatchSize: 10,
+			BaseBackoff:    50 * time.Millisecond,
+			MaxBackoff:     200 * time.Millisecond,
+			HandlerTimeout: 80 * time.Millisecond,
+			Concurrency:    2,
+			QueueSize:      2,
+			DrainTimeout:   2 * time.Second,
+		}
+		c2, err := infraRedis.NewConsumer(client, cfg2, slog.Default())
+		require.NoError(t, err)
+
+		c2Ctx, c2Cancel := context.WithCancel(ctx)
+		defer c2Cancel()
+
+		c2Done := make(chan struct{})
+		go func() {
+			defer close(c2Done)
+			_ = c2.Run(c2Ctx, func(ctx context.Context, msg appMessaging.Message) error {
+				hErr := wrappedHandler(ctx, msg)
+				if errors.Is(hErr, appIdempotency.ErrKeyInProgress) {
+					select {
+					case c2ConflictSeen <- struct{}{}:
+					default:
+					}
+				}
+				if hErr == nil {
+					c2Cancel()
+				}
+				return hErr
+			})
+		}()
+
+		// Assert consumer-2 attempted to process the autoclaimed message and got ErrKeyInProgress!
+		select {
+		case <-c2ConflictSeen:
+		case <-time.After(5 * time.Second):
+			t.Fatal("consumer-2 timed out waiting for concurrent claim collision (ErrKeyInProgress)")
+		}
+
+		// 4. Now release consumer-1 to complete its transaction and commit to Postgres
+		close(c1AllowCommit)
+
+		select {
+		case <-c1Done:
+		case <-time.After(5 * time.Second):
+			t.Fatal("consumer-1 timed out after unblocking commit")
+		}
+
+		assert.Equal(t, int32(1), atomic.LoadInt32(&executionCount), "handler must be executed once by consumer-1")
+
+		// 5. Force redelivery of identical event to stream (simulating outbox republishing or broker redelivery)
+		err = pub.Publish(ctx, appOutbox.Event{
+			ID:        eventID,
+			EventType: stream,
+			Payload:   payload,
+			CreatedAt: time.Now().UTC(),
+		})
+		require.NoError(t, err)
+
+		// Consumer-2 will read the redelivery; this time key is COMPLETED so it skips and ACKs
+		select {
+		case <-c2Done:
+		case <-time.After(5 * time.Second):
+			t.Fatal("consumer-2 timed out finishing after consumer-1 completed")
+		}
+
+		// Verify execution count remains exactly 1!
+		assert.Equal(t, int32(1), atomic.LoadInt32(&executionCount), "handler must NOT run again on redelivery / autoclaim")
+
+		// Exactly one effect row in PostgreSQL
+		var effectRows int
+		err = pgPool.QueryRow(ctx, "SELECT COUNT(*) FROM test_e2e_effects WHERE event_id = $1", eventID).Scan(&effectRows)
+		require.NoError(t, err)
+		assert.Equal(t, 1, effectRows, "exactly one effect row must be committed in DB")
+
+		// Stream message was acknowledged (no pending messages in PEL)
+		pend, err := client.XPending(ctx, stream, group).Result()
+		require.NoError(t, err)
+		assert.Equal(t, int64(0), pend.Count, "autoclaimed message must be ACKed after skip")
+	})
+
 }
 
 func TestPublisher_Live(t *testing.T) {
