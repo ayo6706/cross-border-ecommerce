@@ -451,7 +451,7 @@ func (p *RunProcessor) handleNewTransition(
 		return fmt.Errorf("marshal outbox event payload: %w", err)
 	}
 
-	if err := repos.Outbox.CreateEvent(ctx, "product", prodID, "product.changed", eventPayload); err != nil {
+	if err := repos.Outbox.CreateEvent(ctx, domainProduct.AggregateTypeProduct, prodID, domainProduct.EventTypeProductChanged, eventPayload); err != nil {
 		return fmt.Errorf("create outbox event: %w", err)
 	}
 
@@ -555,7 +555,7 @@ func (p *RunProcessor) handleChangedTransition(
 		return fmt.Errorf("marshal outbox event payload: %w", err)
 	}
 
-	if err := repos.Outbox.CreateEvent(ctx, "product", string(snapshot.ProductID), "product.changed", eventPayload); err != nil {
+	if err := repos.Outbox.CreateEvent(ctx, domainProduct.AggregateTypeProduct, string(snapshot.ProductID), domainProduct.EventTypeProductChanged, eventPayload); err != nil {
 		return fmt.Errorf("create outbox event: %w", err)
 	}
 

@@ -36,9 +36,16 @@ Infrastructure Adapters (internal/infrastructure/)
 
 ### Configuration
 
-`DATABASE_URL` is required; there is no built-in default. The Makefile sets it
-(and `TEST_DATABASE_URL`) to the docker-compose databases, so `make` targets work
-out of the box. Export either variable to point elsewhere.
+`DATABASE_URL` is required for all database-backed services.
+`REDIS_URL` is required by the background worker (`cmd/worker`) for publishing outbox events to Redis Streams.
+
+Outbox Relay Tuning Variables (with defaults):
+- `OUTBOX_BATCH_SIZE`: Batch size for outbox claim query (default: `100`, range 1–1000).
+- `OUTBOX_POLL_INTERVAL`: Polling interval when backlog is empty (default: `500ms`).
+- `OUTBOX_LEASE`: Claim lease duration (default: `30s`).
+- `OUTBOX_BASE_BACKOFF`: Base retry backoff duration (default: `1s`).
+- `OUTBOX_MAX_BACKOFF`: Maximum retry backoff duration (default: `5m`).
+- `OUTBOX_MAX_ATTEMPTS`: Max retry attempts before marking an event as `FAILED` (default: `10`).
 
 Source credentials are never stored in source config. API sources reference
 secrets instead, e.g. `"auth_kind": "bearer", "auth_ref": "env:SUPPLIER_TOKEN"`,
