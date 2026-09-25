@@ -7,17 +7,27 @@ import (
 	"strings"
 	"time"
 
+	appMessaging "github.com/ayo6706/cross-border-ecommerce/internal/application/messaging"
 	appOutbox "github.com/ayo6706/cross-border-ecommerce/internal/application/outbox"
 	"github.com/redis/go-redis/v9"
 )
 
 var _ appOutbox.Publisher = (*Publisher)(nil)
 
-type Publisher struct {
-	client *redis.Client
+type PublisherOption func(*Publisher)
+
+func WithRetention(retention time.Duration) PublisherOption {
+	return func(p *Publisher) {
+		p.retention = retention
+	}
 }
 
-func NewPublisher(ctx context.Context, redisURL string) (*Publisher, error) {
+type Publisher struct {
+	client    *redis.Client
+	retention time.Duration
+}
+
+func NewPublisher(ctx context.Context, redisURL string, opts ...PublisherOption) (*Publisher, error) {
 	if strings.TrimSpace(redisURL) == "" {
 		return nil, errors.New("redis URL cannot be empty")
 	}
@@ -33,11 +43,20 @@ func NewPublisher(ctx context.Context, redisURL string) (*Publisher, error) {
 		return nil, fmt.Errorf("ping redis: %w", err)
 	}
 
-	return &Publisher{client: client}, nil
+	p := &Publisher{client: client}
+	for _, opt := range opts {
+		opt(p)
+	}
+
+	return p, nil
 }
 
-func NewPublisherFromClient(client *redis.Client) *Publisher {
-	return &Publisher{client: client}
+func NewPublisherFromClient(client *redis.Client, opts ...PublisherOption) *Publisher {
+	p := &Publisher{client: client}
+	for _, opt := range opts {
+		opt(p)
+	}
+	return p
 }
 
 func (p *Publisher) Close() error {
@@ -47,9 +66,13 @@ func (p *Publisher) Close() error {
 	return nil
 }
 
+func (p *Publisher) Retention() time.Duration {
+	return p.retention
+}
+
 func (p *Publisher) Publish(ctx context.Context, e appOutbox.Event) error {
 	if p.client == nil {
-		return fmt.Errorf("%w: redis client is nil", appOutbox.ErrBrokerUnavailable)
+		return fmt.Errorf("%w: redis client is nil", appMessaging.ErrBrokerUnavailable)
 	}
 
 	stream := e.EventType
@@ -57,20 +80,22 @@ func (p *Publisher) Publish(ctx context.Context, e appOutbox.Event) error {
 		return errors.New("event type stream key cannot be empty")
 	}
 
-	values := map[string]any{
-		"event_id":       e.ID,
-		"aggregate_type": e.AggregateType,
-		"aggregate_id":   e.AggregateID,
-		"event_type":     e.EventType,
-		"payload":        e.Payload,
-		"created_at":     e.CreatedAt.UTC().Format(time.RFC3339Nano),
-	}
+	values := EncodeEvent(e)
 
-	err := p.client.XAdd(ctx, &redis.XAddArgs{
+	args := &redis.XAddArgs{
 		Stream: stream,
 		Values: values,
-	}).Err()
+	}
 
+	if p.retention > 0 {
+		cutoff := time.Now().Add(-p.retention)
+		if ms := cutoff.UnixMilli(); ms > 0 {
+			args.MinID = fmt.Sprintf("%d-0", ms)
+			args.Approx = true
+		}
+	}
+
+	err := p.client.XAdd(ctx, args).Err()
 	if err != nil {
 		return ClassifyRedisError(err, ctx.Err())
 	}
@@ -88,7 +113,7 @@ func ClassifyRedisError(err error, callerCtxErr error) error {
 	}
 
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		return fmt.Errorf("%w: %w", appOutbox.ErrBrokerUnavailable, err)
+		return fmt.Errorf("%w: %w", appMessaging.ErrBrokerUnavailable, err)
 	}
 
 	var redisErr redis.Error
@@ -104,12 +129,12 @@ func ClassifyRedisError(err error, callerCtxErr error) error {
 			"CLUSTERDOWN",
 		} {
 			if strings.HasPrefix(msg, prefix) || strings.HasPrefix(msg, "ERR "+prefix) {
-				return fmt.Errorf("%w: %w", appOutbox.ErrBrokerUnavailable, err)
+				return fmt.Errorf("%w: %w", appMessaging.ErrBrokerUnavailable, err)
 			}
 		}
 
 		return err
 	}
 
-	return fmt.Errorf("%w: %w", appOutbox.ErrBrokerUnavailable, err)
+	return fmt.Errorf("%w: %w", appMessaging.ErrBrokerUnavailable, err)
 }

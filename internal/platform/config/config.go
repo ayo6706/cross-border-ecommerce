@@ -59,6 +59,17 @@ func (r RedisConfig) Validate() error {
 	return nil
 }
 
+type StreamConfig struct {
+	Retention time.Duration
+}
+
+func (s StreamConfig) Validate() error {
+	if s.Retention <= 0 {
+		return fmt.Errorf("%w for stream configuration", ErrInvalidTimeout)
+	}
+	return nil
+}
+
 type OutboxConfig struct {
 	BatchSize    int
 	PollInterval time.Duration
@@ -85,6 +96,7 @@ type Config struct {
 	Log      LogConfig
 	App      AppConfig
 	Redis    RedisConfig
+	Stream   StreamConfig
 	Outbox   OutboxConfig
 }
 
@@ -172,6 +184,11 @@ func LoadFromLookup(lookup func(string) string) (*Config, error) {
 		return nil, fmt.Errorf("invalid OUTBOX_MAX_ATTEMPTS: %w", err)
 	}
 
+	streamRetention, err := getEnvDuration(lookup, "STREAM_RETENTION", 168*time.Hour)
+	if err != nil {
+		return nil, fmt.Errorf("invalid STREAM_RETENTION: %w", err)
+	}
+
 	addSource, err := getEnvBool(lookup, "LOG_ADD_SOURCE", false)
 	if err != nil {
 		return nil, fmt.Errorf("invalid LOG_ADD_SOURCE: %w", err)
@@ -209,6 +226,9 @@ func LoadFromLookup(lookup func(string) string) (*Config, error) {
 		},
 		Redis: RedisConfig{
 			URL: getEnvString(lookup, "REDIS_URL", ""),
+		},
+		Stream: StreamConfig{
+			Retention: streamRetention,
 		},
 		Outbox: OutboxConfig{
 			BatchSize:    outboxBatchSize,
@@ -259,6 +279,10 @@ func (c *Config) Validate() error {
 	case "json", "text":
 	default:
 		return fmt.Errorf("%w: '%s'", ErrInvalidLogFormat, c.Log.Format)
+	}
+
+	if err := c.Stream.Validate(); err != nil {
+		return err
 	}
 
 	return nil

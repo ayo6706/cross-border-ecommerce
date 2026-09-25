@@ -68,6 +68,9 @@ func TestLoad_Defaults(t *testing.T) {
 	if cfg.Redis.URL != "" {
 		t.Errorf("expected default Redis URL empty, got %s", cfg.Redis.URL)
 	}
+	if cfg.Stream.Retention != 168*time.Hour {
+		t.Errorf("expected default Stream Retention 168h, got %v", cfg.Stream.Retention)
+	}
 	if cfg.Outbox.BatchSize != 100 {
 		t.Errorf("expected default Outbox BatchSize 100, got %d", cfg.Outbox.BatchSize)
 	}
@@ -109,6 +112,7 @@ func TestLoad_CustomOverrides(t *testing.T) {
 		"APP_ENV":                 "production",
 		"SERVICE_NAME":            "trade-api",
 		"REDIS_URL":               "redis://redis.internal:6379",
+		"STREAM_RETENTION":        "72h",
 		"OUTBOX_BATCH_SIZE":       "200",
 		"OUTBOX_POLL_INTERVAL":    "1s",
 		"OUTBOX_LEASE":            "45s",
@@ -147,6 +151,9 @@ func TestLoad_CustomOverrides(t *testing.T) {
 	}
 	if cfg.Redis.URL != "redis://redis.internal:6379" {
 		t.Errorf("expected Redis URL redis://redis.internal:6379, got %s", cfg.Redis.URL)
+	}
+	if cfg.Stream.Retention != 72*time.Hour {
+		t.Errorf("expected Stream Retention 72h, got %v", cfg.Stream.Retention)
 	}
 	if cfg.Outbox.BatchSize != 200 {
 		t.Errorf("expected Outbox BatchSize 200, got %d", cfg.Outbox.BatchSize)
@@ -240,6 +247,13 @@ func TestConfig_ValidationFailures(t *testing.T) {
 			},
 			expectedErr: config.ErrInvalidLogFormat,
 		},
+		{
+			name: "negative stream retention",
+			modify: func(c *config.Config) {
+				c.Stream.Retention = 0
+			},
+			expectedErr: config.ErrInvalidTimeout,
+		},
 	}
 
 	for _, tc := range tests {
@@ -289,6 +303,10 @@ func TestLoad_InvalidEnvironmentValues(t *testing.T) {
 		{
 			name: "malformed outbox poll interval",
 			env:  map[string]string{"OUTBOX_POLL_INTERVAL": "invalid-duration"},
+		},
+		{
+			name: "malformed stream retention",
+			env:  map[string]string{"STREAM_RETENTION": "invalid-duration"},
 		},
 	}
 

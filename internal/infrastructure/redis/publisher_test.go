@@ -7,7 +7,7 @@ import (
 	"net"
 	"testing"
 
-	appOutbox "github.com/ayo6706/cross-border-ecommerce/internal/application/outbox"
+	appMessaging "github.com/ayo6706/cross-border-ecommerce/internal/application/messaging"
 	goredis "github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -30,7 +30,6 @@ func (e customRedisError) RedisError()   {}
 
 var _ goredis.Error = customRedisError("")
 
-// U6: Redis error classification table
 func TestClassifyRedisError(t *testing.T) {
 	t.Parallel()
 
@@ -63,49 +62,49 @@ func TestClassifyRedisError(t *testing.T) {
 			name:         "client timeout with live caller ctx returns ErrBrokerUnavailable",
 			err:          context.DeadlineExceeded,
 			callerCtxErr: nil,
-			expectedWrap: appOutbox.ErrBrokerUnavailable,
+			expectedWrap: appMessaging.ErrBrokerUnavailable,
 		},
 		{
 			name:         "redis LOADING error returns ErrBrokerUnavailable",
 			err:          customRedisError("LOADING Redis is loading the dataset in memory"),
 			callerCtxErr: nil,
-			expectedWrap: appOutbox.ErrBrokerUnavailable,
+			expectedWrap: appMessaging.ErrBrokerUnavailable,
 		},
 		{
 			name:         "redis READONLY error returns ErrBrokerUnavailable",
 			err:          customRedisError("READONLY You can't write against a read only replica"),
 			callerCtxErr: nil,
-			expectedWrap: appOutbox.ErrBrokerUnavailable,
+			expectedWrap: appMessaging.ErrBrokerUnavailable,
 		},
 		{
 			name:         "redis MASTERDOWN error returns ErrBrokerUnavailable",
 			err:          customRedisError("MASTERDOWN Link with MASTER is down"),
 			callerCtxErr: nil,
-			expectedWrap: appOutbox.ErrBrokerUnavailable,
+			expectedWrap: appMessaging.ErrBrokerUnavailable,
 		},
 		{
 			name:         "redis OOM error returns ErrBrokerUnavailable",
 			err:          customRedisError("OOM command not allowed when used memory > 'maxmemory'"),
 			callerCtxErr: nil,
-			expectedWrap: appOutbox.ErrBrokerUnavailable,
+			expectedWrap: appMessaging.ErrBrokerUnavailable,
 		},
 		{
 			name:         "redis BUSY error returns ErrBrokerUnavailable",
 			err:          customRedisError("BUSY Redis is busy running a script"),
 			callerCtxErr: nil,
-			expectedWrap: appOutbox.ErrBrokerUnavailable,
+			expectedWrap: appMessaging.ErrBrokerUnavailable,
 		},
 		{
 			name:         "redis TRYAGAIN error returns ErrBrokerUnavailable",
 			err:          customRedisError("TRYAGAIN Multiple keys request during rehashing"),
 			callerCtxErr: nil,
-			expectedWrap: appOutbox.ErrBrokerUnavailable,
+			expectedWrap: appMessaging.ErrBrokerUnavailable,
 		},
 		{
 			name:         "redis CLUSTERDOWN error returns ErrBrokerUnavailable",
 			err:          customRedisError("CLUSTERDOWN Hash slot not served"),
 			callerCtxErr: nil,
-			expectedWrap: appOutbox.ErrBrokerUnavailable,
+			expectedWrap: appMessaging.ErrBrokerUnavailable,
 		},
 		{
 			name:         "redis WRONGTYPE error is treated as per-event poison error",
@@ -123,13 +122,13 @@ func TestClassifyRedisError(t *testing.T) {
 			name:         "network error returns ErrBrokerUnavailable",
 			err:          &customNetError{msg: "connection refused"},
 			callerCtxErr: nil,
-			expectedWrap: appOutbox.ErrBrokerUnavailable,
+			expectedWrap: appMessaging.ErrBrokerUnavailable,
 		},
 		{
 			name:         "EOF error returns ErrBrokerUnavailable",
 			err:          io.EOF,
 			callerCtxErr: nil,
-			expectedWrap: appOutbox.ErrBrokerUnavailable,
+			expectedWrap: appMessaging.ErrBrokerUnavailable,
 		},
 	}
 
@@ -144,7 +143,7 @@ func TestClassifyRedisError(t *testing.T) {
 			}
 			require.Error(t, got)
 			if tt.isPerEvent {
-				assert.False(t, errors.Is(got, appOutbox.ErrBrokerUnavailable))
+				assert.False(t, errors.Is(got, appMessaging.ErrBrokerUnavailable))
 				assert.Equal(t, tt.err.Error(), got.Error())
 			} else {
 				assert.ErrorIs(t, got, tt.expectedWrap)
