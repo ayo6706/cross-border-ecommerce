@@ -53,6 +53,9 @@ type OutboxEvent struct {
 	RetryCount    int32              `json:"retry_count"`
 	CreatedAt     pgtype.Timestamptz `json:"created_at"`
 	ProcessedAt   pgtype.Timestamptz `json:"processed_at"`
+	AvailableAt   pgtype.Timestamptz `json:"available_at"`
+	ClaimToken    pgtype.UUID        `json:"claim_token"`
+	LastError     pgtype.Text        `json:"last_error"`
 }
 
 type Product struct {

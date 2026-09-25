@@ -11,77 +11,176 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const createOutboxEvent = `-- name: CreateOutboxEvent :one
-INSERT INTO outbox_events (
-    id,
-    aggregate_type,
-    aggregate_id,
-    event_type,
-    payload,
-    status,
-    retry_count,
-    created_at
-) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8
-) RETURNING id, aggregate_type, aggregate_id, event_type, payload, status, retry_count, created_at, processed_at
+const claimOutboxBatch = `-- name: ClaimOutboxBatch :many
+WITH candidate AS (
+    SELECT id
+    FROM outbox_events
+    WHERE status = 'PENDING'
+      AND available_at <= NOW()
+    ORDER BY available_at, id
+    LIMIT $3::int
+    FOR UPDATE SKIP LOCKED
+)
+UPDATE outbox_events o
+SET claim_token = $1::uuid,
+    available_at = NOW() + $2::interval
+FROM candidate
+WHERE o.id = candidate.id
+RETURNING o.id, o.aggregate_type, o.aggregate_id, o.event_type, o.payload, o.retry_count, o.created_at
 `
 
-type CreateOutboxEventParams struct {
+type ClaimOutboxBatchParams struct {
+	ClaimToken    pgtype.UUID     `json:"claim_token"`
+	LeaseDuration pgtype.Interval `json:"lease_duration"`
+	BatchSize     int32           `json:"batch_size"`
+}
+
+type ClaimOutboxBatchRow struct {
 	ID            pgtype.UUID        `json:"id"`
 	AggregateType string             `json:"aggregate_type"`
 	AggregateID   string             `json:"aggregate_id"`
 	EventType     string             `json:"event_type"`
 	Payload       []byte             `json:"payload"`
-	Status        string             `json:"status"`
 	RetryCount    int32              `json:"retry_count"`
 	CreatedAt     pgtype.Timestamptz `json:"created_at"`
 }
 
-func (q *Queries) CreateOutboxEvent(ctx context.Context, arg CreateOutboxEventParams) (OutboxEvent, error) {
-	row := q.db.QueryRow(ctx, createOutboxEvent,
+func (q *Queries) ClaimOutboxBatch(ctx context.Context, arg ClaimOutboxBatchParams) ([]ClaimOutboxBatchRow, error) {
+	rows, err := q.db.Query(ctx, claimOutboxBatch, arg.ClaimToken, arg.LeaseDuration, arg.BatchSize)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ClaimOutboxBatchRow{}
+	for rows.Next() {
+		var i ClaimOutboxBatchRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.AggregateType,
+			&i.AggregateID,
+			&i.EventType,
+			&i.Payload,
+			&i.RetryCount,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const createOutboxEvent = `-- name: CreateOutboxEvent :exec
+INSERT INTO outbox_events (
+    id,
+    aggregate_type,
+    aggregate_id,
+    event_type,
+    payload
+) VALUES (
+    $1, $2, $3, $4, $5
+)
+`
+
+type CreateOutboxEventParams struct {
+	ID            pgtype.UUID `json:"id"`
+	AggregateType string      `json:"aggregate_type"`
+	AggregateID   string      `json:"aggregate_id"`
+	EventType     string      `json:"event_type"`
+	Payload       []byte      `json:"payload"`
+}
+
+func (q *Queries) CreateOutboxEvent(ctx context.Context, arg CreateOutboxEventParams) error {
+	_, err := q.db.Exec(ctx, createOutboxEvent,
 		arg.ID,
 		arg.AggregateType,
 		arg.AggregateID,
 		arg.EventType,
 		arg.Payload,
-		arg.Status,
-		arg.RetryCount,
-		arg.CreatedAt,
 	)
-	var i OutboxEvent
-	err := row.Scan(
-		&i.ID,
-		&i.AggregateType,
-		&i.AggregateID,
-		&i.EventType,
-		&i.Payload,
-		&i.Status,
-		&i.RetryCount,
-		&i.CreatedAt,
-		&i.ProcessedAt,
-	)
-	return i, err
+	return err
 }
 
-const getOutboxEventByID = `-- name: GetOutboxEventByID :one
-SELECT id, aggregate_type, aggregate_id, event_type, payload, status, retry_count, created_at, processed_at
-FROM outbox_events
-WHERE id = $1
+const markOutboxPublished = `-- name: MarkOutboxPublished :execrows
+UPDATE outbox_events
+SET status = 'PROCESSED',
+    processed_at = NOW(),
+    claim_token = NULL,
+    last_error = NULL
+WHERE id = ANY($1::uuid[])
+  AND claim_token = $2::uuid
+  AND status = 'PENDING'
 `
 
-func (q *Queries) GetOutboxEventByID(ctx context.Context, id pgtype.UUID) (OutboxEvent, error) {
-	row := q.db.QueryRow(ctx, getOutboxEventByID, id)
-	var i OutboxEvent
-	err := row.Scan(
-		&i.ID,
-		&i.AggregateType,
-		&i.AggregateID,
-		&i.EventType,
-		&i.Payload,
-		&i.Status,
-		&i.RetryCount,
-		&i.CreatedAt,
-		&i.ProcessedAt,
+type MarkOutboxPublishedParams struct {
+	Ids        []pgtype.UUID `json:"ids"`
+	ClaimToken pgtype.UUID   `json:"claim_token"`
+}
+
+func (q *Queries) MarkOutboxPublished(ctx context.Context, arg MarkOutboxPublishedParams) (int64, error) {
+	result, err := q.db.Exec(ctx, markOutboxPublished, arg.Ids, arg.ClaimToken)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const recordOutboxPublishFailure = `-- name: RecordOutboxPublishFailure :execrows
+UPDATE outbox_events
+SET retry_count = retry_count + 1,
+    last_error = $1,
+    claim_token = NULL,
+    available_at = NOW() + $2::interval,
+    status = CASE
+        WHEN retry_count + 1 >= $3::int THEN 'FAILED'
+        ELSE 'PENDING'
+    END
+WHERE id = $4
+  AND claim_token = $5::uuid
+`
+
+type RecordOutboxPublishFailureParams struct {
+	LastError   pgtype.Text     `json:"last_error"`
+	Backoff     pgtype.Interval `json:"backoff"`
+	MaxAttempts int32           `json:"max_attempts"`
+	ID          pgtype.UUID     `json:"id"`
+	ClaimToken  pgtype.UUID     `json:"claim_token"`
+}
+
+func (q *Queries) RecordOutboxPublishFailure(ctx context.Context, arg RecordOutboxPublishFailureParams) (int64, error) {
+	result, err := q.db.Exec(ctx, recordOutboxPublishFailure,
+		arg.LastError,
+		arg.Backoff,
+		arg.MaxAttempts,
+		arg.ID,
+		arg.ClaimToken,
 	)
-	return i, err
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const releaseOutboxClaims = `-- name: ReleaseOutboxClaims :execrows
+UPDATE outbox_events
+SET claim_token = NULL,
+    available_at = NOW()
+WHERE id = ANY($1::uuid[])
+  AND claim_token = $2::uuid
+`
+
+type ReleaseOutboxClaimsParams struct {
+	Ids        []pgtype.UUID `json:"ids"`
+	ClaimToken pgtype.UUID   `json:"claim_token"`
+}
+
+func (q *Queries) ReleaseOutboxClaims(ctx context.Context, arg ReleaseOutboxClaimsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, releaseOutboxClaims, arg.Ids, arg.ClaimToken)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }

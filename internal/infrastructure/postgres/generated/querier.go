@@ -12,10 +12,11 @@ import (
 
 type Querier interface {
 	ClaimNextRunProcessing(ctx context.Context, arg ClaimNextRunProcessingParams) (IngestionRunProcessing, error)
+	ClaimOutboxBatch(ctx context.Context, arg ClaimOutboxBatchParams) ([]ClaimOutboxBatchRow, error)
 	ClaimSpecificRunProcessing(ctx context.Context, arg ClaimSpecificRunProcessingParams) (IngestionRunProcessing, error)
 	CompleteRunProcessing(ctx context.Context, arg CompleteRunProcessingParams) (IngestionRunProcessing, error)
 	CreateIngestionRun(ctx context.Context, arg CreateIngestionRunParams) (IngestionRun, error)
-	CreateOutboxEvent(ctx context.Context, arg CreateOutboxEventParams) (OutboxEvent, error)
+	CreateOutboxEvent(ctx context.Context, arg CreateOutboxEventParams) error
 	CreateProductChange(ctx context.Context, arg CreateProductChangeParams) (ProductChange, error)
 	CreateProductSource(ctx context.Context, arg CreateProductSourceParams) (ProductSource, error)
 	CreateProductVersion(ctx context.Context, arg CreateProductVersionParams) (CreateProductVersionRow, error)
@@ -29,7 +30,6 @@ type Querier interface {
 	GetLatestIngestionRunBySource(ctx context.Context, sourceID string) (IngestionRun, error)
 	GetLatestProductVersion(ctx context.Context, productID pgtype.UUID) (GetLatestProductVersionRow, error)
 	GetLatestRawRecordBySourceAndExternalID(ctx context.Context, arg GetLatestRawRecordBySourceAndExternalIDParams) (RawRecord, error)
-	GetOutboxEventByID(ctx context.Context, id pgtype.UUID) (OutboxEvent, error)
 	GetProductByID(ctx context.Context, id pgtype.UUID) (Product, error)
 	GetProductWithSourceByIdentity(ctx context.Context, arg GetProductWithSourceByIdentityParams) (GetProductWithSourceByIdentityRow, error)
 	GetRawRecordByID(ctx context.Context, id pgtype.UUID) (RawRecord, error)
@@ -48,6 +48,9 @@ type Querier interface {
 	ListRawRecordsByRunIDKeysetFirstPage(ctx context.Context, arg ListRawRecordsByRunIDKeysetFirstPageParams) ([]RawRecord, error)
 	ListRawRecordsBySourceAndExternalID(ctx context.Context, arg ListRawRecordsBySourceAndExternalIDParams) ([]RawRecord, error)
 	ListSources(ctx context.Context) ([]Source, error)
+	MarkOutboxPublished(ctx context.Context, arg MarkOutboxPublishedParams) (int64, error)
+	RecordOutboxPublishFailure(ctx context.Context, arg RecordOutboxPublishFailureParams) (int64, error)
+	ReleaseOutboxClaims(ctx context.Context, arg ReleaseOutboxClaimsParams) (int64, error)
 	ReleaseRunProcessingClaim(ctx context.Context, arg ReleaseRunProcessingClaimParams) (IngestionRunProcessing, error)
 	ResetRunProcessingFromStart(ctx context.Context, runID pgtype.UUID) (IngestionRunProcessing, error)
 	SeedPendingRunProcessing(ctx context.Context) error
