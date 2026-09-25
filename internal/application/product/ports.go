@@ -1,0 +1,22 @@
+package product
+
+import (
+	"context"
+
+	domainIngestion "github.com/ayo6706/cross-border-ecommerce/internal/domain/ingestion"
+	domainProduct "github.com/ayo6706/cross-border-ecommerce/internal/domain/product"
+)
+
+type OutboxWriter interface {
+	CreateEvent(ctx context.Context, aggregateType string, aggregateID string, eventType string, payload []byte) error
+}
+
+type TxRepos struct {
+	Products      domainProduct.Repository
+	RunProcessing domainIngestion.RunProcessingRepository
+	Outbox        OutboxWriter
+}
+
+type TxRunner interface {
+	WithinTx(ctx context.Context, fn func(repos TxRepos) error) error
+}
