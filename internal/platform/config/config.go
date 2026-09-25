@@ -127,6 +127,17 @@ type OutboxConfig struct {
 	MaxAttempts  int
 }
 
+type IdempotencyConfig struct {
+	LeaseTTL time.Duration
+}
+
+func (i IdempotencyConfig) Validate() error {
+	if i.LeaseTTL <= 0 {
+		return fmt.Errorf("%w for idempotency lease TTL", ErrInvalidTimeout)
+	}
+	return nil
+}
+
 type LogConfig struct {
 	Level     string
 	Format    string
@@ -139,14 +150,15 @@ type AppConfig struct {
 }
 
 type Config struct {
-	Server   ServerConfig
-	Database DatabaseConfig
-	Log      LogConfig
-	App      AppConfig
-	Redis    RedisConfig
-	Stream   StreamConfig
-	Outbox   OutboxConfig
-	Worker   WorkerConfig
+	Server      ServerConfig
+	Database    DatabaseConfig
+	Log         LogConfig
+	App         AppConfig
+	Redis       RedisConfig
+	Stream      StreamConfig
+	Outbox      OutboxConfig
+	Worker      WorkerConfig
+	Idempotency IdempotencyConfig
 }
 
 func Load() (*Config, error) {
@@ -288,6 +300,11 @@ func LoadFromLookup(lookup func(string) string) (*Config, error) {
 	logLevel := strings.ToLower(strings.TrimSpace(getEnvString(lookup, "LOG_LEVEL", "info")))
 	logFormat := strings.ToLower(strings.TrimSpace(getEnvString(lookup, "LOG_FORMAT", "json")))
 
+	idempotencyLeaseTTL, err := getEnvDuration(lookup, "IDEMPOTENCY_LEASE_TTL", 30*time.Second)
+	if err != nil {
+		return nil, fmt.Errorf("invalid IDEMPOTENCY_LEASE_TTL: %w", err)
+	}
+
 	cfg := &Config{
 		Server: ServerConfig{
 			Port:            getEnvString(lookup, "PORT", "8080"),
@@ -328,6 +345,9 @@ func LoadFromLookup(lookup func(string) string) (*Config, error) {
 			Concurrency:  workerConcurrency,
 			QueueSize:    workerQueueSize,
 			DrainTimeout: workerDrainTimeout,
+		},
+		Idempotency: IdempotencyConfig{
+			LeaseTTL: idempotencyLeaseTTL,
 		},
 		Outbox: OutboxConfig{
 			BatchSize:    outboxBatchSize,
@@ -386,6 +406,15 @@ func (c *Config) Validate() error {
 
 	if err := c.Worker.Validate(); err != nil {
 		return err
+	}
+
+	if err := c.Idempotency.Validate(); err != nil {
+		return err
+	}
+
+	if c.Idempotency.LeaseTTL <= c.Stream.HandlerTimeout {
+		return fmt.Errorf("idempotency lease TTL (%v) must be strictly greater than stream handler timeout (%v)",
+			c.Idempotency.LeaseTTL, c.Stream.HandlerTimeout)
 	}
 
 	return nil

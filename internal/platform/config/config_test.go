@@ -142,6 +142,7 @@ func TestLoad_CustomOverrides(t *testing.T) {
 		"STREAM_CLAIM_INTERVAL":   "15s",
 		"STREAM_CONSUMER_BATCH":   "25",
 		"STREAM_HANDLER_TIMEOUT":  "45s",
+		"IDEMPOTENCY_LEASE_TTL":   "60s",
 		"WORKER_CONCURRENCY":      "30",
 		"WORKER_QUEUE_SIZE":       "50",
 		"WORKER_DRAIN_TIMEOUT":    "20s",
@@ -228,6 +229,9 @@ func TestLoad_CustomOverrides(t *testing.T) {
 	}
 	if cfg.Outbox.MaxAttempts != 20 {
 		t.Errorf("expected Outbox MaxAttempts 20, got %d", cfg.Outbox.MaxAttempts)
+	}
+	if cfg.Idempotency.LeaseTTL != 60*time.Second {
+		t.Errorf("expected Idempotency LeaseTTL 60s, got %v", cfg.Idempotency.LeaseTTL)
 	}
 }
 
@@ -506,6 +510,83 @@ func TestLoad_RequiresDatabaseURL(t *testing.T) {
 	_, err := config.LoadFromLookup(func(string) string { return "" })
 	if !errors.Is(err, config.ErrEmptyDatabaseURL) {
 		t.Fatalf("expected ErrEmptyDatabaseURL when DATABASE_URL is unset, got %v", err)
+	}
+}
+
+func TestIdempotencyConfig_Validation(t *testing.T) {
+	t.Parallel()
+
+	iZero := config.IdempotencyConfig{LeaseTTL: 0}
+	if !errors.Is(iZero.Validate(), config.ErrInvalidTimeout) {
+		t.Errorf("expected ErrInvalidTimeout for zero lease TTL, got: %v", iZero.Validate())
+	}
+
+	iNeg := config.IdempotencyConfig{LeaseTTL: -1 * time.Second}
+	if !errors.Is(iNeg.Validate(), config.ErrInvalidTimeout) {
+		t.Errorf("expected ErrInvalidTimeout for negative lease TTL, got: %v", iNeg.Validate())
+	}
+
+	iValid := config.IdempotencyConfig{LeaseTTL: 30 * time.Second}
+	if err := iValid.Validate(); err != nil {
+		t.Errorf("expected nil for valid lease TTL, got: %v", err)
+	}
+}
+
+func TestConfig_IdempotencyLeaseTTLMustExceedHandlerTimeout(t *testing.T) {
+	t.Parallel()
+
+	// Default stream handler timeout is 5s, idempotency lease TTL set to 5s (equal -> invalid)
+	_, err := config.LoadFromLookup(func(key string) string {
+		switch key {
+		case "DATABASE_URL":
+			return "postgres://user:pass@dbhost:5432/testdb"
+		case "IDEMPOTENCY_LEASE_TTL":
+			return "5s"
+		case "STREAM_HANDLER_TIMEOUT":
+			return "5s"
+		default:
+			return ""
+		}
+	})
+	if err == nil {
+		t.Fatal("expected error when IDEMPOTENCY_LEASE_TTL <= STREAM_HANDLER_TIMEOUT, got nil")
+	}
+
+	// Lease TTL 4s < Handler timeout 5s -> invalid
+	_, err = config.LoadFromLookup(func(key string) string {
+		switch key {
+		case "DATABASE_URL":
+			return "postgres://user:pass@dbhost:5432/testdb"
+		case "IDEMPOTENCY_LEASE_TTL":
+			return "4s"
+		case "STREAM_HANDLER_TIMEOUT":
+			return "5s"
+		default:
+			return ""
+		}
+	})
+	if err == nil {
+		t.Fatal("expected error when IDEMPOTENCY_LEASE_TTL < STREAM_HANDLER_TIMEOUT, got nil")
+	}
+
+	// Lease TTL 10s > Handler timeout 5s -> valid
+	cfg, err := config.LoadFromLookup(func(key string) string {
+		switch key {
+		case "DATABASE_URL":
+			return "postgres://user:pass@dbhost:5432/testdb"
+		case "IDEMPOTENCY_LEASE_TTL":
+			return "10s"
+		case "STREAM_HANDLER_TIMEOUT":
+			return "5s"
+		default:
+			return ""
+		}
+	})
+	if err != nil {
+		t.Fatalf("expected valid config when LeaseTTL > HandlerTimeout, got: %v", err)
+	}
+	if cfg.Idempotency.LeaseTTL != 10*time.Second {
+		t.Errorf("expected 10s lease TTL, got: %v", cfg.Idempotency.LeaseTTL)
 	}
 }
 
