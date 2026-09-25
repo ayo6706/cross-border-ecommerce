@@ -18,7 +18,7 @@ Infrastructure Adapters (internal/infrastructure/)
 
 ### Layer Responsibilities
 
-- **`cmd/`**: Entrypoints for executables (`cmd/api` REST API, `cmd/worker` background worker, `cmd/migrate` schema migrations).
+- **`cmd/`**: Entrypoints for executables (`cmd/api` REST API, `cmd/worker` background worker, `cmd/ingest` ingestion CLI, `cmd/migrate` schema migrations).
 - **`internal/domain/`**: Pure Go domain models, value objects, domain errors, and repository interfaces. Has **zero** external dependencies on HTTP routers, SQL drivers, or messaging brokers.
   - `product/`: Product canonical entities and lifecycle status.
   - `source/`: Supplier and catalogue ingestion source definitions and configurations.

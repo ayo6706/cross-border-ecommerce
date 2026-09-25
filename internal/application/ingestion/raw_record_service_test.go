@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -164,6 +165,36 @@ func (m *memoryRawRecordRepo) ListByRunID(
 			return -1
 		}
 		return 1
+	})
+
+	if limit > 0 && len(matches) > limit {
+		matches = matches[:limit]
+	}
+	return matches, nil
+}
+
+func (m *memoryRawRecordRepo) ListKeysetByRunID(
+	_ context.Context,
+	runID string,
+	cursorID *string,
+	limit int,
+) ([]*ingestion.RawRecord, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	var matches []*ingestion.RawRecord
+	for _, r := range m.records {
+		if r.IngestionRunID == runID {
+			if cursorID != nil && strings.TrimSpace(*cursorID) != "" && r.ID <= *cursorID {
+				continue
+			}
+			cp := *r
+			matches = append(matches, &cp)
+		}
+	}
+
+	slices.SortFunc(matches, func(a, b *ingestion.RawRecord) int {
+		return strings.Compare(a.ID, b.ID)
 	})
 
 	if limit > 0 && len(matches) > limit {

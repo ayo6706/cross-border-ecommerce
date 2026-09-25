@@ -51,10 +51,7 @@ func (c *SyncCoordinator) SyncSource(ctx context.Context, params SyncParams) (*d
 		return nil, errors.New("source adapter is required")
 	}
 
-	budget := params.ErrorBudget
-	if budget == (domainIngestion.ErrorBudget{}) {
-		budget = domainIngestion.DefaultErrorBudget
-	}
+	budget := params.ErrorBudget.OrDefault()
 
 	run, err := c.runService.StartRun(ctx, params.SourceID, params.InitialCheckpoint)
 	if err != nil {
