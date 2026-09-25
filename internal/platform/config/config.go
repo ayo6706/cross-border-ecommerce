@@ -14,6 +14,7 @@ var (
 	ErrInvalidPort       = errors.New("server port must be a valid integer between 1 and 65535")
 	ErrInvalidTimeout    = errors.New("timeout values must be strictly positive")
 	ErrEmptyDatabaseURL  = errors.New("DATABASE_URL is required")
+	ErrEmptyRedisURL     = errors.New("REDIS_URL is required")
 	ErrInvalidPoolLimits = errors.New("database connection pool minimum cannot exceed maximum")
 	ErrInvalidLogLevel   = errors.New("log level must be one of 'debug', 'info', 'warn', 'error'")
 	ErrInvalidLogFormat  = errors.New("log format must be one of 'json' or 'text'")
@@ -47,6 +48,26 @@ func (d DatabaseConfig) RedactedURL() string {
 	return u.Redacted()
 }
 
+type RedisConfig struct {
+	URL string
+}
+
+func (r RedisConfig) Validate() error {
+	if strings.TrimSpace(r.URL) == "" {
+		return ErrEmptyRedisURL
+	}
+	return nil
+}
+
+type OutboxConfig struct {
+	BatchSize    int
+	PollInterval time.Duration
+	Lease        time.Duration
+	BaseBackoff  time.Duration
+	MaxBackoff   time.Duration
+	MaxAttempts  int
+}
+
 type LogConfig struct {
 	Level     string
 	Format    string
@@ -63,6 +84,8 @@ type Config struct {
 	Database DatabaseConfig
 	Log      LogConfig
 	App      AppConfig
+	Redis    RedisConfig
+	Outbox   OutboxConfig
 }
 
 func Load() (*Config, error) {
@@ -119,6 +142,36 @@ func LoadFromLookup(lookup func(string) string) (*Config, error) {
 		return nil, fmt.Errorf("invalid DB_CONNECT_TIMEOUT: %w", err)
 	}
 
+	outboxBatchSize, err := getEnvInt(lookup, "OUTBOX_BATCH_SIZE", 100)
+	if err != nil {
+		return nil, fmt.Errorf("invalid OUTBOX_BATCH_SIZE: %w", err)
+	}
+
+	outboxPollInterval, err := getEnvDuration(lookup, "OUTBOX_POLL_INTERVAL", 500*time.Millisecond)
+	if err != nil {
+		return nil, fmt.Errorf("invalid OUTBOX_POLL_INTERVAL: %w", err)
+	}
+
+	outboxLease, err := getEnvDuration(lookup, "OUTBOX_LEASE", 30*time.Second)
+	if err != nil {
+		return nil, fmt.Errorf("invalid OUTBOX_LEASE: %w", err)
+	}
+
+	outboxBaseBackoff, err := getEnvDuration(lookup, "OUTBOX_BASE_BACKOFF", 1*time.Second)
+	if err != nil {
+		return nil, fmt.Errorf("invalid OUTBOX_BASE_BACKOFF: %w", err)
+	}
+
+	outboxMaxBackoff, err := getEnvDuration(lookup, "OUTBOX_MAX_BACKOFF", 5*time.Minute)
+	if err != nil {
+		return nil, fmt.Errorf("invalid OUTBOX_MAX_BACKOFF: %w", err)
+	}
+
+	outboxMaxAttempts, err := getEnvInt(lookup, "OUTBOX_MAX_ATTEMPTS", 10)
+	if err != nil {
+		return nil, fmt.Errorf("invalid OUTBOX_MAX_ATTEMPTS: %w", err)
+	}
+
 	addSource, err := getEnvBool(lookup, "LOG_ADD_SOURCE", false)
 	if err != nil {
 		return nil, fmt.Errorf("invalid LOG_ADD_SOURCE: %w", err)
@@ -153,6 +206,17 @@ func LoadFromLookup(lookup func(string) string) (*Config, error) {
 		App: AppConfig{
 			Environment: appEnv,
 			ServiceName: getEnvString(lookup, "SERVICE_NAME", "cross-border-api"),
+		},
+		Redis: RedisConfig{
+			URL: getEnvString(lookup, "REDIS_URL", ""),
+		},
+		Outbox: OutboxConfig{
+			BatchSize:    outboxBatchSize,
+			PollInterval: outboxPollInterval,
+			Lease:        outboxLease,
+			BaseBackoff:  outboxBaseBackoff,
+			MaxBackoff:   outboxMaxBackoff,
+			MaxAttempts:  outboxMaxAttempts,
 		},
 	}
 
@@ -217,6 +281,18 @@ func getEnvDuration(lookup func(string) string, key string, defaultVal time.Dura
 		return 0, fmt.Errorf("parse duration '%s': %w", val, err)
 	}
 	return d, nil
+}
+
+func getEnvInt(lookup func(string) string, key string, defaultVal int) (int, error) {
+	val := strings.TrimSpace(lookup(key))
+	if val == "" {
+		return defaultVal, nil
+	}
+	i, err := strconv.Atoi(val)
+	if err != nil {
+		return 0, fmt.Errorf("parse int '%s': %w", val, err)
+	}
+	return i, nil
 }
 
 func getEnvInt32(lookup func(string) string, key string, defaultVal int32) (int32, error) {

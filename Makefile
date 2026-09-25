@@ -10,9 +10,10 @@ API_BINARY=$(BINARY_DIR)/api
 WORKER_BINARY=$(BINARY_DIR)/worker
 MIGRATE_BINARY=$(BINARY_DIR)/migrate
 
-# Local databases from docker-compose.yml. Override by exporting DATABASE_URL / TEST_DATABASE_URL.
+# Local databases from docker-compose.yml. Override by exporting DATABASE_URL / TEST_DATABASE_URL / TEST_REDIS_URL.
 DATABASE_URL ?= postgres://postgres:postgrespassword@localhost:5433/crossborder_dev?sslmode=disable
 TEST_DATABASE_URL ?= postgres://postgres:postgrespassword@localhost:5433/crossborder_test?sslmode=disable
+TEST_REDIS_URL ?= redis://localhost:6379/15
 export DATABASE_URL
 
 all: test build
@@ -30,7 +31,7 @@ test-race:
 	$(GOTEST) -v -race ./...
 
 test-integration:
-	TEST_DATABASE_URL="$(TEST_DATABASE_URL)" $(GOTEST) -v -race -count=1 -p 1 ./... # -p 1: packages share one test DB
+	TEST_DATABASE_URL="$(TEST_DATABASE_URL)" TEST_REDIS_URL="$(TEST_REDIS_URL)" $(GOTEST) -v -race -count=1 -p 1 ./... # -p 1: packages share one test DB
 
 # Every mandatory gate; starts a throwaway PostgreSQL when TEST_DATABASE_URL is unset.
 verify:

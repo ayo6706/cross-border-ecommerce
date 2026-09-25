@@ -64,6 +64,28 @@ func TestLoad_Defaults(t *testing.T) {
 	if cfg.App.ServiceName != "cross-border-api" {
 		t.Errorf("expected default App ServiceName cross-border-api, got %s", cfg.App.ServiceName)
 	}
+
+	if cfg.Redis.URL != "" {
+		t.Errorf("expected default Redis URL empty, got %s", cfg.Redis.URL)
+	}
+	if cfg.Outbox.BatchSize != 100 {
+		t.Errorf("expected default Outbox BatchSize 100, got %d", cfg.Outbox.BatchSize)
+	}
+	if cfg.Outbox.PollInterval != 500*time.Millisecond {
+		t.Errorf("expected default Outbox PollInterval 500ms, got %v", cfg.Outbox.PollInterval)
+	}
+	if cfg.Outbox.Lease != 30*time.Second {
+		t.Errorf("expected default Outbox Lease 30s, got %v", cfg.Outbox.Lease)
+	}
+	if cfg.Outbox.BaseBackoff != 1*time.Second {
+		t.Errorf("expected default Outbox BaseBackoff 1s, got %v", cfg.Outbox.BaseBackoff)
+	}
+	if cfg.Outbox.MaxBackoff != 5*time.Minute {
+		t.Errorf("expected default Outbox MaxBackoff 5m, got %v", cfg.Outbox.MaxBackoff)
+	}
+	if cfg.Outbox.MaxAttempts != 10 {
+		t.Errorf("expected default Outbox MaxAttempts 10, got %d", cfg.Outbox.MaxAttempts)
+	}
 }
 
 func TestLoad_CustomOverrides(t *testing.T) {
@@ -86,6 +108,13 @@ func TestLoad_CustomOverrides(t *testing.T) {
 		"LOG_ADD_SOURCE":          "true",
 		"APP_ENV":                 "production",
 		"SERVICE_NAME":            "trade-api",
+		"REDIS_URL":               "redis://redis.internal:6379",
+		"OUTBOX_BATCH_SIZE":       "200",
+		"OUTBOX_POLL_INTERVAL":    "1s",
+		"OUTBOX_LEASE":            "45s",
+		"OUTBOX_BASE_BACKOFF":     "2s",
+		"OUTBOX_MAX_BACKOFF":      "10m",
+		"OUTBOX_MAX_ATTEMPTS":     "20",
 	}
 
 	cfg, err := config.LoadFromLookup(func(k string) string {
@@ -115,6 +144,27 @@ func TestLoad_CustomOverrides(t *testing.T) {
 	}
 	if cfg.App.Environment != "production" {
 		t.Errorf("expected App Environment production, got %s", cfg.App.Environment)
+	}
+	if cfg.Redis.URL != "redis://redis.internal:6379" {
+		t.Errorf("expected Redis URL redis://redis.internal:6379, got %s", cfg.Redis.URL)
+	}
+	if cfg.Outbox.BatchSize != 200 {
+		t.Errorf("expected Outbox BatchSize 200, got %d", cfg.Outbox.BatchSize)
+	}
+	if cfg.Outbox.PollInterval != 1*time.Second {
+		t.Errorf("expected Outbox PollInterval 1s, got %v", cfg.Outbox.PollInterval)
+	}
+	if cfg.Outbox.Lease != 45*time.Second {
+		t.Errorf("expected Outbox Lease 45s, got %v", cfg.Outbox.Lease)
+	}
+	if cfg.Outbox.BaseBackoff != 2*time.Second {
+		t.Errorf("expected Outbox BaseBackoff 2s, got %v", cfg.Outbox.BaseBackoff)
+	}
+	if cfg.Outbox.MaxBackoff != 10*time.Minute {
+		t.Errorf("expected Outbox MaxBackoff 10m, got %v", cfg.Outbox.MaxBackoff)
+	}
+	if cfg.Outbox.MaxAttempts != 20 {
+		t.Errorf("expected Outbox MaxAttempts 20, got %d", cfg.Outbox.MaxAttempts)
 	}
 }
 
@@ -232,12 +282,25 @@ func TestLoad_InvalidEnvironmentValues(t *testing.T) {
 			name: "malformed add source bool",
 			env:  map[string]string{"LOG_ADD_SOURCE": "not-a-bool"},
 		},
+		{
+			name: "malformed outbox batch size",
+			env:  map[string]string{"OUTBOX_BATCH_SIZE": "invalid-int"},
+		},
+		{
+			name: "malformed outbox poll interval",
+			env:  map[string]string{"OUTBOX_POLL_INTERVAL": "invalid-duration"},
+		},
 	}
 
 	for _, tc := range invalidEnvTests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			_, err := config.LoadFromLookup(func(k string) string { return tc.env[k] })
+			_, err := config.LoadFromLookup(func(k string) string {
+				if k == "DATABASE_URL" {
+					return "postgres://user:pass@dbhost:5432/testdb"
+				}
+				return tc.env[k]
+			})
 			if err == nil {
 				t.Fatalf("expected error for invalid env %s, got nil", tc.name)
 			}
@@ -265,6 +328,20 @@ func TestDatabaseConfig_RedactedURL(t *testing.T) {
 	malformedCfg := config.DatabaseConfig{URL: "postgres://%invalid-url%:pass@/db"}
 	if malformedCfg.RedactedURL() != "[malformed database URL]" {
 		t.Errorf("expected [malformed database URL] on parse error, got: %s", malformedCfg.RedactedURL())
+	}
+}
+
+func TestRedisConfig_Validation(t *testing.T) {
+	t.Parallel()
+
+	rEmpty := config.RedisConfig{URL: "   "}
+	if !errors.Is(rEmpty.Validate(), config.ErrEmptyRedisURL) {
+		t.Errorf("expected ErrEmptyRedisURL, got: %v", rEmpty.Validate())
+	}
+
+	rValid := config.RedisConfig{URL: "redis://:secretpass@redis.internal:6379"}
+	if err := rValid.Validate(); err != nil {
+		t.Errorf("expected nil error for valid redis URL, got: %v", err)
 	}
 }
 
