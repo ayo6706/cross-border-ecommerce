@@ -50,6 +50,16 @@ Outbox Relay Tuning Variables (with defaults):
 Stream Broker Tuning Variables (with defaults):
 - `STREAM_RETENTION`: Time-based retention cutoff for stream trimming (default: `168h` / 7 days).
 
+Stream Consumer & Worker Pool Tuning Variables (with defaults):
+- `STREAM_CONSUMER_BLOCK`: XREADGROUP block timeout duration (default: `2s`).
+- `STREAM_CONSUMER_BATCH`: Maximum number of messages read per batch from Redis Stream (default: `10`, max 1000).
+- `STREAM_CLAIM_MIN_IDLE`: Minimum idle duration before reclaiming pending messages with XAUTOCLAIM (default: `30s`, must be > `STREAM_HANDLER_TIMEOUT`).
+- `STREAM_CLAIM_INTERVAL`: Periodic interval between XAUTOCLAIM sweeps (default: `10s`).
+- `STREAM_HANDLER_TIMEOUT`: Maximum execution time allowed per message handler (default: `5s`).
+- `WORKER_CONCURRENCY`: Fixed number of concurrent worker goroutines in the pool (default: `10`, must be <= 80% of `DB_MAX_CONNS`).
+- `WORKER_QUEUE_SIZE`: Buffer capacity of the worker task queue (default: `10`).
+- `WORKER_DRAIN_TIMEOUT`: Graceful shutdown drain timeout before cancelling in-flight tasks (default: `10s`).
+
 Source credentials are never stored in source config. API sources reference
 secrets instead, e.g. `"auth_kind": "bearer", "auth_ref": "env:SUPPLIER_TOKEN"`,
 and the value is read from the environment when the adapter is built.

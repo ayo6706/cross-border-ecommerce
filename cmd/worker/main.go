@@ -37,6 +37,10 @@ func run() error {
 		return fmt.Errorf("validate redis configuration: %w", err)
 	}
 
+	if err := cfg.Worker.ValidateAgainstDBPool(cfg.Database.MaxConns); err != nil {
+		return fmt.Errorf("validate worker configuration: %w", err)
+	}
+
 	logger := logging.NewLogger(os.Stdout, logging.Options{
 		Level:     cfg.Log.Level,
 		Format:    cfg.Log.Format,

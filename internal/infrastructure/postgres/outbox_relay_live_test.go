@@ -502,6 +502,10 @@ func TestOutboxRelay_Live(t *testing.T) {
 			ClaimBatchSize: 10,
 			BaseBackoff:    10 * time.Millisecond,
 			MaxBackoff:     100 * time.Millisecond,
+			Concurrency:    2,
+			QueueSize:      10,
+			HandlerTimeout: 500 * time.Millisecond,
+			DrainTimeout:   1 * time.Second,
 		}
 		c1, err := infraRedis.NewConsumer(rClient, c1Cfg, testLogger())
 		require.NoError(t, err)
@@ -517,6 +521,10 @@ func TestOutboxRelay_Live(t *testing.T) {
 			ClaimBatchSize: 10,
 			BaseBackoff:    10 * time.Millisecond,
 			MaxBackoff:     100 * time.Millisecond,
+			Concurrency:    2,
+			QueueSize:      10,
+			HandlerTimeout: 500 * time.Millisecond,
+			DrainTimeout:   1 * time.Second,
 		}
 		c2, err := infraRedis.NewConsumer(rClient, c2Cfg, testLogger())
 		require.NoError(t, err)

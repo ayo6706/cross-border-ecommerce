@@ -38,6 +38,10 @@ func TestConsumerConfig_Validate(t *testing.T) {
 		ClaimBatchSize: 10,
 		BaseBackoff:    100 * time.Millisecond,
 		MaxBackoff:     5 * time.Second,
+		Concurrency:    10,
+		QueueSize:      20,
+		HandlerTimeout: 10 * time.Second,
+		DrainTimeout:   5 * time.Second,
 	}
 
 	require.NoError(t, validCfg.Validate())
@@ -132,6 +136,42 @@ func TestConsumerConfig_Validate(t *testing.T) {
 			},
 			expectedErr: "max backoff cannot be less than base backoff",
 		},
+		{
+			name: "zero concurrency",
+			modify: func(c *ConsumerConfig) {
+				c.Concurrency = 0
+			},
+			expectedErr: "concurrency must be strictly positive",
+		},
+		{
+			name: "negative queue size",
+			modify: func(c *ConsumerConfig) {
+				c.QueueSize = -1
+			},
+			expectedErr: "queue size cannot be negative",
+		},
+		{
+			name: "zero handler timeout",
+			modify: func(c *ConsumerConfig) {
+				c.HandlerTimeout = 0
+			},
+			expectedErr: "handler timeout must be strictly positive",
+		},
+		{
+			name: "zero drain timeout",
+			modify: func(c *ConsumerConfig) {
+				c.DrainTimeout = 0
+			},
+			expectedErr: "drain timeout must be strictly positive",
+		},
+		{
+			name: "claim min idle less than or equal to handler timeout",
+			modify: func(c *ConsumerConfig) {
+				c.ClaimMinIdle = 5 * time.Second
+				c.HandlerTimeout = 10 * time.Second
+			},
+			expectedErr: "claim min idle (5s) must be strictly greater than handler timeout (10s)",
+		},
 	}
 
 	for _, tt := range tests {
@@ -163,6 +203,10 @@ func TestNewConsumer_NilAndValidationGuards(t *testing.T) {
 		ClaimBatchSize: 10,
 		BaseBackoff:    100 * time.Millisecond,
 		MaxBackoff:     5 * time.Second,
+		Concurrency:    10,
+		QueueSize:      20,
+		HandlerTimeout: 10 * time.Second,
+		DrainTimeout:   5 * time.Second,
 	}
 
 	cNilClient, err := NewConsumer(nil, cfg, logger)

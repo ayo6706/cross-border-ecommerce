@@ -8,11 +8,13 @@ import (
 	"os"
 	"runtime/debug"
 	"strings"
+	"sync"
 	"time"
 
 	appMessaging "github.com/ayo6706/cross-border-ecommerce/internal/application/messaging"
 	appOutbox "github.com/ayo6706/cross-border-ecommerce/internal/application/outbox"
 	"github.com/ayo6706/cross-border-ecommerce/internal/platform/uuid"
+	"github.com/ayo6706/cross-border-ecommerce/internal/platform/worker"
 	goredis "github.com/redis/go-redis/v9"
 )
 
@@ -34,6 +36,10 @@ type ConsumerConfig struct {
 	ClaimBatchSize int
 	BaseBackoff    time.Duration
 	MaxBackoff     time.Duration
+	Concurrency    int
+	QueueSize      int
+	HandlerTimeout time.Duration
+	DrainTimeout   time.Duration
 }
 
 func GenerateConsumerName(prefix string) (string, error) {
@@ -85,6 +91,22 @@ func (c ConsumerConfig) Validate() error {
 	}
 	if c.MaxBackoff < c.BaseBackoff {
 		return fmt.Errorf("%w: max backoff cannot be less than base backoff", ErrInvalidConsumerConfig)
+	}
+	if c.Concurrency <= 0 {
+		return fmt.Errorf("%w: concurrency must be strictly positive, got %d", ErrInvalidConsumerConfig, c.Concurrency)
+	}
+	if c.QueueSize < 0 {
+		return fmt.Errorf("%w: queue size cannot be negative, got %d", ErrInvalidConsumerConfig, c.QueueSize)
+	}
+	if c.HandlerTimeout <= 0 {
+		return fmt.Errorf("%w: handler timeout must be strictly positive", ErrInvalidConsumerConfig)
+	}
+	if c.DrainTimeout <= 0 {
+		return fmt.Errorf("%w: drain timeout must be strictly positive", ErrInvalidConsumerConfig)
+	}
+	if c.ClaimMinIdle <= c.HandlerTimeout {
+		return fmt.Errorf("%w: claim min idle (%v) must be strictly greater than handler timeout (%v)",
+			ErrInvalidConsumerConfig, c.ClaimMinIdle, c.HandlerTimeout)
 	}
 	return nil
 }
@@ -138,6 +160,8 @@ type Consumer struct {
 	logger           *slog.Logger
 	claimStart       string
 	lastReportedLost int64
+	inFlightMu       sync.Mutex
+	inFlight         map[string]struct{}
 }
 
 func NewConsumer(client *goredis.Client, cfg ConsumerConfig, logger *slog.Logger) (*Consumer, error) {
@@ -156,6 +180,7 @@ func NewConsumer(client *goredis.Client, cfg ConsumerConfig, logger *slog.Logger
 		cfg:        cfg,
 		logger:     logger,
 		claimStart: "0-0",
+		inFlight:   make(map[string]struct{}),
 	}, nil
 }
 
@@ -194,7 +219,34 @@ func (c *Consumer) checkLagLoss(ctx context.Context) {
 	}
 }
 
-func (c *Consumer) claimPending(ctx context.Context, handler appMessaging.Handler) error {
+func (c *Consumer) dispatchMessage(ctx context.Context, pool *worker.Pool, handler appMessaging.Handler, rawMsg goredis.XMessage) error {
+	c.inFlightMu.Lock()
+	if _, exists := c.inFlight[rawMsg.ID]; exists {
+		c.inFlightMu.Unlock()
+		return nil
+	}
+	c.inFlight[rawMsg.ID] = struct{}{}
+	c.inFlightMu.Unlock()
+
+	msgToProcess := rawMsg
+	err := pool.Dispatch(ctx, func(taskCtx context.Context) {
+		defer func() {
+			c.inFlightMu.Lock()
+			delete(c.inFlight, msgToProcess.ID)
+			c.inFlightMu.Unlock()
+		}()
+		c.processMessage(taskCtx, handler, msgToProcess)
+	})
+	if err != nil {
+		c.inFlightMu.Lock()
+		delete(c.inFlight, msgToProcess.ID)
+		c.inFlightMu.Unlock()
+		return err
+	}
+	return nil
+}
+
+func (c *Consumer) claimPending(ctx context.Context, pool *worker.Pool, handler appMessaging.Handler) error {
 	c.checkLagLoss(ctx)
 
 	msgs, nextStart, deleted, err := c.client.XAutoClaimWithDeleted(ctx, &goredis.XAutoClaimArgs{
@@ -233,7 +285,9 @@ func (c *Consumer) claimPending(ctx context.Context, handler appMessaging.Handle
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		c.processMessage(ctx, handler, rawMsg)
+		if err := c.dispatchMessage(ctx, pool, handler, rawMsg); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -255,7 +309,7 @@ func (c *Consumer) runHandler(ctx context.Context, handler appMessaging.Handler,
 	return handler(ctx, msg)
 }
 
-func (c *Consumer) processMessage(ctx context.Context, handler appMessaging.Handler, rawMsg goredis.XMessage) {
+func (c *Consumer) processMessage(taskCtx context.Context, handler appMessaging.Handler, rawMsg goredis.XMessage) {
 	msg, err := DecodeMessage(c.cfg.Stream, rawMsg)
 	if err != nil {
 		c.logger.Error("failed to decode stream message envelope",
@@ -266,7 +320,10 @@ func (c *Consumer) processMessage(ctx context.Context, handler appMessaging.Hand
 		return
 	}
 
-	if handlerErr := c.runHandler(ctx, handler, msg); handlerErr != nil {
+	handlerCtx, handlerCancel := context.WithTimeout(taskCtx, c.cfg.HandlerTimeout)
+	defer handlerCancel()
+
+	if handlerErr := c.runHandler(handlerCtx, handler, msg); handlerErr != nil {
 		c.logger.Error("message handler returned error; leaving unacknowledged for redelivery",
 			slog.String("event_id", msg.EventID),
 			slog.String("stream_id", msg.StreamID),
@@ -277,7 +334,7 @@ func (c *Consumer) processMessage(ctx context.Context, handler appMessaging.Hand
 		return
 	}
 
-	ackCtx, ackCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	ackCtx, ackCancel := context.WithTimeout(context.WithoutCancel(taskCtx), 5*time.Second)
 	defer ackCancel()
 
 	if ackErr := c.client.XAck(ackCtx, c.cfg.Stream, c.cfg.Group, rawMsg.ID).Err(); ackErr != nil {
@@ -370,7 +427,7 @@ func (c *Consumer) ensureGroupWithBackoff(ctx context.Context) error {
 	}
 }
 
-func (c *Consumer) Run(ctx context.Context, handler appMessaging.Handler) error {
+func (c *Consumer) Run(ctx context.Context, handler appMessaging.Handler) (returnErr error) {
 	if handler == nil {
 		return ErrNilHandler
 	}
@@ -379,11 +436,29 @@ func (c *Consumer) Run(ctx context.Context, handler appMessaging.Handler) error 
 		return err
 	}
 
+	pool, err := worker.NewPool(ctx, c.cfg.Concurrency, c.cfg.QueueSize, c.logger)
+	if err != nil {
+		return fmt.Errorf("create worker pool: %w", err)
+	}
+	defer func() {
+		shutdownErr := pool.Shutdown(c.cfg.DrainTimeout)
+		if shutdownErr != nil {
+			if returnErr == nil {
+				returnErr = shutdownErr
+			} else {
+				returnErr = errors.Join(returnErr, shutdownErr)
+			}
+		}
+	}()
+
 	claimTicker := time.NewTicker(c.cfg.ClaimInterval)
 	defer claimTicker.Stop()
 
 	// Initial sweep for abandoned messages from previous consumer crashes
-	if err := c.claimPending(ctx, handler); err != nil {
+	if err := c.claimPending(ctx, pool, handler); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		c.logger.Warn("initial claim sweep encountered error", slog.Any("error", err))
 	}
 
@@ -396,7 +471,10 @@ func (c *Consumer) Run(ctx context.Context, handler appMessaging.Handler) error 
 
 		select {
 		case <-claimTicker.C:
-			if err := c.claimPending(ctx, handler); err != nil {
+			if err := c.claimPending(ctx, pool, handler); err != nil {
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
 				c.handleStreamError(ctx, err, &consecutiveErrors)
 			}
 		default:
@@ -428,7 +506,12 @@ func (c *Consumer) Run(ctx context.Context, handler appMessaging.Handler) error 
 				if ctx.Err() != nil {
 					return ctx.Err()
 				}
-				c.processMessage(ctx, handler, rawMsg)
+				if err := c.dispatchMessage(ctx, pool, handler, rawMsg); err != nil {
+					if ctx.Err() != nil {
+						return ctx.Err()
+					}
+					return err
+				}
 			}
 		}
 	}

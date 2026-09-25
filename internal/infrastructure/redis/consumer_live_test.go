@@ -18,6 +18,7 @@ import (
 	appOutbox "github.com/ayo6706/cross-border-ecommerce/internal/application/outbox"
 	infraRedis "github.com/ayo6706/cross-border-ecommerce/internal/infrastructure/redis"
 	"github.com/ayo6706/cross-border-ecommerce/internal/platform/uuid"
+	"github.com/ayo6706/cross-border-ecommerce/internal/platform/worker"
 	goredis "github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -261,6 +262,10 @@ func TestConsumer_Live(t *testing.T) {
 			ClaimBatchSize: 10,
 			BaseBackoff:    100 * time.Millisecond,
 			MaxBackoff:     1 * time.Second,
+			Concurrency:    5,
+			QueueSize:      10,
+			HandlerTimeout: 500 * time.Millisecond,
+			DrainTimeout:   1 * time.Second,
 		}
 		c1, err := infraRedis.NewConsumer(client, cfg1, logger)
 		require.NoError(t, err)
@@ -276,6 +281,10 @@ func TestConsumer_Live(t *testing.T) {
 			ClaimBatchSize: 10,
 			BaseBackoff:    100 * time.Millisecond,
 			MaxBackoff:     1 * time.Second,
+			Concurrency:    5,
+			QueueSize:      10,
+			HandlerTimeout: 500 * time.Millisecond,
+			DrainTimeout:   1 * time.Second,
 		}
 		c2, err := infraRedis.NewConsumer(client, cfg2, logger)
 		require.NoError(t, err)
@@ -361,6 +370,10 @@ func TestConsumer_Live(t *testing.T) {
 			ClaimBatchSize: 10,
 			BaseBackoff:    100 * time.Millisecond,
 			MaxBackoff:     1 * time.Second,
+			Concurrency:    5,
+			QueueSize:      10,
+			HandlerTimeout: 100 * time.Millisecond,
+			DrainTimeout:   1 * time.Second,
 		}
 		c2, err := infraRedis.NewConsumer(client, cfg2, logger)
 		require.NoError(t, err)
@@ -421,6 +434,10 @@ func TestConsumer_Live(t *testing.T) {
 			ClaimBatchSize: 10,
 			BaseBackoff:    100 * time.Millisecond,
 			MaxBackoff:     1 * time.Second,
+			Concurrency:    5,
+			QueueSize:      10,
+			HandlerTimeout: 100 * time.Millisecond,
+			DrainTimeout:   1 * time.Second,
 		}
 		consumer, err := infraRedis.NewConsumer(client, cfg, logger)
 		require.NoError(t, err)
@@ -468,6 +485,10 @@ func TestConsumer_Live(t *testing.T) {
 			ClaimBatchSize: 10,
 			BaseBackoff:    100 * time.Millisecond,
 			MaxBackoff:     500 * time.Millisecond,
+			Concurrency:    5,
+			QueueSize:      10,
+			HandlerTimeout: 500 * time.Millisecond,
+			DrainTimeout:   1 * time.Second,
 		}
 		consumer, err := infraRedis.NewConsumer(proxyClient, cfg, logger)
 		require.NoError(t, err)
@@ -539,6 +560,10 @@ func TestConsumer_Live(t *testing.T) {
 			ClaimBatchSize: 10,
 			BaseBackoff:    100 * time.Millisecond,
 			MaxBackoff:     500 * time.Millisecond,
+			Concurrency:    5,
+			QueueSize:      10,
+			HandlerTimeout: 500 * time.Millisecond,
+			DrainTimeout:   1 * time.Second,
 		}
 		consumer, err := infraRedis.NewConsumer(proxyClient, cfg, logger)
 		require.NoError(t, err)
@@ -612,6 +637,10 @@ func TestConsumer_Live(t *testing.T) {
 			ClaimBatchSize: 10,
 			BaseBackoff:    100 * time.Millisecond,
 			MaxBackoff:     1 * time.Second,
+			Concurrency:    5,
+			QueueSize:      10,
+			HandlerTimeout: 500 * time.Millisecond,
+			DrainTimeout:   1 * time.Second,
 		}
 		consumer, err := infraRedis.NewConsumer(client, cfg, logger)
 		require.NoError(t, err)
@@ -666,6 +695,10 @@ func TestConsumer_Live(t *testing.T) {
 			ClaimBatchSize: 10,
 			BaseBackoff:    100 * time.Millisecond,
 			MaxBackoff:     1 * time.Second,
+			Concurrency:    5,
+			QueueSize:      10,
+			HandlerTimeout: 200 * time.Millisecond,
+			DrainTimeout:   1 * time.Second,
 		}
 		consumer, err := infraRedis.NewConsumer(client, cfg, logger)
 		require.NoError(t, err)
@@ -758,6 +791,10 @@ func TestConsumer_Live(t *testing.T) {
 			ClaimBatchSize: 10,
 			BaseBackoff:    100 * time.Millisecond,
 			MaxBackoff:     1 * time.Second,
+			Concurrency:    5,
+			QueueSize:      10,
+			HandlerTimeout: 500 * time.Millisecond,
+			DrainTimeout:   1 * time.Second,
 		}
 		consumer, err := infraRedis.NewConsumer(client, cfg, logger)
 		require.NoError(t, err)
@@ -824,6 +861,10 @@ func TestConsumer_Live(t *testing.T) {
 			ClaimBatchSize: 10,
 			BaseBackoff:    50 * time.Millisecond,
 			MaxBackoff:     200 * time.Millisecond,
+			Concurrency:    5,
+			QueueSize:      10,
+			HandlerTimeout: 50 * time.Millisecond,
+			DrainTimeout:   1 * time.Second,
 		}
 		consumer, err := infraRedis.NewConsumer(proxyClient, cfg, testLogger)
 		require.NoError(t, err)
@@ -901,6 +942,10 @@ func TestConsumer_Live(t *testing.T) {
 			ClaimBatchSize: 10,
 			BaseBackoff:    100 * time.Millisecond,
 			MaxBackoff:     1 * time.Second,
+			Concurrency:    5,
+			QueueSize:      10,
+			HandlerTimeout: 100 * time.Millisecond,
+			DrainTimeout:   1 * time.Second,
 		}
 		consumer, err := infraRedis.NewConsumer(client, cfg, logger)
 		require.NoError(t, err)
@@ -967,11 +1012,15 @@ func TestConsumer_Live(t *testing.T) {
 			ConsumerName:   "c-reclaimer",
 			BatchSize:      10,
 			BlockDuration:  200 * time.Millisecond,
-			ClaimMinIdle:   1 * time.Millisecond,
+			ClaimMinIdle:   10 * time.Millisecond,
 			ClaimInterval:  50 * time.Millisecond,
 			ClaimBatchSize: 10,
 			BaseBackoff:    100 * time.Millisecond,
 			MaxBackoff:     1 * time.Second,
+			Concurrency:    5,
+			QueueSize:      10,
+			HandlerTimeout: 5 * time.Millisecond,
+			DrainTimeout:   1 * time.Second,
 		}
 		consumer, err := infraRedis.NewConsumer(client, cfg, testLogger)
 		require.NoError(t, err)
@@ -1024,6 +1073,10 @@ func TestConsumer_Live(t *testing.T) {
 			ClaimBatchSize: 10,
 			BaseBackoff:    50 * time.Millisecond,
 			MaxBackoff:     100 * time.Millisecond,
+			Concurrency:    5,
+			QueueSize:      10,
+			HandlerTimeout: 20 * time.Millisecond,
+			DrainTimeout:   1 * time.Second,
 		}
 		cClean, err := infraRedis.NewConsumer(client, cfgClean, slog.New(memLogClean))
 		require.NoError(t, err)
@@ -1082,6 +1135,10 @@ func TestConsumer_Live(t *testing.T) {
 			ClaimBatchSize: 10,
 			BaseBackoff:    50 * time.Millisecond,
 			MaxBackoff:     100 * time.Millisecond,
+			Concurrency:    5,
+			QueueSize:      10,
+			HandlerTimeout: 20 * time.Millisecond,
+			DrainTimeout:   1 * time.Second,
 		}
 		consumer, err := infraRedis.NewConsumer(client, cfg, testLogger)
 		require.NoError(t, err)
@@ -1135,6 +1192,10 @@ func TestConsumer_Live(t *testing.T) {
 			ClaimBatchSize: 10,
 			BaseBackoff:    50 * time.Millisecond,
 			MaxBackoff:     100 * time.Millisecond,
+			Concurrency:    5,
+			QueueSize:      10,
+			HandlerTimeout: 20 * time.Millisecond,
+			DrainTimeout:   1 * time.Second,
 		}
 		cMulti, err := infraRedis.NewConsumer(client, cfgMulti, slog.New(memLogMulti))
 		require.NoError(t, err)
@@ -1191,6 +1252,372 @@ func TestConsumer_Live(t *testing.T) {
 			return nil
 		})
 		assert.Equal(t, 2, memLogMulti.CountMessage("consumer group lag exceeded stream retention"), "second loss after catch-up must be logged")
+	})
+
+	t.Run("backpressure_bounds_reads", func(t *testing.T) {
+		stream := uniqueTestStream("backpressure")
+		group := "bp-group"
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		err := infraRedis.EnsureGroup(ctx, client, stream, group)
+		require.NoError(t, err)
+
+		pub := infraRedis.NewPublisherFromClient(client)
+		const totalEvents = 20
+		for i := 0; i < totalEvents; i++ {
+			err := pub.Publish(ctx, appOutbox.Event{
+				ID:        fmt.Sprintf("evt-bp-%d", i),
+				EventType: stream,
+				Payload:   []byte(`{"bp":true}`),
+				CreatedAt: time.Now().UTC(),
+			})
+			require.NoError(t, err)
+		}
+
+		// Concurrency = 2, QueueSize = 2, BatchSize = 2
+		// Max in memory at once = 2 + 2 + 2 = 6
+		cfg := infraRedis.ConsumerConfig{
+			Stream:         stream,
+			Group:          group,
+			ConsumerName:   "c-backpressure",
+			BatchSize:      2,
+			BlockDuration:  100 * time.Millisecond,
+			ClaimMinIdle:   5 * time.Second,
+			ClaimInterval:  5 * time.Second,
+			ClaimBatchSize: 2,
+			BaseBackoff:    50 * time.Millisecond,
+			MaxBackoff:     100 * time.Millisecond,
+			Concurrency:    2,
+			QueueSize:      2,
+			HandlerTimeout: 4 * time.Second,
+			DrainTimeout:   2 * time.Second,
+		}
+		consumer, err := infraRedis.NewConsumer(client, cfg, logger)
+		require.NoError(t, err)
+
+		handlerBlocked := make(chan struct{})
+		releaseHandlers := make(chan struct{})
+		var activeHandlers, processed atomic.Int32
+
+		go func() {
+			_ = consumer.Run(ctx, func(handlerCtx context.Context, msg appMessaging.Message) error {
+				count := activeHandlers.Add(1)
+				if count == 2 {
+					close(handlerBlocked)
+				}
+				<-releaseHandlers
+				activeHandlers.Add(-1)
+				processed.Add(1)
+				return nil
+			})
+		}()
+
+		select {
+		case <-handlerBlocked:
+		case <-time.After(3 * time.Second):
+			t.Fatal("timed out waiting for worker pool concurrency to fill")
+		}
+
+		// Let the consumer attempt to read further while workers are blocked
+		time.Sleep(300 * time.Millisecond)
+
+		// Check PEL in Redis: the 2 running workers have read messages, and at most batch + queue messages were read
+		pend, err := client.XPending(ctx, stream, group).Result()
+		require.NoError(t, err)
+		assert.LessOrEqual(t, pend.Count, int64(6), "backpressure must bound in-flight reads; remaining events must stay unread in Redis")
+
+		// Release workers so all remaining events are processed and ACKed
+		close(releaseHandlers)
+
+		require.Eventually(t, func() bool {
+			return processed.Load() == int32(totalEvents)
+		}, 5*time.Second, 50*time.Millisecond, "all events must eventually be processed after backpressure is relieved")
+
+		require.Eventually(t, func() bool {
+			p, err := client.XPending(ctx, stream, group).Result()
+			return err == nil && p.Count == 0
+		}, 3*time.Second, 50*time.Millisecond, "all events must be acknowledged")
+	})
+
+	t.Run("no_self_reclaim_in_flight", func(t *testing.T) {
+		stream := uniqueTestStream("noselfreclaim")
+		group := "self-reclaim-group"
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		err := infraRedis.EnsureGroup(ctx, client, stream, group)
+		require.NoError(t, err)
+
+		pub := infraRedis.NewPublisherFromClient(client)
+		const numEvents = 5
+		for i := 0; i < numEvents; i++ {
+			err = pub.Publish(ctx, appOutbox.Event{
+				ID:        fmt.Sprintf("evt-self-%d", i),
+				EventType: stream,
+				Payload:   []byte(`{"self_reclaim":true}`),
+				CreatedAt: time.Now().UTC(),
+			})
+			require.NoError(t, err)
+		}
+
+		// Concurrency=1, QueueSize=10: messages 1..4 wait in queue while message 0 runs.
+		// ClaimMinIdle (200ms) > HandlerTimeout (150ms).
+		// Each task runs for 80ms; total sequential queue drain takes ~400ms.
+		// After 200ms, queued messages exceed ClaimMinIdle and trigger claim sweeps every 30ms.
+		cfg := infraRedis.ConsumerConfig{
+			Stream:         stream,
+			Group:          group,
+			ConsumerName:   "c-self-reclaim",
+			BatchSize:      10,
+			BlockDuration:  50 * time.Millisecond,
+			ClaimMinIdle:   200 * time.Millisecond,
+			ClaimInterval:  30 * time.Millisecond,
+			ClaimBatchSize: 10,
+			BaseBackoff:    50 * time.Millisecond,
+			MaxBackoff:     100 * time.Millisecond,
+			Concurrency:    1,
+			QueueSize:      10,
+			HandlerTimeout: 150 * time.Millisecond,
+			DrainTimeout:   2 * time.Second,
+		}
+		consumer, err := infraRedis.NewConsumer(client, cfg, logger)
+		require.NoError(t, err)
+
+		var runsPerEvent sync.Map
+		var totalRuns atomic.Int32
+		allDone := make(chan struct{})
+
+		go func() {
+			_ = consumer.Run(ctx, func(hCtx context.Context, msg appMessaging.Message) error {
+				countVal, _ := runsPerEvent.LoadOrStore(msg.EventID, new(atomic.Int32))
+				countVal.(*atomic.Int32).Add(1)
+
+				// Each task sleeps 80ms; by message 3, messages 3 and 4 have waited > 200ms in queue.
+				time.Sleep(80 * time.Millisecond)
+
+				if totalRuns.Add(1) == int32(numEvents) {
+					close(allDone)
+				}
+				return nil
+			})
+		}()
+
+		select {
+		case <-allDone:
+		case <-time.After(4 * time.Second):
+			t.Fatal("timed out waiting for all messages to process")
+		}
+
+		// Give time for any erroneous duplicate claims to manifest
+		time.Sleep(200 * time.Millisecond)
+
+		assert.Equal(t, int32(numEvents), totalRuns.Load(), "every message must be processed exactly once; in-flight guard must prevent self-reclaim")
+		for i := 0; i < numEvents; i++ {
+			evtID := fmt.Sprintf("evt-self-%d", i)
+			countVal, ok := runsPerEvent.Load(evtID)
+			require.True(t, ok, "event %s must have run", evtID)
+			assert.Equal(t, int32(1), countVal.(*atomic.Int32).Load(), "event %s must run exactly once", evtID)
+		}
+	})
+
+	t.Run("handler_timeout_leaves_pending", func(t *testing.T) {
+		stream := uniqueTestStream("handlertimeout")
+		group := "ht-group"
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		err := infraRedis.EnsureGroup(ctx, client, stream, group)
+		require.NoError(t, err)
+
+		pub := infraRedis.NewPublisherFromClient(client)
+		evtID, _ := uuid.NewString()
+		err = pub.Publish(ctx, appOutbox.Event{
+			ID:        evtID,
+			EventType: stream,
+			Payload:   []byte(`{"timeout":true}`),
+			CreatedAt: time.Now().UTC(),
+		})
+		require.NoError(t, err)
+
+		cfg := infraRedis.ConsumerConfig{
+			Stream:         stream,
+			Group:          group,
+			ConsumerName:   "c-timeout",
+			BatchSize:      10,
+			BlockDuration:  50 * time.Millisecond,
+			ClaimMinIdle:   300 * time.Millisecond,
+			ClaimInterval:  500 * time.Millisecond,
+			ClaimBatchSize: 10,
+			BaseBackoff:    50 * time.Millisecond,
+			MaxBackoff:     100 * time.Millisecond,
+			Concurrency:    1,
+			QueueSize:      1,
+			HandlerTimeout: 100 * time.Millisecond,
+			DrainTimeout:   1 * time.Second,
+		}
+		consumer, err := infraRedis.NewConsumer(client, cfg, logger)
+		require.NoError(t, err)
+
+		handlerTimedOut := make(chan error, 1)
+		go func() {
+			_ = consumer.Run(ctx, func(hCtx context.Context, msg appMessaging.Message) error {
+				<-hCtx.Done()
+				select {
+				case handlerTimedOut <- hCtx.Err():
+				default:
+				}
+				return hCtx.Err()
+			})
+		}()
+
+		select {
+		case err := <-handlerTimedOut:
+			assert.ErrorIs(t, err, context.DeadlineExceeded)
+		case <-time.After(3 * time.Second):
+			t.Fatal("timed out waiting for handler timeout")
+		}
+
+		// Timed-out message was not ACKed; must stay pending in PEL
+		pend, err := client.XPending(ctx, stream, group).Result()
+		require.NoError(t, err)
+		assert.Equal(t, int64(1), pend.Count, "timed-out message must remain in PEL")
+	})
+
+	t.Run("graceful_drain_acks", func(t *testing.T) {
+		stream := uniqueTestStream("drainack")
+		group := "drainack-group"
+		ctx := context.Background()
+
+		err := infraRedis.EnsureGroup(ctx, client, stream, group)
+		require.NoError(t, err)
+
+		pub := infraRedis.NewPublisherFromClient(client)
+		const numEvents = 5
+		for i := 0; i < numEvents; i++ {
+			err := pub.Publish(ctx, appOutbox.Event{
+				ID:        fmt.Sprintf("evt-drain-%d", i),
+				EventType: stream,
+				Payload:   []byte(`{"drain":true}`),
+				CreatedAt: time.Now().UTC(),
+			})
+			require.NoError(t, err)
+		}
+
+		cfg := infraRedis.ConsumerConfig{
+			Stream:         stream,
+			Group:          group,
+			ConsumerName:   "c-drain",
+			BatchSize:      10,
+			BlockDuration:  100 * time.Millisecond,
+			ClaimMinIdle:   5 * time.Second,
+			ClaimInterval:  5 * time.Second,
+			ClaimBatchSize: 10,
+			BaseBackoff:    50 * time.Millisecond,
+			MaxBackoff:     100 * time.Millisecond,
+			Concurrency:    2,
+			QueueSize:      5,
+			HandlerTimeout: 2 * time.Second,
+			DrainTimeout:   3 * time.Second,
+		}
+		consumer, err := infraRedis.NewConsumer(client, cfg, logger)
+		require.NoError(t, err)
+
+		cCtx, cCancel := context.WithCancel(ctx)
+		var processed atomic.Int32
+		runErr := make(chan error, 1)
+
+		go func() {
+			runErr <- consumer.Run(cCtx, func(hCtx context.Context, msg appMessaging.Message) error {
+				time.Sleep(50 * time.Millisecond)
+				if processed.Add(1) == 2 {
+					cCancel() // Cancel consumer context while tasks are in flight and in queue
+				}
+				return nil
+			})
+		}()
+
+		select {
+		case err := <-runErr:
+			assert.ErrorIs(t, err, context.Canceled)
+		case <-time.After(5 * time.Second):
+			t.Fatal("timed out waiting for consumer to stop")
+		}
+
+		assert.Equal(t, int32(numEvents), processed.Load(), "all dispatched/queued tasks should finish draining")
+
+		// All drained messages should be acknowledged
+		pend, err := client.XPending(ctx, stream, group).Result()
+		require.NoError(t, err)
+		assert.Equal(t, int64(0), pend.Count, "all drained messages must be acknowledged")
+	})
+
+	t.Run("drain_timeout_leaves_pending", func(t *testing.T) {
+		stream := uniqueTestStream("draintimeout")
+		group := "draintimeout-group"
+		ctx := context.Background()
+
+		err := infraRedis.EnsureGroup(ctx, client, stream, group)
+		require.NoError(t, err)
+
+		pub := infraRedis.NewPublisherFromClient(client)
+		err = pub.Publish(ctx, appOutbox.Event{
+			ID:        "evt-slow-drain",
+			EventType: stream,
+			Payload:   []byte(`{"slow":true}`),
+			CreatedAt: time.Now().UTC(),
+		})
+		require.NoError(t, err)
+
+		cfg := infraRedis.ConsumerConfig{
+			Stream:         stream,
+			Group:          group,
+			ConsumerName:   "c-drain-timeout",
+			BatchSize:      10,
+			BlockDuration:  50 * time.Millisecond,
+			ClaimMinIdle:   6 * time.Second,
+			ClaimInterval:  5 * time.Second,
+			ClaimBatchSize: 10,
+			BaseBackoff:    50 * time.Millisecond,
+			MaxBackoff:     100 * time.Millisecond,
+			Concurrency:    1,
+			QueueSize:      1,
+			HandlerTimeout: 5 * time.Second,
+			DrainTimeout:   50 * time.Millisecond,
+		}
+		consumer, err := infraRedis.NewConsumer(client, cfg, logger)
+		require.NoError(t, err)
+
+		cCtx, cCancel := context.WithCancel(ctx)
+		runErr := make(chan error, 1)
+		handlerEntered := make(chan struct{})
+
+		go func() {
+			runErr <- consumer.Run(cCtx, func(hCtx context.Context, msg appMessaging.Message) error {
+				close(handlerEntered)
+				<-hCtx.Done()
+				return hCtx.Err()
+			})
+		}()
+
+		select {
+		case <-handlerEntered:
+		case <-time.After(3 * time.Second):
+			t.Fatal("handler never entered")
+		}
+
+		cCancel()
+
+		select {
+		case err := <-runErr:
+			assert.ErrorIs(t, err, worker.ErrDrainTimeout)
+		case <-time.After(3 * time.Second):
+			t.Fatal("timed out waiting for consumer shutdown")
+		}
+
+		pend, err := client.XPending(ctx, stream, group).Result()
+		require.NoError(t, err)
+		assert.Equal(t, int64(1), pend.Count, "un-drained message must remain pending")
 	})
 }
 
