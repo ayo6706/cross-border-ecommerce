@@ -8,6 +8,7 @@ import (
 	"time"
 
 	appMessaging "github.com/ayo6706/cross-border-ecommerce/internal/application/messaging"
+	platformBackoff "github.com/ayo6706/cross-border-ecommerce/internal/platform/backoff"
 	"github.com/ayo6706/cross-border-ecommerce/internal/platform/uuid"
 )
 
@@ -20,12 +21,14 @@ var (
 
 type Event struct {
 	ID            string
+	EventID       string
 	AggregateType string
 	AggregateID   string
 	EventType     string
 	Payload       []byte
 	RetryCount    int
 	CreatedAt     time.Time
+	TargetGroup   string
 }
 
 type Publisher interface {
@@ -97,21 +100,6 @@ func NewRelay(store Store, pub Publisher, cfg RelayConfig, logger *slog.Logger) 
 		cfg:    cfg,
 		logger: logger,
 	}, nil
-}
-
-func Backoff(attempt int, base, max time.Duration) time.Duration {
-	if attempt < 0 {
-		attempt = 0
-	}
-	if attempt >= 62 {
-		return max
-	}
-	multiplier := time.Duration(1) << attempt
-	res := base * multiplier
-	if res <= 0 || res > max || res/multiplier != base { // overflow guard
-		return max
-	}
-	return res
 }
 
 // settleOnCancel marks what reached the broker and releases the unprocessed claims so another
@@ -201,7 +189,7 @@ func (r *Relay) RunOnce(ctx context.Context) (claimed, published int, err error)
 			return len(events), len(publishedIDs), errors.Join(allErrs...)
 		}
 
-		bo := Backoff(event.RetryCount, r.cfg.BaseBackoff, r.cfg.MaxBackoff)
+		bo := platformBackoff.Exponential(event.RetryCount, r.cfg.BaseBackoff, r.cfg.MaxBackoff)
 		if recErr := r.store.RecordFailure(ctx, claimToken, event.ID, pubErr.Error(), r.cfg.MaxAttempts, bo); recErr != nil {
 			r.logger.Error("failed to record outbox event failure",
 				slog.String("event_id", event.ID),
@@ -254,7 +242,7 @@ func (r *Relay) Run(ctx context.Context) error {
 				return nil
 			}
 			consecutiveFailures++
-			bo := Backoff(consecutiveFailures-1, r.cfg.BaseBackoff, r.cfg.MaxBackoff)
+			bo := platformBackoff.Exponential(consecutiveFailures-1, r.cfg.BaseBackoff, r.cfg.MaxBackoff)
 			r.logger.Error("outbox relay batch failed, backing off",
 				slog.Int("consecutive_failures", consecutiveFailures),
 				slog.Duration("backoff", bo),

@@ -119,28 +119,6 @@ func testLogger() *slog.Logger {
 }
 
 // U1: Backoff grows exponentially up to the cap without overflowing at attempt 63
-func TestBackoff(t *testing.T) {
-	t.Parallel()
-	base := 1 * time.Second
-	max := 5 * time.Minute
-
-	assert.Equal(t, 1*time.Second, Backoff(-1, base, max))
-	assert.Equal(t, 1*time.Second, Backoff(0, base, max))
-	assert.Equal(t, 2*time.Second, Backoff(1, base, max))
-	assert.Equal(t, 4*time.Second, Backoff(2, base, max))
-	assert.Equal(t, 8*time.Second, Backoff(3, base, max))
-	assert.Equal(t, 16*time.Second, Backoff(4, base, max))
-	assert.Equal(t, 32*time.Second, Backoff(5, base, max))
-	assert.Equal(t, 64*time.Second, Backoff(6, base, max))
-	assert.Equal(t, 128*time.Second, Backoff(7, base, max))
-	assert.Equal(t, 256*time.Second, Backoff(8, base, max))
-	assert.Equal(t, 5*time.Minute, Backoff(9, base, max))
-	assert.Equal(t, 5*time.Minute, Backoff(30, base, max))
-	assert.Equal(t, 5*time.Minute, Backoff(62, base, max))
-	assert.Equal(t, 5*time.Minute, Backoff(63, base, max))
-	assert.Equal(t, 5*time.Minute, Backoff(100, base, max))
-}
-
 // U2: Invalid config (batch 0, lease <= 0, base > max, attempts < 1) is rejected
 func TestNewRelay_InvalidConfig(t *testing.T) {
 	t.Parallel()

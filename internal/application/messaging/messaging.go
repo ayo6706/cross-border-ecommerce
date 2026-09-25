@@ -16,9 +16,11 @@ type Message struct {
 	EventID       string
 	AggregateType string
 	AggregateID   string
+	CorrelationID string
 	EventType     string
 	Payload       []byte
 	CreatedAt     time.Time
+	TargetGroup   string
 }
 
 // Handler defines the function signature for consuming stream messages.
