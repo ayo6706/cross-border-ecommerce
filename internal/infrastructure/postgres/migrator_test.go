@@ -108,7 +108,7 @@ func getTestDatabaseURL(t *testing.T) string {
 func TestMigrator_LiveLifecycle(t *testing.T) {
 	connStr := getTestDatabaseURL(t)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	pool, err := postgres.NewPool(ctx, connStr,
@@ -150,7 +150,7 @@ func TestMigrator_LiveLifecycle(t *testing.T) {
 	assertMigrationVersion(ctx, t, migrator, latestVersion)
 
 	// Step 2: Verify required tables exist
-	requiredTables := []string{"sources", "products", "product_versions", "outbox_events", "ingestion_runs", "raw_records", "schema_migrations"}
+	requiredTables := []string{"sources", "products", "product_versions", "outbox_events", "ingestion_runs", "raw_records", "schema_migrations", "idempotency_keys", "dlq_messages"}
 	for _, table := range requiredTables {
 		if !tableExists(ctx, t, pool, table) {
 			t.Fatalf("expected table %s to exist after migration", table)

@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	appDLQ "github.com/ayo6706/cross-border-ecommerce/internal/application/dlq"
 	appIdempotency "github.com/ayo6706/cross-border-ecommerce/internal/application/idempotency"
 	appMessaging "github.com/ayo6706/cross-border-ecommerce/internal/application/messaging"
 	appOutbox "github.com/ayo6706/cross-border-ecommerce/internal/application/outbox"
@@ -255,39 +256,47 @@ func TestConsumer_Live(t *testing.T) {
 
 		var g1Count, g2Count atomic.Int32
 		cfg1 := infraRedis.ConsumerConfig{
-			Stream:         stream,
-			Group:          group1,
-			ConsumerName:   "c1-fanout",
-			BatchSize:      10,
-			BlockDuration:  500 * time.Millisecond,
-			ClaimMinIdle:   1 * time.Second,
-			ClaimInterval:  500 * time.Millisecond,
-			ClaimBatchSize: 10,
-			BaseBackoff:    100 * time.Millisecond,
-			MaxBackoff:     1 * time.Second,
-			Concurrency:    5,
-			QueueSize:      10,
-			HandlerTimeout: 500 * time.Millisecond,
-			DrainTimeout:   1 * time.Second,
+			Stream:           stream,
+			Group:            group1,
+			ConsumerName:     "c1-fanout",
+			BatchSize:        10,
+			BlockDuration:    500 * time.Millisecond,
+			ClaimMinIdle:     1 * time.Second,
+			ClaimInterval:    500 * time.Millisecond,
+			ClaimBatchSize:   10,
+			BaseBackoff:      100 * time.Millisecond,
+			MaxBackoff:       1 * time.Second,
+			Concurrency:      5,
+			QueueSize:        10,
+			HandlerTimeout:   500 * time.Millisecond,
+			DrainTimeout:     1 * time.Second,
+			RetryMaxAttempts: 1,
+			RetryBaseBackoff: 10 * time.Millisecond,
+			RetryMaxBackoff:  20 * time.Millisecond,
+			DLQStore:         &infraRedis.MemoryDLQStore{},
 		}
 		c1, err := infraRedis.NewConsumer(client, cfg1, logger)
 		require.NoError(t, err)
 
 		cfg2 := infraRedis.ConsumerConfig{
-			Stream:         stream,
-			Group:          group2,
-			ConsumerName:   "c2-fanout",
-			BatchSize:      10,
-			BlockDuration:  500 * time.Millisecond,
-			ClaimMinIdle:   1 * time.Second,
-			ClaimInterval:  500 * time.Millisecond,
-			ClaimBatchSize: 10,
-			BaseBackoff:    100 * time.Millisecond,
-			MaxBackoff:     1 * time.Second,
-			Concurrency:    5,
-			QueueSize:      10,
-			HandlerTimeout: 500 * time.Millisecond,
-			DrainTimeout:   1 * time.Second,
+			Stream:           stream,
+			Group:            group2,
+			ConsumerName:     "c2-fanout",
+			BatchSize:        10,
+			BlockDuration:    500 * time.Millisecond,
+			ClaimMinIdle:     1 * time.Second,
+			ClaimInterval:    500 * time.Millisecond,
+			ClaimBatchSize:   10,
+			BaseBackoff:      100 * time.Millisecond,
+			MaxBackoff:       1 * time.Second,
+			Concurrency:      5,
+			QueueSize:        10,
+			HandlerTimeout:   500 * time.Millisecond,
+			DrainTimeout:     1 * time.Second,
+			RetryMaxAttempts: 1,
+			RetryBaseBackoff: 10 * time.Millisecond,
+			RetryMaxBackoff:  20 * time.Millisecond,
+			DLQStore:         &infraRedis.MemoryDLQStore{},
 		}
 		c2, err := infraRedis.NewConsumer(client, cfg2, logger)
 		require.NoError(t, err)
@@ -363,20 +372,24 @@ func TestConsumer_Live(t *testing.T) {
 		defer c2Cancel()
 
 		cfg2 := infraRedis.ConsumerConfig{
-			Stream:         stream,
-			Group:          group,
-			ConsumerName:   "c2-recovering",
-			BatchSize:      10,
-			BlockDuration:  200 * time.Millisecond,
-			ClaimMinIdle:   200 * time.Millisecond,
-			ClaimInterval:  100 * time.Millisecond,
-			ClaimBatchSize: 10,
-			BaseBackoff:    100 * time.Millisecond,
-			MaxBackoff:     1 * time.Second,
-			Concurrency:    5,
-			QueueSize:      10,
-			HandlerTimeout: 100 * time.Millisecond,
-			DrainTimeout:   1 * time.Second,
+			Stream:           stream,
+			Group:            group,
+			ConsumerName:     "c2-recovering",
+			BatchSize:        10,
+			BlockDuration:    200 * time.Millisecond,
+			ClaimMinIdle:     200 * time.Millisecond,
+			ClaimInterval:    100 * time.Millisecond,
+			ClaimBatchSize:   10,
+			BaseBackoff:      100 * time.Millisecond,
+			MaxBackoff:       1 * time.Second,
+			Concurrency:      5,
+			QueueSize:        10,
+			HandlerTimeout:   100 * time.Millisecond,
+			DrainTimeout:     1 * time.Second,
+			RetryMaxAttempts: 1,
+			RetryBaseBackoff: 10 * time.Millisecond,
+			RetryMaxBackoff:  20 * time.Millisecond,
+			DLQStore:         &infraRedis.MemoryDLQStore{},
 		}
 		c2, err := infraRedis.NewConsumer(client, cfg2, logger)
 		require.NoError(t, err)
@@ -427,20 +440,24 @@ func TestConsumer_Live(t *testing.T) {
 		defer cCancel()
 
 		cfg := infraRedis.ConsumerConfig{
-			Stream:         stream,
-			Group:          group,
-			ConsumerName:   "c-handler-err",
-			BatchSize:      10,
-			BlockDuration:  200 * time.Millisecond,
-			ClaimMinIdle:   200 * time.Millisecond,
-			ClaimInterval:  100 * time.Millisecond,
-			ClaimBatchSize: 10,
-			BaseBackoff:    100 * time.Millisecond,
-			MaxBackoff:     1 * time.Second,
-			Concurrency:    5,
-			QueueSize:      10,
-			HandlerTimeout: 100 * time.Millisecond,
-			DrainTimeout:   1 * time.Second,
+			Stream:           stream,
+			Group:            group,
+			ConsumerName:     "c-handler-err",
+			BatchSize:        10,
+			BlockDuration:    200 * time.Millisecond,
+			ClaimMinIdle:     1 * time.Second,
+			ClaimInterval:    100 * time.Millisecond,
+			ClaimBatchSize:   10,
+			BaseBackoff:      100 * time.Millisecond,
+			MaxBackoff:       1 * time.Second,
+			Concurrency:      5,
+			QueueSize:        10,
+			HandlerTimeout:   100 * time.Millisecond,
+			DrainTimeout:     1 * time.Second,
+			RetryMaxAttempts: 3,
+			RetryBaseBackoff: 10 * time.Millisecond,
+			RetryMaxBackoff:  20 * time.Millisecond,
+			DLQStore:         &infraRedis.MemoryDLQStore{},
 		}
 		consumer, err := infraRedis.NewConsumer(client, cfg, logger)
 		require.NoError(t, err)
@@ -478,20 +495,24 @@ func TestConsumer_Live(t *testing.T) {
 		group := "outage-group"
 
 		cfg := infraRedis.ConsumerConfig{
-			Stream:         stream,
-			Group:          group,
-			ConsumerName:   "c-broker-down",
-			BatchSize:      10,
-			BlockDuration:  200 * time.Millisecond,
-			ClaimMinIdle:   1 * time.Second,
-			ClaimInterval:  500 * time.Millisecond,
-			ClaimBatchSize: 10,
-			BaseBackoff:    100 * time.Millisecond,
-			MaxBackoff:     500 * time.Millisecond,
-			Concurrency:    5,
-			QueueSize:      10,
-			HandlerTimeout: 500 * time.Millisecond,
-			DrainTimeout:   1 * time.Second,
+			Stream:           stream,
+			Group:            group,
+			ConsumerName:     "c-broker-down",
+			BatchSize:        10,
+			BlockDuration:    200 * time.Millisecond,
+			ClaimMinIdle:     1 * time.Second,
+			ClaimInterval:    500 * time.Millisecond,
+			ClaimBatchSize:   10,
+			BaseBackoff:      100 * time.Millisecond,
+			MaxBackoff:       500 * time.Millisecond,
+			Concurrency:      5,
+			QueueSize:        10,
+			HandlerTimeout:   500 * time.Millisecond,
+			DrainTimeout:     1 * time.Second,
+			RetryMaxAttempts: 1,
+			RetryBaseBackoff: 10 * time.Millisecond,
+			RetryMaxBackoff:  20 * time.Millisecond,
+			DLQStore:         &infraRedis.MemoryDLQStore{},
 		}
 		consumer, err := infraRedis.NewConsumer(proxyClient, cfg, logger)
 		require.NoError(t, err)
@@ -553,20 +574,24 @@ func TestConsumer_Live(t *testing.T) {
 		group := "startup-group"
 
 		cfg := infraRedis.ConsumerConfig{
-			Stream:         stream,
-			Group:          group,
-			ConsumerName:   "c-startup-down",
-			BatchSize:      10,
-			BlockDuration:  200 * time.Millisecond,
-			ClaimMinIdle:   1 * time.Second,
-			ClaimInterval:  500 * time.Millisecond,
-			ClaimBatchSize: 10,
-			BaseBackoff:    100 * time.Millisecond,
-			MaxBackoff:     500 * time.Millisecond,
-			Concurrency:    5,
-			QueueSize:      10,
-			HandlerTimeout: 500 * time.Millisecond,
-			DrainTimeout:   1 * time.Second,
+			Stream:           stream,
+			Group:            group,
+			ConsumerName:     "c-startup-down",
+			BatchSize:        10,
+			BlockDuration:    200 * time.Millisecond,
+			ClaimMinIdle:     1 * time.Second,
+			ClaimInterval:    500 * time.Millisecond,
+			ClaimBatchSize:   10,
+			BaseBackoff:      100 * time.Millisecond,
+			MaxBackoff:       500 * time.Millisecond,
+			Concurrency:      5,
+			QueueSize:        10,
+			HandlerTimeout:   500 * time.Millisecond,
+			DrainTimeout:     1 * time.Second,
+			RetryMaxAttempts: 1,
+			RetryBaseBackoff: 10 * time.Millisecond,
+			RetryMaxBackoff:  20 * time.Millisecond,
+			DLQStore:         &infraRedis.MemoryDLQStore{},
 		}
 		consumer, err := infraRedis.NewConsumer(proxyClient, cfg, logger)
 		require.NoError(t, err)
@@ -630,20 +655,24 @@ func TestConsumer_Live(t *testing.T) {
 		require.NoError(t, err)
 
 		cfg := infraRedis.ConsumerConfig{
-			Stream:         stream,
-			Group:          group,
-			ConsumerName:   "c-cancel",
-			BatchSize:      10,
-			BlockDuration:  2 * time.Second,
-			ClaimMinIdle:   1 * time.Second,
-			ClaimInterval:  1 * time.Second,
-			ClaimBatchSize: 10,
-			BaseBackoff:    100 * time.Millisecond,
-			MaxBackoff:     1 * time.Second,
-			Concurrency:    5,
-			QueueSize:      10,
-			HandlerTimeout: 500 * time.Millisecond,
-			DrainTimeout:   1 * time.Second,
+			Stream:           stream,
+			Group:            group,
+			ConsumerName:     "c-cancel",
+			BatchSize:        10,
+			BlockDuration:    2 * time.Second,
+			ClaimMinIdle:     1 * time.Second,
+			ClaimInterval:    1 * time.Second,
+			ClaimBatchSize:   10,
+			BaseBackoff:      100 * time.Millisecond,
+			MaxBackoff:       1 * time.Second,
+			Concurrency:      5,
+			QueueSize:        10,
+			HandlerTimeout:   500 * time.Millisecond,
+			DrainTimeout:     1 * time.Second,
+			RetryMaxAttempts: 1,
+			RetryBaseBackoff: 10 * time.Millisecond,
+			RetryMaxBackoff:  20 * time.Millisecond,
+			DLQStore:         &infraRedis.MemoryDLQStore{},
 		}
 		consumer, err := infraRedis.NewConsumer(client, cfg, logger)
 		require.NoError(t, err)
@@ -688,20 +717,24 @@ func TestConsumer_Live(t *testing.T) {
 
 		pub := infraRedis.NewPublisherFromClient(client)
 		cfg := infraRedis.ConsumerConfig{
-			Stream:         stream,
-			Group:          group,
-			ConsumerName:   "c-nogroup",
-			BatchSize:      10,
-			BlockDuration:  200 * time.Millisecond,
-			ClaimMinIdle:   500 * time.Millisecond,
-			ClaimInterval:  200 * time.Millisecond,
-			ClaimBatchSize: 10,
-			BaseBackoff:    100 * time.Millisecond,
-			MaxBackoff:     1 * time.Second,
-			Concurrency:    5,
-			QueueSize:      10,
-			HandlerTimeout: 200 * time.Millisecond,
-			DrainTimeout:   1 * time.Second,
+			Stream:           stream,
+			Group:            group,
+			ConsumerName:     "c-nogroup",
+			BatchSize:        10,
+			BlockDuration:    200 * time.Millisecond,
+			ClaimMinIdle:     500 * time.Millisecond,
+			ClaimInterval:    200 * time.Millisecond,
+			ClaimBatchSize:   10,
+			BaseBackoff:      100 * time.Millisecond,
+			MaxBackoff:       1 * time.Second,
+			Concurrency:      5,
+			QueueSize:        10,
+			HandlerTimeout:   200 * time.Millisecond,
+			DrainTimeout:     1 * time.Second,
+			RetryMaxAttempts: 1,
+			RetryBaseBackoff: 10 * time.Millisecond,
+			RetryMaxBackoff:  20 * time.Millisecond,
+			DLQStore:         &infraRedis.MemoryDLQStore{},
 		}
 		consumer, err := infraRedis.NewConsumer(client, cfg, logger)
 		require.NoError(t, err)
@@ -783,21 +816,27 @@ func TestConsumer_Live(t *testing.T) {
 		var receivedValid atomic.Bool
 		done := make(chan struct{})
 
+		mockDLQ := &infraRedis.MemoryDLQStore{}
+
 		cfg := infraRedis.ConsumerConfig{
-			Stream:         stream,
-			Group:          group,
-			ConsumerName:   "c-corrupt",
-			BatchSize:      10,
-			BlockDuration:  200 * time.Millisecond,
-			ClaimMinIdle:   1 * time.Second,
-			ClaimInterval:  500 * time.Millisecond,
-			ClaimBatchSize: 10,
-			BaseBackoff:    100 * time.Millisecond,
-			MaxBackoff:     1 * time.Second,
-			Concurrency:    5,
-			QueueSize:      10,
-			HandlerTimeout: 500 * time.Millisecond,
-			DrainTimeout:   1 * time.Second,
+			Stream:           stream,
+			Group:            group,
+			ConsumerName:     "c-corrupt",
+			BatchSize:        10,
+			BlockDuration:    200 * time.Millisecond,
+			ClaimMinIdle:     1 * time.Second,
+			ClaimInterval:    500 * time.Millisecond,
+			ClaimBatchSize:   10,
+			BaseBackoff:      100 * time.Millisecond,
+			MaxBackoff:       1 * time.Second,
+			Concurrency:      5,
+			QueueSize:        10,
+			HandlerTimeout:   500 * time.Millisecond,
+			DrainTimeout:     1 * time.Second,
+			RetryMaxAttempts: 1,
+			RetryBaseBackoff: 10 * time.Millisecond,
+			RetryMaxBackoff:  20 * time.Millisecond,
+			DLQStore:         mockDLQ,
 		}
 		consumer, err := infraRedis.NewConsumer(client, cfg, logger)
 		require.NoError(t, err)
@@ -821,10 +860,16 @@ func TestConsumer_Live(t *testing.T) {
 
 		assert.True(t, receivedValid.Load())
 
-		pend, err := client.XPending(context.Background(), stream, group).Result()
-		require.NoError(t, err)
-		assert.GreaterOrEqual(t, pend.Count, int64(1))
-		assert.Equal(t, corruptMsgID, pend.Lower)
+		// A4: corrupt message is dead-lettered and acknowledged, not left in PEL
+		require.Eventually(t, func() bool {
+			pend, err := client.XPending(context.Background(), stream, group).Result()
+			return err == nil && pend.Count == 0
+		}, 3*time.Second, 50*time.Millisecond)
+
+		dead := mockDLQ.Messages()
+		require.Len(t, dead, 1)
+		assert.Equal(t, appDLQ.ClassCorruptEnvelope, dead[0].FailureClass)
+		assert.Equal(t, corruptMsgID, dead[0].StreamMessageID)
 	})
 
 	t.Run("ack_failure_redelivered", func(t *testing.T) {
@@ -854,20 +899,24 @@ func TestConsumer_Live(t *testing.T) {
 		testLogger := slog.New(memLog)
 
 		cfg := infraRedis.ConsumerConfig{
-			Stream:         stream,
-			Group:          group,
-			ConsumerName:   "c-ack-fail",
-			BatchSize:      10,
-			BlockDuration:  100 * time.Millisecond,
-			ClaimMinIdle:   150 * time.Millisecond,
-			ClaimInterval:  50 * time.Millisecond,
-			ClaimBatchSize: 10,
-			BaseBackoff:    50 * time.Millisecond,
-			MaxBackoff:     200 * time.Millisecond,
-			Concurrency:    5,
-			QueueSize:      10,
-			HandlerTimeout: 50 * time.Millisecond,
-			DrainTimeout:   1 * time.Second,
+			Stream:           stream,
+			Group:            group,
+			ConsumerName:     "c-ack-fail",
+			BatchSize:        10,
+			BlockDuration:    100 * time.Millisecond,
+			ClaimMinIdle:     150 * time.Millisecond,
+			ClaimInterval:    50 * time.Millisecond,
+			ClaimBatchSize:   10,
+			BaseBackoff:      50 * time.Millisecond,
+			MaxBackoff:       200 * time.Millisecond,
+			Concurrency:      5,
+			QueueSize:        10,
+			HandlerTimeout:   50 * time.Millisecond,
+			DrainTimeout:     1 * time.Second,
+			RetryMaxAttempts: 1,
+			RetryBaseBackoff: 10 * time.Millisecond,
+			RetryMaxBackoff:  20 * time.Millisecond,
+			DLQStore:         &infraRedis.MemoryDLQStore{},
 		}
 		consumer, err := infraRedis.NewConsumer(proxyClient, cfg, testLogger)
 		require.NoError(t, err)
@@ -930,48 +979,60 @@ func TestConsumer_Live(t *testing.T) {
 		require.NoError(t, err)
 
 		var attempts atomic.Int32
-		done := make(chan struct{})
+		panicked := make(chan struct{})
 		cCtx, cCancel := context.WithTimeout(ctx, 4*time.Second)
 		defer cCancel()
 
+		mockDLQ := &infraRedis.MemoryDLQStore{}
+
 		cfg := infraRedis.ConsumerConfig{
-			Stream:         stream,
-			Group:          group,
-			ConsumerName:   "c-panic",
-			BatchSize:      10,
-			BlockDuration:  200 * time.Millisecond,
-			ClaimMinIdle:   200 * time.Millisecond,
-			ClaimInterval:  100 * time.Millisecond,
-			ClaimBatchSize: 10,
-			BaseBackoff:    100 * time.Millisecond,
-			MaxBackoff:     1 * time.Second,
-			Concurrency:    5,
-			QueueSize:      10,
-			HandlerTimeout: 100 * time.Millisecond,
-			DrainTimeout:   1 * time.Second,
+			Stream:           stream,
+			Group:            group,
+			ConsumerName:     "c-panic",
+			BatchSize:        10,
+			BlockDuration:    200 * time.Millisecond,
+			ClaimMinIdle:     1 * time.Second,
+			ClaimInterval:    100 * time.Millisecond,
+			ClaimBatchSize:   10,
+			BaseBackoff:      100 * time.Millisecond,
+			MaxBackoff:       1 * time.Second,
+			Concurrency:      5,
+			QueueSize:        10,
+			HandlerTimeout:   100 * time.Millisecond,
+			DrainTimeout:     1 * time.Second,
+			RetryMaxAttempts: 3,
+			RetryBaseBackoff: 10 * time.Millisecond,
+			RetryMaxBackoff:  20 * time.Millisecond,
+			DLQStore:         mockDLQ,
 		}
 		consumer, err := infraRedis.NewConsumer(client, cfg, logger)
 		require.NoError(t, err)
 
 		go func() {
 			_ = consumer.Run(cCtx, func(ctx context.Context, msg appMessaging.Message) error {
-				count := attempts.Add(1)
-				if count == 1 {
-					panic("deliberate test panic in handler")
-				}
-				close(done)
-				cCancel()
-				return nil
+				attempts.Add(1)
+				close(panicked)
+				panic("deliberate test panic in handler")
 			})
 		}()
 
 		select {
-		case <-done:
+		case <-panicked:
 		case <-time.After(4 * time.Second):
-			t.Fatal("timed out waiting for panicking handler to recover and process on redelivery")
+			t.Fatal("timed out waiting for handler to execute and panic")
 		}
 
-		assert.GreaterOrEqual(t, attempts.Load(), int32(2))
+		// A3: handler panic is immediately dead-lettered with stack trace and ACKed (never retried)
+		require.Eventually(t, func() bool {
+			pend, err := client.XPending(ctx, stream, group).Result()
+			return err == nil && pend.Count == 0
+		}, 3*time.Second, 50*time.Millisecond)
+
+		assert.Equal(t, int32(1), attempts.Load(), "handler panic must not be retried")
+		dead := mockDLQ.Messages()
+		require.Len(t, dead, 1)
+		assert.Equal(t, appDLQ.ClassHandlerPanic, dead[0].FailureClass)
+		assert.NotEmpty(t, dead[0].Stack)
 	})
 
 	t.Run("trimmed_pending_logged", func(t *testing.T) {
@@ -1010,20 +1071,24 @@ func TestConsumer_Live(t *testing.T) {
 		testLogger := slog.New(memLog)
 
 		cfg := infraRedis.ConsumerConfig{
-			Stream:         stream,
-			Group:          group,
-			ConsumerName:   "c-reclaimer",
-			BatchSize:      10,
-			BlockDuration:  200 * time.Millisecond,
-			ClaimMinIdle:   10 * time.Millisecond,
-			ClaimInterval:  50 * time.Millisecond,
-			ClaimBatchSize: 10,
-			BaseBackoff:    100 * time.Millisecond,
-			MaxBackoff:     1 * time.Second,
-			Concurrency:    5,
-			QueueSize:      10,
-			HandlerTimeout: 5 * time.Millisecond,
-			DrainTimeout:   1 * time.Second,
+			Stream:           stream,
+			Group:            group,
+			ConsumerName:     "c-reclaimer",
+			BatchSize:        10,
+			BlockDuration:    200 * time.Millisecond,
+			ClaimMinIdle:     10 * time.Millisecond,
+			ClaimInterval:    50 * time.Millisecond,
+			ClaimBatchSize:   10,
+			BaseBackoff:      100 * time.Millisecond,
+			MaxBackoff:       1 * time.Second,
+			Concurrency:      5,
+			QueueSize:        10,
+			HandlerTimeout:   5 * time.Millisecond,
+			DrainTimeout:     1 * time.Second,
+			RetryMaxAttempts: 1,
+			RetryBaseBackoff: 10 * time.Millisecond,
+			RetryMaxBackoff:  20 * time.Millisecond,
+			DLQStore:         &infraRedis.MemoryDLQStore{},
 		}
 		consumer, err := infraRedis.NewConsumer(client, cfg, testLogger)
 		require.NoError(t, err)
@@ -1066,20 +1131,24 @@ func TestConsumer_Live(t *testing.T) {
 
 		memLogClean := &memoryLogHandler{}
 		cfgClean := infraRedis.ConsumerConfig{
-			Stream:         streamTrimmed,
-			Group:          groupNew,
-			ConsumerName:   "c-clean",
-			BatchSize:      10,
-			BlockDuration:  50 * time.Millisecond,
-			ClaimMinIdle:   50 * time.Millisecond,
-			ClaimInterval:  50 * time.Millisecond,
-			ClaimBatchSize: 10,
-			BaseBackoff:    50 * time.Millisecond,
-			MaxBackoff:     100 * time.Millisecond,
-			Concurrency:    5,
-			QueueSize:      10,
-			HandlerTimeout: 20 * time.Millisecond,
-			DrainTimeout:   1 * time.Second,
+			Stream:           streamTrimmed,
+			Group:            groupNew,
+			ConsumerName:     "c-clean",
+			BatchSize:        10,
+			BlockDuration:    50 * time.Millisecond,
+			ClaimMinIdle:     50 * time.Millisecond,
+			ClaimInterval:    50 * time.Millisecond,
+			ClaimBatchSize:   10,
+			BaseBackoff:      50 * time.Millisecond,
+			MaxBackoff:       100 * time.Millisecond,
+			Concurrency:      5,
+			QueueSize:        10,
+			HandlerTimeout:   20 * time.Millisecond,
+			DrainTimeout:     1 * time.Second,
+			RetryMaxAttempts: 1,
+			RetryBaseBackoff: 10 * time.Millisecond,
+			RetryMaxBackoff:  20 * time.Millisecond,
+			DLQStore:         &infraRedis.MemoryDLQStore{},
 		}
 		cClean, err := infraRedis.NewConsumer(client, cfgClean, slog.New(memLogClean))
 		require.NoError(t, err)
@@ -1128,20 +1197,24 @@ func TestConsumer_Live(t *testing.T) {
 		testLogger := slog.New(memLog)
 
 		cfg := infraRedis.ConsumerConfig{
-			Stream:         stream,
-			Group:          group,
-			ConsumerName:   "c-slow-monitor",
-			BatchSize:      10,
-			BlockDuration:  50 * time.Millisecond,
-			ClaimMinIdle:   50 * time.Millisecond,
-			ClaimInterval:  50 * time.Millisecond,
-			ClaimBatchSize: 10,
-			BaseBackoff:    50 * time.Millisecond,
-			MaxBackoff:     100 * time.Millisecond,
-			Concurrency:    5,
-			QueueSize:      10,
-			HandlerTimeout: 20 * time.Millisecond,
-			DrainTimeout:   1 * time.Second,
+			Stream:           stream,
+			Group:            group,
+			ConsumerName:     "c-slow-monitor",
+			BatchSize:        10,
+			BlockDuration:    50 * time.Millisecond,
+			ClaimMinIdle:     50 * time.Millisecond,
+			ClaimInterval:    50 * time.Millisecond,
+			ClaimBatchSize:   10,
+			BaseBackoff:      50 * time.Millisecond,
+			MaxBackoff:       100 * time.Millisecond,
+			Concurrency:      5,
+			QueueSize:        10,
+			HandlerTimeout:   20 * time.Millisecond,
+			DrainTimeout:     1 * time.Second,
+			RetryMaxAttempts: 1,
+			RetryBaseBackoff: 10 * time.Millisecond,
+			RetryMaxBackoff:  20 * time.Millisecond,
+			DLQStore:         &infraRedis.MemoryDLQStore{},
 		}
 		consumer, err := infraRedis.NewConsumer(client, cfg, testLogger)
 		require.NoError(t, err)
@@ -1185,20 +1258,24 @@ func TestConsumer_Live(t *testing.T) {
 
 		memLogMulti := &memoryLogHandler{}
 		cfgMulti := infraRedis.ConsumerConfig{
-			Stream:         streamMulti,
-			Group:          groupMulti,
-			ConsumerName:   "c-multi-monitor",
-			BatchSize:      10,
-			BlockDuration:  50 * time.Millisecond,
-			ClaimMinIdle:   50 * time.Millisecond,
-			ClaimInterval:  50 * time.Millisecond,
-			ClaimBatchSize: 10,
-			BaseBackoff:    50 * time.Millisecond,
-			MaxBackoff:     100 * time.Millisecond,
-			Concurrency:    5,
-			QueueSize:      10,
-			HandlerTimeout: 20 * time.Millisecond,
-			DrainTimeout:   1 * time.Second,
+			Stream:           streamMulti,
+			Group:            groupMulti,
+			ConsumerName:     "c-multi-monitor",
+			BatchSize:        10,
+			BlockDuration:    50 * time.Millisecond,
+			ClaimMinIdle:     50 * time.Millisecond,
+			ClaimInterval:    50 * time.Millisecond,
+			ClaimBatchSize:   10,
+			BaseBackoff:      50 * time.Millisecond,
+			MaxBackoff:       100 * time.Millisecond,
+			Concurrency:      5,
+			QueueSize:        10,
+			HandlerTimeout:   20 * time.Millisecond,
+			DrainTimeout:     1 * time.Second,
+			RetryMaxAttempts: 1,
+			RetryBaseBackoff: 10 * time.Millisecond,
+			RetryMaxBackoff:  20 * time.Millisecond,
+			DLQStore:         &infraRedis.MemoryDLQStore{},
 		}
 		cMulti, err := infraRedis.NewConsumer(client, cfgMulti, slog.New(memLogMulti))
 		require.NoError(t, err)
@@ -1281,20 +1358,24 @@ func TestConsumer_Live(t *testing.T) {
 		// Concurrency = 2, QueueSize = 2, BatchSize = 2
 		// Max in memory at once = 2 + 2 + 2 = 6
 		cfg := infraRedis.ConsumerConfig{
-			Stream:         stream,
-			Group:          group,
-			ConsumerName:   "c-backpressure",
-			BatchSize:      2,
-			BlockDuration:  100 * time.Millisecond,
-			ClaimMinIdle:   5 * time.Second,
-			ClaimInterval:  5 * time.Second,
-			ClaimBatchSize: 2,
-			BaseBackoff:    50 * time.Millisecond,
-			MaxBackoff:     100 * time.Millisecond,
-			Concurrency:    2,
-			QueueSize:      2,
-			HandlerTimeout: 4 * time.Second,
-			DrainTimeout:   2 * time.Second,
+			Stream:           stream,
+			Group:            group,
+			ConsumerName:     "c-backpressure",
+			BatchSize:        2,
+			BlockDuration:    100 * time.Millisecond,
+			ClaimMinIdle:     5 * time.Second,
+			ClaimInterval:    5 * time.Second,
+			ClaimBatchSize:   2,
+			BaseBackoff:      50 * time.Millisecond,
+			MaxBackoff:       100 * time.Millisecond,
+			Concurrency:      2,
+			QueueSize:        2,
+			HandlerTimeout:   4 * time.Second,
+			DrainTimeout:     2 * time.Second,
+			RetryMaxAttempts: 1,
+			RetryBaseBackoff: 10 * time.Millisecond,
+			RetryMaxBackoff:  20 * time.Millisecond,
+			DLQStore:         &infraRedis.MemoryDLQStore{},
 		}
 		consumer, err := infraRedis.NewConsumer(client, cfg, logger)
 		require.NoError(t, err)
@@ -1372,20 +1453,24 @@ func TestConsumer_Live(t *testing.T) {
 		// Each task runs for 80ms; total sequential queue drain takes ~400ms.
 		// After 200ms, queued messages exceed ClaimMinIdle and trigger claim sweeps every 30ms.
 		cfg := infraRedis.ConsumerConfig{
-			Stream:         stream,
-			Group:          group,
-			ConsumerName:   "c-self-reclaim",
-			BatchSize:      10,
-			BlockDuration:  50 * time.Millisecond,
-			ClaimMinIdle:   200 * time.Millisecond,
-			ClaimInterval:  30 * time.Millisecond,
-			ClaimBatchSize: 10,
-			BaseBackoff:    50 * time.Millisecond,
-			MaxBackoff:     100 * time.Millisecond,
-			Concurrency:    1,
-			QueueSize:      10,
-			HandlerTimeout: 150 * time.Millisecond,
-			DrainTimeout:   2 * time.Second,
+			Stream:           stream,
+			Group:            group,
+			ConsumerName:     "c-self-reclaim",
+			BatchSize:        10,
+			BlockDuration:    50 * time.Millisecond,
+			ClaimMinIdle:     200 * time.Millisecond,
+			ClaimInterval:    30 * time.Millisecond,
+			ClaimBatchSize:   10,
+			BaseBackoff:      50 * time.Millisecond,
+			MaxBackoff:       100 * time.Millisecond,
+			Concurrency:      1,
+			QueueSize:        10,
+			HandlerTimeout:   150 * time.Millisecond,
+			DrainTimeout:     2 * time.Second,
+			RetryMaxAttempts: 1,
+			RetryBaseBackoff: 10 * time.Millisecond,
+			RetryMaxBackoff:  20 * time.Millisecond,
+			DLQStore:         &infraRedis.MemoryDLQStore{},
 		}
 		consumer, err := infraRedis.NewConsumer(client, cfg, logger)
 		require.NoError(t, err)
@@ -1447,20 +1532,24 @@ func TestConsumer_Live(t *testing.T) {
 		require.NoError(t, err)
 
 		cfg := infraRedis.ConsumerConfig{
-			Stream:         stream,
-			Group:          group,
-			ConsumerName:   "c-timeout",
-			BatchSize:      10,
-			BlockDuration:  50 * time.Millisecond,
-			ClaimMinIdle:   300 * time.Millisecond,
-			ClaimInterval:  500 * time.Millisecond,
-			ClaimBatchSize: 10,
-			BaseBackoff:    50 * time.Millisecond,
-			MaxBackoff:     100 * time.Millisecond,
-			Concurrency:    1,
-			QueueSize:      1,
-			HandlerTimeout: 100 * time.Millisecond,
-			DrainTimeout:   1 * time.Second,
+			Stream:           stream,
+			Group:            group,
+			ConsumerName:     "c-timeout",
+			BatchSize:        10,
+			BlockDuration:    50 * time.Millisecond,
+			ClaimMinIdle:     3 * time.Second,
+			ClaimInterval:    500 * time.Millisecond,
+			ClaimBatchSize:   10,
+			BaseBackoff:      50 * time.Millisecond,
+			MaxBackoff:       100 * time.Millisecond,
+			Concurrency:      1,
+			QueueSize:        1,
+			HandlerTimeout:   100 * time.Millisecond,
+			DrainTimeout:     1 * time.Second,
+			RetryMaxAttempts: 3,
+			RetryBaseBackoff: 500 * time.Millisecond,
+			RetryMaxBackoff:  1 * time.Second,
+			DLQStore:         &infraRedis.MemoryDLQStore{},
 		}
 		consumer, err := infraRedis.NewConsumer(client, cfg, logger)
 		require.NoError(t, err)
@@ -1485,9 +1574,10 @@ func TestConsumer_Live(t *testing.T) {
 		}
 
 		// Timed-out message was not ACKed; must stay pending in PEL
-		pend, err := client.XPending(ctx, stream, group).Result()
+		pend, err := client.XPending(context.Background(), stream, group).Result()
 		require.NoError(t, err)
 		assert.Equal(t, int64(1), pend.Count, "timed-out message must remain in PEL")
+		cancel()
 	})
 
 	t.Run("graceful_drain_acks", func(t *testing.T) {
@@ -1511,20 +1601,24 @@ func TestConsumer_Live(t *testing.T) {
 		}
 
 		cfg := infraRedis.ConsumerConfig{
-			Stream:         stream,
-			Group:          group,
-			ConsumerName:   "c-drain",
-			BatchSize:      10,
-			BlockDuration:  100 * time.Millisecond,
-			ClaimMinIdle:   5 * time.Second,
-			ClaimInterval:  5 * time.Second,
-			ClaimBatchSize: 10,
-			BaseBackoff:    50 * time.Millisecond,
-			MaxBackoff:     100 * time.Millisecond,
-			Concurrency:    2,
-			QueueSize:      5,
-			HandlerTimeout: 2 * time.Second,
-			DrainTimeout:   3 * time.Second,
+			Stream:           stream,
+			Group:            group,
+			ConsumerName:     "c-drain",
+			BatchSize:        10,
+			BlockDuration:    100 * time.Millisecond,
+			ClaimMinIdle:     5 * time.Second,
+			ClaimInterval:    5 * time.Second,
+			ClaimBatchSize:   10,
+			BaseBackoff:      50 * time.Millisecond,
+			MaxBackoff:       100 * time.Millisecond,
+			Concurrency:      2,
+			QueueSize:        5,
+			HandlerTimeout:   2 * time.Second,
+			DrainTimeout:     3 * time.Second,
+			RetryMaxAttempts: 1,
+			RetryBaseBackoff: 10 * time.Millisecond,
+			RetryMaxBackoff:  20 * time.Millisecond,
+			DLQStore:         &infraRedis.MemoryDLQStore{},
 		}
 		consumer, err := infraRedis.NewConsumer(client, cfg, logger)
 		require.NoError(t, err)
@@ -1576,20 +1670,24 @@ func TestConsumer_Live(t *testing.T) {
 		require.NoError(t, err)
 
 		cfg := infraRedis.ConsumerConfig{
-			Stream:         stream,
-			Group:          group,
-			ConsumerName:   "c-drain-timeout",
-			BatchSize:      10,
-			BlockDuration:  50 * time.Millisecond,
-			ClaimMinIdle:   6 * time.Second,
-			ClaimInterval:  5 * time.Second,
-			ClaimBatchSize: 10,
-			BaseBackoff:    50 * time.Millisecond,
-			MaxBackoff:     100 * time.Millisecond,
-			Concurrency:    1,
-			QueueSize:      1,
-			HandlerTimeout: 5 * time.Second,
-			DrainTimeout:   50 * time.Millisecond,
+			Stream:           stream,
+			Group:            group,
+			ConsumerName:     "c-drain-timeout",
+			BatchSize:        10,
+			BlockDuration:    50 * time.Millisecond,
+			ClaimMinIdle:     6 * time.Second,
+			ClaimInterval:    5 * time.Second,
+			ClaimBatchSize:   10,
+			BaseBackoff:      50 * time.Millisecond,
+			MaxBackoff:       100 * time.Millisecond,
+			Concurrency:      1,
+			QueueSize:        1,
+			HandlerTimeout:   5 * time.Second,
+			DrainTimeout:     50 * time.Millisecond,
+			RetryMaxAttempts: 1,
+			RetryBaseBackoff: 10 * time.Millisecond,
+			RetryMaxBackoff:  20 * time.Millisecond,
+			DLQStore:         &infraRedis.MemoryDLQStore{},
 		}
 		consumer, err := infraRedis.NewConsumer(client, cfg, logger)
 		require.NoError(t, err)
@@ -1736,20 +1834,24 @@ func TestConsumer_Live(t *testing.T) {
 
 		// 2. Start Consumer 1: processes the event and pauses in rawHandler before commit
 		cfg1 := infraRedis.ConsumerConfig{
-			Stream:         stream,
-			Group:          group,
-			ConsumerName:   "consumer-1",
-			BatchSize:      10,
-			BlockDuration:  100 * time.Millisecond,
-			ClaimMinIdle:   100 * time.Millisecond,
-			ClaimInterval:  10 * time.Second,
-			ClaimBatchSize: 10,
-			BaseBackoff:    50 * time.Millisecond,
-			MaxBackoff:     200 * time.Millisecond,
-			HandlerTimeout: 80 * time.Millisecond,
-			Concurrency:    2,
-			QueueSize:      2,
-			DrainTimeout:   2 * time.Second,
+			Stream:           stream,
+			Group:            group,
+			ConsumerName:     "consumer-1",
+			BatchSize:        10,
+			BlockDuration:    100 * time.Millisecond,
+			ClaimMinIdle:     500 * time.Millisecond,
+			ClaimInterval:    10 * time.Second,
+			ClaimBatchSize:   10,
+			BaseBackoff:      50 * time.Millisecond,
+			MaxBackoff:       200 * time.Millisecond,
+			HandlerTimeout:   300 * time.Millisecond,
+			Concurrency:      2,
+			QueueSize:        2,
+			DrainTimeout:     2 * time.Second,
+			RetryMaxAttempts: 1,
+			RetryBaseBackoff: 10 * time.Millisecond,
+			RetryMaxBackoff:  20 * time.Millisecond,
+			DLQStore:         &infraRedis.MemoryDLQStore{},
 		}
 		c1, err := infraRedis.NewConsumer(client, cfg1, slog.Default())
 		require.NoError(t, err)
@@ -1781,26 +1883,30 @@ func TestConsumer_Live(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, "IN_PROGRESS", rec.Status)
 
-		// Allow idle time to exceed consumer-2's ClaimMinIdle (100ms)
-		time.Sleep(120 * time.Millisecond)
+		// Allow idle time to exceed consumer-2's ClaimMinIdle (200ms)
+		time.Sleep(250 * time.Millisecond)
 
 		// 3. Start Consumer 2: claims the message via XAUTOCLAIM while consumer-1 is still processing!
 		c2ConflictSeen := make(chan struct{}, 1)
 		cfg2 := infraRedis.ConsumerConfig{
-			Stream:         stream,
-			Group:          group,
-			ConsumerName:   "consumer-2",
-			BatchSize:      10,
-			BlockDuration:  50 * time.Millisecond,
-			ClaimMinIdle:   100 * time.Millisecond,
-			ClaimInterval:  30 * time.Millisecond,
-			ClaimBatchSize: 10,
-			BaseBackoff:    50 * time.Millisecond,
-			MaxBackoff:     200 * time.Millisecond,
-			HandlerTimeout: 80 * time.Millisecond,
-			Concurrency:    2,
-			QueueSize:      2,
-			DrainTimeout:   2 * time.Second,
+			Stream:           stream,
+			Group:            group,
+			ConsumerName:     "consumer-2",
+			BatchSize:        10,
+			BlockDuration:    50 * time.Millisecond,
+			ClaimMinIdle:     200 * time.Millisecond,
+			ClaimInterval:    30 * time.Millisecond,
+			ClaimBatchSize:   10,
+			BaseBackoff:      50 * time.Millisecond,
+			MaxBackoff:       200 * time.Millisecond,
+			HandlerTimeout:   150 * time.Millisecond,
+			Concurrency:      2,
+			QueueSize:        2,
+			DrainTimeout:     2 * time.Second,
+			RetryMaxAttempts: 1,
+			RetryBaseBackoff: 10 * time.Millisecond,
+			RetryMaxBackoff:  20 * time.Millisecond,
+			DLQStore:         &infraRedis.MemoryDLQStore{},
 		}
 		c2, err := infraRedis.NewConsumer(client, cfg2, slog.Default())
 		require.NoError(t, err)

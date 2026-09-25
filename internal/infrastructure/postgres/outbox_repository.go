@@ -117,12 +117,14 @@ func (r *OutboxRepository) ClaimBatch(
 	for i, row := range rows {
 		events[i] = appOutbox.Event{
 			ID:            uuidToString(row.ID),
+			EventID:       row.EventID,
 			AggregateType: row.AggregateType,
 			AggregateID:   row.AggregateID,
 			EventType:     row.EventType,
 			Payload:       row.Payload,
 			RetryCount:    int(row.RetryCount),
 			CreatedAt:     row.CreatedAt.Time.UTC(),
+			TargetGroup:   row.TargetGroup,
 		}
 	}
 

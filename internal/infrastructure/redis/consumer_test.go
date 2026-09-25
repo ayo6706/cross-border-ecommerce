@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -28,20 +29,24 @@ func TestConsumerConfig_Validate(t *testing.T) {
 	t.Parallel()
 
 	validCfg := ConsumerConfig{
-		Stream:         "product.changed",
-		Group:          "compliance-evaluators",
-		ConsumerName:   "c-1",
-		BatchSize:      10,
-		BlockDuration:  2 * time.Second,
-		ClaimMinIdle:   30 * time.Second,
-		ClaimInterval:  10 * time.Second,
-		ClaimBatchSize: 10,
-		BaseBackoff:    100 * time.Millisecond,
-		MaxBackoff:     5 * time.Second,
-		Concurrency:    10,
-		QueueSize:      20,
-		HandlerTimeout: 10 * time.Second,
-		DrainTimeout:   5 * time.Second,
+		Stream:           "product.changed",
+		Group:            "compliance-evaluators",
+		ConsumerName:     "c-1",
+		BatchSize:        10,
+		BlockDuration:    2 * time.Second,
+		ClaimMinIdle:     60 * time.Second,
+		ClaimInterval:    10 * time.Second,
+		ClaimBatchSize:   10,
+		BaseBackoff:      100 * time.Millisecond,
+		MaxBackoff:       5 * time.Second,
+		Concurrency:      10,
+		QueueSize:        20,
+		HandlerTimeout:   5 * time.Second,
+		DrainTimeout:     5 * time.Second,
+		RetryMaxAttempts: 5,
+		RetryBaseBackoff: 200 * time.Millisecond,
+		RetryMaxBackoff:  2 * time.Second,
+		DLQStore:         &memoryDLQStore{},
 	}
 
 	require.NoError(t, validCfg.Validate())
@@ -71,6 +76,27 @@ func TestConsumerConfig_Validate(t *testing.T) {
 				c.ConsumerName = "   "
 			},
 			expectedErr: "consumer name cannot be empty",
+		},
+		{
+			name: "stream longer than dlq column",
+			modify: func(c *ConsumerConfig) {
+				c.Stream = strings.Repeat("s", 129)
+			},
+			expectedErr: "stream name must be at most 128 bytes",
+		},
+		{
+			name: "group longer than dlq column",
+			modify: func(c *ConsumerConfig) {
+				c.Group = strings.Repeat("g", 129)
+			},
+			expectedErr: "consumer group must be at most 128 bytes",
+		},
+		{
+			name: "consumer name longer than dlq column",
+			modify: func(c *ConsumerConfig) {
+				c.ConsumerName = strings.Repeat("c", 129)
+			},
+			expectedErr: "consumer name must be at most 128 bytes",
 		},
 		{
 			name: "zero batch size",
@@ -172,6 +198,56 @@ func TestConsumerConfig_Validate(t *testing.T) {
 			},
 			expectedErr: "claim min idle (5s) must be strictly greater than handler timeout (10s)",
 		},
+		{
+			name: "retry max attempts <= 0",
+			modify: func(c *ConsumerConfig) {
+				c.RetryMaxAttempts = 0
+			},
+			expectedErr: "attempts must be between 1 and 100",
+		},
+		{
+			name: "retry base backoff <= 0",
+			modify: func(c *ConsumerConfig) {
+				c.RetryBaseBackoff = 0
+			},
+			expectedErr: "base backoff must be strictly positive",
+		},
+		{
+			name: "retry max backoff < base backoff",
+			modify: func(c *ConsumerConfig) {
+				c.RetryBaseBackoff = 5 * time.Second
+				c.RetryMaxBackoff = 1 * time.Second
+			},
+			expectedErr: "max backoff cannot be less than base backoff",
+		},
+		{
+			name: "retry max attempts excessive greater than 100",
+			modify: func(c *ConsumerConfig) {
+				c.RetryMaxAttempts = 101
+			},
+			expectedErr: "attempts must be between 1 and 100",
+		},
+		{
+			name: "retry max attempts int overflow math.MaxInt32",
+			modify: func(c *ConsumerConfig) {
+				c.RetryMaxAttempts = 1 << 31
+			},
+			expectedErr: "attempts must be between 1 and 100",
+		},
+		{
+			name: "nil dlq store",
+			modify: func(c *ConsumerConfig) {
+				c.DLQStore = nil
+			},
+			expectedErr: "dlq store cannot be nil",
+		},
+		{
+			name: "worst case retry window >= claim min idle",
+			modify: func(c *ConsumerConfig) {
+				c.HandlerTimeout = 12 * time.Second // 5 * 12s + 4 * 2s = 68s >= 60s
+			},
+			expectedErr: "worst-case retry window (1m8s) must be strictly less than claim min idle (1m0s)",
+		},
 	}
 
 	for _, tt := range tests {
@@ -193,20 +269,24 @@ func TestNewConsumer_NilAndValidationGuards(t *testing.T) {
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	cfg := ConsumerConfig{
-		Stream:         "product.changed",
-		Group:          "compliance-evaluators",
-		ConsumerName:   "c-1",
-		BatchSize:      10,
-		BlockDuration:  2 * time.Second,
-		ClaimMinIdle:   30 * time.Second,
-		ClaimInterval:  10 * time.Second,
-		ClaimBatchSize: 10,
-		BaseBackoff:    100 * time.Millisecond,
-		MaxBackoff:     5 * time.Second,
-		Concurrency:    10,
-		QueueSize:      20,
-		HandlerTimeout: 10 * time.Second,
-		DrainTimeout:   5 * time.Second,
+		Stream:           "product.changed",
+		Group:            "compliance-evaluators",
+		ConsumerName:     "c-1",
+		BatchSize:        10,
+		BlockDuration:    2 * time.Second,
+		ClaimMinIdle:     60 * time.Second,
+		ClaimInterval:    10 * time.Second,
+		ClaimBatchSize:   10,
+		BaseBackoff:      100 * time.Millisecond,
+		MaxBackoff:       5 * time.Second,
+		Concurrency:      10,
+		QueueSize:        20,
+		HandlerTimeout:   5 * time.Second,
+		DrainTimeout:     5 * time.Second,
+		RetryMaxAttempts: 5,
+		RetryBaseBackoff: 200 * time.Millisecond,
+		RetryMaxBackoff:  2 * time.Second,
+		DLQStore:         &memoryDLQStore{},
 	}
 
 	cNilClient, err := NewConsumer(nil, cfg, logger)

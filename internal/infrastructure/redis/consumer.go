@@ -11,8 +11,9 @@ import (
 	"sync"
 	"time"
 
+	appDLQ "github.com/ayo6706/cross-border-ecommerce/internal/application/dlq"
 	appMessaging "github.com/ayo6706/cross-border-ecommerce/internal/application/messaging"
-	appOutbox "github.com/ayo6706/cross-border-ecommerce/internal/application/outbox"
+	"github.com/ayo6706/cross-border-ecommerce/internal/platform/backoff"
 	"github.com/ayo6706/cross-border-ecommerce/internal/platform/uuid"
 	"github.com/ayo6706/cross-border-ecommerce/internal/platform/worker"
 	goredis "github.com/redis/go-redis/v9"
@@ -25,21 +26,30 @@ var (
 	ErrNilHandler            = errors.New("message handler cannot be nil")
 )
 
+// maxNameLen matches the VARCHAR(128) stream, consumer_group and consumer_name columns of
+// dlq_messages. Names are validated rather than truncated: a truncated group would make a
+// replay target a group that does not exist.
+const maxNameLen = 128
+
 type ConsumerConfig struct {
-	Stream         string
-	Group          string
-	ConsumerName   string
-	BatchSize      int
-	BlockDuration  time.Duration
-	ClaimMinIdle   time.Duration
-	ClaimInterval  time.Duration
-	ClaimBatchSize int
-	BaseBackoff    time.Duration
-	MaxBackoff     time.Duration
-	Concurrency    int
-	QueueSize      int
-	HandlerTimeout time.Duration
-	DrainTimeout   time.Duration
+	Stream           string
+	Group            string
+	ConsumerName     string
+	BatchSize        int
+	BlockDuration    time.Duration
+	ClaimMinIdle     time.Duration
+	ClaimInterval    time.Duration
+	ClaimBatchSize   int
+	BaseBackoff      time.Duration
+	MaxBackoff       time.Duration
+	Concurrency      int
+	QueueSize        int
+	HandlerTimeout   time.Duration
+	DrainTimeout     time.Duration
+	RetryMaxAttempts int
+	RetryBaseBackoff time.Duration
+	RetryMaxBackoff  time.Duration
+	DLQStore         appDLQ.Writer
 }
 
 func GenerateConsumerName(prefix string) (string, error) {
@@ -70,6 +80,13 @@ func (c ConsumerConfig) Validate() error {
 	}
 	if strings.TrimSpace(c.ConsumerName) == "" {
 		return fmt.Errorf("%w: consumer name cannot be empty", ErrInvalidConsumerConfig)
+	}
+	for _, f := range []struct{ name, value string }{
+		{"stream name", c.Stream}, {"consumer group", c.Group}, {"consumer name", c.ConsumerName},
+	} {
+		if len(f.value) > maxNameLen {
+			return fmt.Errorf("%w: %s must be at most %d bytes, got %d", ErrInvalidConsumerConfig, f.name, maxNameLen, len(f.value))
+		}
 	}
 	if c.BatchSize <= 0 || c.BatchSize > 1000 {
 		return fmt.Errorf("%w: batch size must be between 1 and 1000, got %d", ErrInvalidConsumerConfig, c.BatchSize)
@@ -107,6 +124,13 @@ func (c ConsumerConfig) Validate() error {
 	if c.ClaimMinIdle <= c.HandlerTimeout {
 		return fmt.Errorf("%w: claim min idle (%v) must be strictly greater than handler timeout (%v)",
 			ErrInvalidConsumerConfig, c.ClaimMinIdle, c.HandlerTimeout)
+	}
+	if c.DLQStore == nil {
+		return fmt.Errorf("%w: dlq store cannot be nil", ErrInvalidConsumerConfig)
+	}
+	if err := backoff.ValidateRetryPolicy(c.RetryMaxAttempts, c.RetryBaseBackoff, c.RetryMaxBackoff,
+		c.HandlerTimeout, c.ClaimMinIdle); err != nil {
+		return fmt.Errorf("%w: %w", ErrInvalidConsumerConfig, err)
 	}
 	return nil
 }
@@ -235,7 +259,7 @@ func (c *Consumer) dispatchMessage(ctx context.Context, pool *worker.Pool, handl
 			delete(c.inFlight, msgToProcess.ID)
 			c.inFlightMu.Unlock()
 		}()
-		c.processMessage(taskCtx, handler, msgToProcess)
+		c.processMessage(ctx, taskCtx, handler, msgToProcess)
 	})
 	if err != nil {
 		c.inFlightMu.Lock()
@@ -293,23 +317,67 @@ func (c *Consumer) claimPending(ctx context.Context, pool *worker.Pool, handler 
 	return nil
 }
 
-func (c *Consumer) runHandler(ctx context.Context, handler appMessaging.Handler, msg appMessaging.Message) (err error) {
+func (c *Consumer) runHandlerWithStack(ctx context.Context, handler appMessaging.Handler, msg appMessaging.Message) (stack string, err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			stack := debug.Stack()
+			st := debug.Stack()
+			stack = string(st)
 			c.logger.Error("message handler panicked",
 				slog.String("event_id", msg.EventID),
 				slog.String("stream_id", msg.StreamID),
 				slog.Any("panic", r),
-				slog.String("stack", string(stack)),
+				slog.String("stack", stack),
 			)
-			err = fmt.Errorf("handler panic: %v", r)
+			err = fmt.Errorf("%w: %v", appDLQ.ErrHandlerPanic, r)
 		}
 	}()
-	return handler(ctx, msg)
+	err = handler(ctx, msg)
+	return stack, err
 }
 
-func (c *Consumer) processMessage(taskCtx context.Context, handler appMessaging.Handler, rawMsg goredis.XMessage) {
+func (c *Consumer) ack(ctx context.Context, streamID, eventID string) {
+	ackCtx, ackCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer ackCancel()
+
+	if ackErr := c.client.XAck(ackCtx, c.cfg.Stream, c.cfg.Group, streamID).Err(); ackErr != nil {
+		c.logger.Error("failed to acknowledge processed stream message",
+			slog.String("event_id", eventID),
+			slog.String("stream_id", streamID),
+			slog.String("stream", c.cfg.Stream),
+			slog.String("group", c.cfg.Group),
+			slog.Any("error", ackErr),
+		)
+	}
+}
+
+// deadLetterAndAck writes rec to the dead-letter store and acknowledges the message only if
+// the write succeeded; otherwise the message stays pending and is redelivered.
+func (c *Consumer) deadLetterAndAck(ctx context.Context, rawMsg goredis.XMessage, rec appDLQ.Message) {
+	rec.Stream = c.cfg.Stream
+	rec.ConsumerGroup = c.cfg.Group
+	rec.ConsumerName = c.cfg.ConsumerName
+
+	dlqCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+
+	if err := c.cfg.DLQStore.Insert(dlqCtx, rec); err != nil {
+		c.logger.Error("failed to insert message into dead-letter store; leaving unacknowledged",
+			slog.String("stream_id", rawMsg.ID),
+			slog.String("stream", c.cfg.Stream),
+			slog.String("group", c.cfg.Group),
+			slog.Any("error", err),
+		)
+		return
+	}
+
+	eventID := ""
+	if rec.EventID != nil {
+		eventID = *rec.EventID
+	}
+	c.ack(ctx, rawMsg.ID, eventID)
+}
+
+func (c *Consumer) processMessage(runCtx, taskCtx context.Context, handler appMessaging.Handler, rawMsg goredis.XMessage) {
 	msg, err := DecodeMessage(c.cfg.Stream, rawMsg)
 	if err != nil {
 		c.logger.Error("failed to decode stream message envelope",
@@ -317,34 +385,107 @@ func (c *Consumer) processMessage(taskCtx context.Context, handler appMessaging.
 			slog.String("stream", c.cfg.Stream),
 			slog.Any("error", err),
 		)
+		rec := deadLetterRecord(rawMsg)
+		rec.FailureClass = appDLQ.ClassCorruptEnvelope
+		rec.LastError = err.Error()
+		rec.Attempts = 1
+		rec.FirstFailedAt = time.Now()
+		c.deadLetterAndAck(taskCtx, rawMsg, rec)
 		return
 	}
 
-	handlerCtx, handlerCancel := context.WithTimeout(taskCtx, c.cfg.HandlerTimeout)
-	defer handlerCancel()
-
-	if handlerErr := c.runHandler(handlerCtx, handler, msg); handlerErr != nil {
-		c.logger.Error("message handler returned error; leaving unacknowledged for redelivery",
+	if msg.TargetGroup != "" && msg.TargetGroup != c.cfg.Group {
+		c.logger.Debug("skipping replay message targeted at another consumer group",
 			slog.String("event_id", msg.EventID),
-			slog.String("stream_id", msg.StreamID),
-			slog.String("stream", c.cfg.Stream),
+			slog.String("stream_id", rawMsg.ID),
+			slog.String("target_group", msg.TargetGroup),
 			slog.String("group", c.cfg.Group),
-			slog.Any("error", handlerErr),
 		)
+		c.ack(taskCtx, rawMsg.ID, msg.EventID)
 		return
 	}
 
-	ackCtx, ackCancel := context.WithTimeout(context.WithoutCancel(taskCtx), 5*time.Second)
-	defer ackCancel()
+	firstFailedAt := time.Time{}
+	for attempt := 1; attempt <= c.cfg.RetryMaxAttempts; attempt++ {
+		if taskCtx.Err() != nil {
+			return
+		}
 
-	if ackErr := c.client.XAck(ackCtx, c.cfg.Stream, c.cfg.Group, rawMsg.ID).Err(); ackErr != nil {
-		c.logger.Error("failed to acknowledge processed stream message",
-			slog.String("event_id", msg.EventID),
-			slog.String("stream_id", msg.StreamID),
-			slog.String("stream", c.cfg.Stream),
-			slog.String("group", c.cfg.Group),
-			slog.Any("error", ackErr),
-		)
+		handlerCtx, handlerCancel := context.WithTimeout(taskCtx, c.cfg.HandlerTimeout)
+		stack, handlerErr := c.runHandlerWithStack(handlerCtx, handler, msg)
+		handlerCancel()
+
+		if handlerErr == nil {
+			c.ack(taskCtx, rawMsg.ID, msg.EventID)
+			return
+		}
+
+		if firstFailedAt.IsZero() {
+			firstFailedAt = time.Now()
+		}
+
+		parentErr := runCtx.Err()
+		if parentErr == nil {
+			parentErr = taskCtx.Err()
+		}
+
+		decision, failureClass := appDLQ.Classify(handlerErr, parentErr)
+		if decision == appDLQ.DecisionRetry && attempt == c.cfg.RetryMaxAttempts {
+			decision, failureClass = appDLQ.DecisionDeadLetter, appDLQ.ClassRetriesExhausted
+		}
+
+		switch decision {
+		case appDLQ.DecisionLeavePending:
+			c.logger.Warn("leaving message unacknowledged for redelivery without retry penalty",
+				slog.String("event_id", msg.EventID),
+				slog.String("stream_id", msg.StreamID),
+				slog.String("stream", c.cfg.Stream),
+				slog.String("group", c.cfg.Group),
+				slog.Any("error", handlerErr),
+			)
+			return
+
+		case appDLQ.DecisionDeadLetter:
+			c.logger.Error("routing message to dead-letter queue",
+				slog.String("event_id", msg.EventID),
+				slog.String("stream_id", msg.StreamID),
+				slog.String("stream", c.cfg.Stream),
+				slog.String("group", c.cfg.Group),
+				slog.String("failure_class", string(failureClass)),
+				slog.Int("attempts", attempt),
+				slog.Any("error", handlerErr),
+			)
+			rec := deadLetterRecord(rawMsg)
+			rec.FailureClass = failureClass
+			rec.LastError = handlerErr.Error()
+			rec.Stack = stack
+			rec.Attempts = attempt
+			rec.FirstFailedAt = firstFailedAt
+			c.deadLetterAndAck(taskCtx, rawMsg, rec)
+			return
+
+		case appDLQ.DecisionRetry:
+			delay := backoff.FullJitter(attempt-1, c.cfg.RetryBaseBackoff, c.cfg.RetryMaxBackoff)
+			c.logger.Warn("handler returned transient error; backing off before retry",
+				slog.String("event_id", msg.EventID),
+				slog.String("stream_id", msg.StreamID),
+				slog.Int("attempt", attempt),
+				slog.Int("max_attempts", c.cfg.RetryMaxAttempts),
+				slog.Duration("delay", delay),
+				slog.Any("error", handlerErr),
+			)
+
+			timer := time.NewTimer(delay)
+			select {
+			case <-runCtx.Done():
+				timer.Stop()
+				return
+			case <-taskCtx.Done():
+				timer.Stop()
+				return
+			case <-timer.C:
+			}
+		}
 	}
 }
 
@@ -362,7 +503,7 @@ func (c *Consumer) handleStreamError(ctx context.Context, err error, consecutive
 		)
 		if ensureErr := EnsureGroup(ctx, c.client, c.cfg.Stream, c.cfg.Group); ensureErr != nil {
 			*consecutiveErrors++
-			bo := appOutbox.Backoff(*consecutiveErrors-1, c.cfg.BaseBackoff, c.cfg.MaxBackoff)
+			bo := backoff.Exponential(*consecutiveErrors-1, c.cfg.BaseBackoff, c.cfg.MaxBackoff)
 			c.logger.Error("failed to recreate consumer group, backing off",
 				slog.Int("consecutive_errors", *consecutiveErrors),
 				slog.Duration("backoff", bo),
@@ -380,7 +521,7 @@ func (c *Consumer) handleStreamError(ctx context.Context, err error, consecutive
 
 	classified := ClassifyRedisError(err, ctx.Err())
 	*consecutiveErrors++
-	bo := appOutbox.Backoff(*consecutiveErrors-1, c.cfg.BaseBackoff, c.cfg.MaxBackoff)
+	bo := backoff.Exponential(*consecutiveErrors-1, c.cfg.BaseBackoff, c.cfg.MaxBackoff)
 	c.logger.Error("stream consumer error, backing off",
 		slog.Int("consecutive_errors", *consecutiveErrors),
 		slog.Duration("backoff", bo),
@@ -409,7 +550,7 @@ func (c *Consumer) ensureGroupWithBackoff(ctx context.Context) error {
 			return err
 		}
 		consecutiveErrors++
-		bo := appOutbox.Backoff(consecutiveErrors-1, c.cfg.BaseBackoff, c.cfg.MaxBackoff)
+		bo := backoff.Exponential(consecutiveErrors-1, c.cfg.BaseBackoff, c.cfg.MaxBackoff)
 		c.logger.Error("broker unavailable while ensuring consumer group, backing off",
 			slog.String("stream", c.cfg.Stream),
 			slog.String("group", c.cfg.Group),

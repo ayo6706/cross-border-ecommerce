@@ -491,40 +491,51 @@ func TestOutboxRelay_Live(t *testing.T) {
 		group1 := "compliance-evaluators"
 		group2 := "ai-enrichers"
 
+		dlqRepo, err := postgres.NewDLQRepository(pool)
+		require.NoError(t, err)
+
 		c1Cfg := infraRedis.ConsumerConfig{
-			Stream:         "product.changed",
-			Group:          group1,
-			ConsumerName:   "c1-compliance",
-			BatchSize:      10,
-			BlockDuration:  500 * time.Millisecond,
-			ClaimMinIdle:   1 * time.Second,
-			ClaimInterval:  500 * time.Millisecond,
-			ClaimBatchSize: 10,
-			BaseBackoff:    10 * time.Millisecond,
-			MaxBackoff:     100 * time.Millisecond,
-			Concurrency:    2,
-			QueueSize:      10,
-			HandlerTimeout: 500 * time.Millisecond,
-			DrainTimeout:   1 * time.Second,
+			Stream:           "product.changed",
+			Group:            group1,
+			ConsumerName:     "c1-compliance",
+			BatchSize:        10,
+			BlockDuration:    500 * time.Millisecond,
+			ClaimMinIdle:     1 * time.Second,
+			ClaimInterval:    500 * time.Millisecond,
+			ClaimBatchSize:   10,
+			BaseBackoff:      10 * time.Millisecond,
+			MaxBackoff:       100 * time.Millisecond,
+			Concurrency:      2,
+			QueueSize:        10,
+			HandlerTimeout:   500 * time.Millisecond,
+			DrainTimeout:     1 * time.Second,
+			RetryMaxAttempts: 1,
+			RetryBaseBackoff: 10 * time.Millisecond,
+			RetryMaxBackoff:  20 * time.Millisecond,
+			DLQStore:         dlqRepo,
 		}
 		c1, err := infraRedis.NewConsumer(rClient, c1Cfg, testLogger())
 		require.NoError(t, err)
 
 		c2Cfg := infraRedis.ConsumerConfig{
-			Stream:         "product.changed",
-			Group:          group2,
-			ConsumerName:   "c2-ai",
-			BatchSize:      10,
-			BlockDuration:  500 * time.Millisecond,
-			ClaimMinIdle:   1 * time.Second,
-			ClaimInterval:  500 * time.Millisecond,
-			ClaimBatchSize: 10,
-			BaseBackoff:    10 * time.Millisecond,
-			MaxBackoff:     100 * time.Millisecond,
-			Concurrency:    2,
-			QueueSize:      10,
-			HandlerTimeout: 500 * time.Millisecond,
-			DrainTimeout:   1 * time.Second,
+			Stream:           "product.changed",
+			Group:            group2,
+			ConsumerName:     "c2-ai",
+			BatchSize:        10,
+			BlockDuration:    500 * time.Millisecond,
+			ClaimMinIdle:     1 * time.Second,
+			ClaimInterval:    500 * time.Millisecond,
+			ClaimBatchSize:   10,
+			BaseBackoff:      10 * time.Millisecond,
+			MaxBackoff:       100 * time.Millisecond,
+			Concurrency:      2,
+			QueueSize:        10,
+			HandlerTimeout:   500 * time.Millisecond,
+			DrainTimeout:     1 * time.Second,
+			RetryMaxAttempts: 1,
+			RetryBaseBackoff: 10 * time.Millisecond,
+			RetryMaxBackoff:  20 * time.Millisecond,
+			DLQStore:         dlqRepo,
 		}
 		c2, err := infraRedis.NewConsumer(rClient, c2Cfg, testLogger())
 		require.NoError(t, err)
