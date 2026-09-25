@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/ayo6706/cross-border-ecommerce/internal/adapters/httpapi"
+	appDLQ "github.com/ayo6706/cross-border-ecommerce/internal/application/dlq"
 	"github.com/ayo6706/cross-border-ecommerce/internal/infrastructure/postgres"
 	"github.com/ayo6706/cross-border-ecommerce/internal/platform/config"
 	"github.com/ayo6706/cross-border-ecommerce/internal/platform/logging"
@@ -66,9 +67,19 @@ func run() error {
 		slog.Int("min_conns", int(cfg.Database.MinConns)),
 	)
 
+	dlqTx, err := postgres.NewDLQTxManager(dbPool)
+	if err != nil {
+		return fmt.Errorf("create dlq transaction manager: %w", err)
+	}
+	dlqReplayer, err := appDLQ.NewReplayService(dlqTx)
+	if err != nil {
+		return fmt.Errorf("create dlq replay service: %w", err)
+	}
+
 	handler := httpapi.NewRouter(httpapi.RouterConfig{
-		Logger: logger,
-		DB:     dbPool,
+		Logger:      logger,
+		DB:          dbPool,
+		DLQReplayer: dlqReplayer,
 	})
 
 	srv := &http.Server{

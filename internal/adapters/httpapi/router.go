@@ -8,13 +8,15 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ayo6706/cross-border-ecommerce/internal/application/dlq"
 	"github.com/ayo6706/cross-border-ecommerce/internal/platform/logging"
 	"github.com/ayo6706/cross-border-ecommerce/internal/platform/uuid"
 )
 
 type RouterConfig struct {
-	Logger *slog.Logger
-	DB     Pinger
+	Logger      *slog.Logger
+	DB          Pinger
+	DLQReplayer dlq.Replayer
 }
 
 func NewRouter(cfg RouterConfig) http.Handler {
@@ -22,6 +24,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 
 	mux.HandleFunc("GET /health/live", HandleLiveness())
 	mux.HandleFunc("GET /health/ready", HandleReadiness(cfg.DB))
+	mux.HandleFunc("POST /v1/dlq/{id}/replay", HandleDLQReplay(cfg.DLQReplayer, cfg.Logger))
 
 	var handler http.Handler = mux
 	// Order: RequestID -> Logging -> Recovery -> Mux

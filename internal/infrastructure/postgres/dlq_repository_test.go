@@ -25,6 +25,10 @@ func TestDLQRepository_ConstructorValidation(t *testing.T) {
 	repo, err := postgres.NewDLQRepository(nil)
 	assert.Error(t, err)
 	assert.Nil(t, repo)
+
+	tx, err := postgres.NewDLQTxManager(nil)
+	assert.Error(t, err)
+	assert.Nil(t, tx)
 }
 
 func setupLiveDLQDB(t *testing.T) (*pgxpool.Pool, *postgres.DLQRepository) {
@@ -141,6 +145,10 @@ func replayableMessage(t *testing.T, streamMsgID string) dlq.Message {
 func TestDLQ_Live(t *testing.T) {
 	pool, repo := setupLiveDLQDB(t)
 	ctx := context.Background()
+	txManager, err := postgres.NewDLQTxManager(pool)
+	require.NoError(t, err)
+	replayer, err := dlq.NewReplayService(txManager)
+	require.NoError(t, err)
 
 	t.Run("Insert_PersistsAllFields", func(t *testing.T) {
 		now := time.Now().UTC().Truncate(time.Microsecond)
@@ -235,7 +243,7 @@ func TestDLQ_Live(t *testing.T) {
 		msg := replayableMessage(t, "1710000000002-0")
 		dlqID := insertDLQ(t, pool, repo, msg)
 
-		outboxID, err := repo.Replay(ctx, dlqID)
+		outboxID, err := replayer.Replay(ctx, dlqID)
 		require.NoError(t, err)
 
 		got := readDLQ(t, pool, dlqID)
@@ -258,10 +266,10 @@ func TestDLQ_Live(t *testing.T) {
 	t.Run("Replay_AlreadyReplayed", func(t *testing.T) {
 		dlqID := insertDLQ(t, pool, repo, replayableMessage(t, "1710000000003-0"))
 
-		_, err := repo.Replay(ctx, dlqID)
+		_, err := replayer.Replay(ctx, dlqID)
 		require.NoError(t, err)
 
-		_, err = repo.Replay(ctx, dlqID)
+		_, err = replayer.Replay(ctx, dlqID)
 		require.ErrorIs(t, err, dlq.ErrAlreadyReplayed)
 	})
 
@@ -273,7 +281,7 @@ func TestDLQ_Live(t *testing.T) {
 		msg.FailureClass = dlq.ClassCorruptEnvelope
 		dlqID := insertDLQ(t, pool, repo, msg)
 
-		_, err := repo.Replay(ctx, dlqID)
+		_, err := replayer.Replay(ctx, dlqID)
 		require.ErrorIs(t, err, dlq.ErrNotReplayable)
 	})
 
@@ -281,12 +289,12 @@ func TestDLQ_Live(t *testing.T) {
 		nonExistentID, err := uuid.NewString()
 		require.NoError(t, err)
 
-		_, err = repo.Replay(ctx, nonExistentID)
+		_, err = replayer.Replay(ctx, nonExistentID)
 		require.ErrorIs(t, err, dlq.ErrDLQNotFound)
 	})
 
 	t.Run("Replay_InvalidUUID", func(t *testing.T) {
-		_, err := repo.Replay(ctx, "not-a-valid-uuid")
+		_, err := replayer.Replay(ctx, "not-a-valid-uuid")
 		require.ErrorIs(t, err, dlq.ErrInvalidDLQID)
 	})
 
@@ -300,7 +308,7 @@ func TestDLQ_Live(t *testing.T) {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				_, err := repo.Replay(ctx, dlqID)
+				_, err := replayer.Replay(ctx, dlqID)
 				mu.Lock()
 				defer mu.Unlock()
 				if err == nil {
@@ -328,7 +336,7 @@ func TestDLQ_Live(t *testing.T) {
 		msg.EventID = &eventID
 		dlqID := insertDLQ(t, pool, repo, msg)
 
-		outboxID, err := repo.Replay(ctx, dlqID)
+		outboxID, err := replayer.Replay(ctx, dlqID)
 		require.NoError(t, err)
 
 		var replayOf string
@@ -345,7 +353,7 @@ func TestDLQ_Live(t *testing.T) {
 		msg.EventID = &eventID
 		dlqID := insertDLQ(t, pool, repo, msg)
 
-		outboxID, err := repo.Replay(ctx, dlqID)
+		outboxID, err := replayer.Replay(ctx, dlqID)
 		require.NoError(t, err)
 
 		var replayOf string
@@ -372,7 +380,7 @@ func TestDLQ_Live(t *testing.T) {
 				tc.alter(&msg)
 				dlqID := insertDLQ(t, pool, repo, msg)
 
-				_, err := repo.Replay(ctx, dlqID)
+				_, err := replayer.Replay(ctx, dlqID)
 				require.ErrorIs(t, err, dlq.ErrNotReplayable)
 			})
 		}

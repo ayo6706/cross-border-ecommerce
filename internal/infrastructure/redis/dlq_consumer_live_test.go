@@ -73,6 +73,16 @@ func setupLivePostgresForDLQ(t *testing.T) (*pgxpool.Pool, *infraPostgres.DLQRep
 	return pool, dlqRepo, outboxRepo
 }
 
+// newLiveReplayer wires the replay use case the way cmd/api does.
+func newLiveReplayer(t *testing.T, pool *pgxpool.Pool) appDLQ.Replayer {
+	t.Helper()
+	tx, err := infraPostgres.NewDLQTxManager(pool)
+	require.NoError(t, err)
+	svc, err := appDLQ.NewReplayService(tx)
+	require.NoError(t, err)
+	return svc
+}
+
 func TestConsumer_ENG014_Live(t *testing.T) {
 	client := getTestRedisClient(t)
 	defer client.Close()
@@ -669,8 +679,8 @@ func TestConsumer_ENG014_Live(t *testing.T) {
 
 		// 2. Invoke HTTP API: POST /v1/dlq/{id}/replay
 		router := httpapi.NewRouter(httpapi.RouterConfig{
-			DB:       pool,
-			DLQStore: dlqRepo,
+			DB:          pool,
+			DLQReplayer: newLiveReplayer(t, pool),
 		})
 
 		req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/v1/dlq/%s/replay", dlqID), nil)
@@ -1056,9 +1066,9 @@ func TestConsumer_ENG014_Live(t *testing.T) {
 
 		// Replay via HTTP router
 		router := httpapi.NewRouter(httpapi.RouterConfig{
-			Logger:   logger,
-			DB:       pool,
-			DLQStore: dlqRepo,
+			Logger:      logger,
+			DB:          pool,
+			DLQReplayer: newLiveReplayer(t, pool),
 		})
 
 		req := httptest.NewRequest(http.MethodPost, "/v1/dlq/"+dlqID+"/replay", nil)

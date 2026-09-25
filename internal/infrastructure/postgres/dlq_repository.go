@@ -10,15 +10,13 @@ import (
 
 	"github.com/ayo6706/cross-border-ecommerce/internal/application/dlq"
 	"github.com/ayo6706/cross-border-ecommerce/internal/infrastructure/postgres/generated"
-	"github.com/ayo6706/cross-border-ecommerce/internal/platform/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 var (
-	_ dlq.Writer   = (*DLQRepository)(nil)
-	_ dlq.Replayer = (*DLQRepository)(nil)
+	_ dlq.Writer     = (*DLQRepository)(nil)
+	_ dlq.Repository = (*DLQRepository)(nil)
 )
 
 const (
@@ -33,18 +31,14 @@ const (
 )
 
 type DLQRepository struct {
-	pool    *pgxpool.Pool
 	queries *generated.Queries
 }
 
-func NewDLQRepository(pool *pgxpool.Pool) (*DLQRepository, error) {
-	if pool == nil {
-		return nil, errors.New("database connection pool cannot be nil")
+func NewDLQRepository(db generated.DBTX) (*DLQRepository, error) {
+	if db == nil {
+		return nil, errors.New("database connection cannot be nil")
 	}
-	return &DLQRepository{
-		pool:    pool,
-		queries: generated.New(pool),
-	}, nil
+	return &DLQRepository{queries: generated.New(db)}, nil
 }
 
 func (r *DLQRepository) Insert(ctx context.Context, msg dlq.Message) error {
@@ -144,68 +138,46 @@ func storable(s string, maxRunes int) (string, bool) {
 	return clean, clean == s
 }
 
-func (r *DLQRepository) Replay(ctx context.Context, id string) (string, error) {
+func (r *DLQRepository) GetReplaySource(ctx context.Context, id string) (dlq.ReplaySource, error) {
 	idUUID, err := parseUUID(id)
 	if err != nil {
-		return "", fmt.Errorf("%w: invalid uuid %q: %w", dlq.ErrInvalidDLQID, id, err)
+		return dlq.ReplaySource{}, fmt.Errorf("%w: invalid uuid %q: %w", dlq.ErrInvalidDLQID, id, err)
 	}
-
-	tx, err := r.pool.Begin(ctx)
-	if err != nil {
-		return "", fmt.Errorf("begin transaction: %w", err)
-	}
-	defer func() {
-		_ = tx.Rollback(ctx)
-	}()
-
-	qtx := r.queries.WithTx(tx)
-
-	row, err := qtx.GetDLQReplaySource(ctx, idUUID)
+	row, err := r.queries.GetDLQReplaySource(ctx, idUUID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return "", dlq.ErrDLQNotFound
+			return dlq.ReplaySource{}, dlq.ErrDLQNotFound
 		}
-		return "", fmt.Errorf("query dlq message for replay: %w", err)
+		return dlq.ReplaySource{}, fmt.Errorf("get dlq replay source: %w", err)
 	}
-	if !row.Replayable {
-		return "", dlq.ErrNotReplayable
-	}
+	return dlq.ReplaySource{
+		ConsumerGroup: row.ConsumerGroup,
+		EventID:       row.EventID.String,
+		EventType:     row.EventType,
+		AggregateType: row.AggregateType,
+		AggregateID:   row.AggregateID,
+		Payload:       row.Payload,
+		Replayable:    row.Replayable,
+	}, nil
+}
 
-	outboxID, err := uuid.NewString()
+// MarkReplayed moves the message from DEAD to REPLAYED with a guarded update, so of two concurrent
+// replays only one changes the row.
+func (r *DLQRepository) MarkReplayed(ctx context.Context, id, replayOutboxID string) (bool, error) {
+	idUUID, err := parseUUID(id)
 	if err != nil {
-		return "", fmt.Errorf("generate replay outbox id: %w", err)
+		return false, fmt.Errorf("%w: invalid uuid %q: %w", dlq.ErrInvalidDLQID, id, err)
 	}
-	outboxUUID, err := parseUUID(outboxID)
+	outboxUUID, err := parseUUID(replayOutboxID)
 	if err != nil {
-		return "", fmt.Errorf("parse replay outbox uuid: %w", err)
+		return false, fmt.Errorf("invalid replay outbox id: %w", err)
 	}
-
-	err = qtx.CreateReplayOutboxEvent(ctx, generated.CreateReplayOutboxEventParams{
-		ID:              outboxUUID,
-		AggregateType:   row.AggregateType,
-		AggregateID:     row.AggregateID,
-		EventType:       row.EventType,
-		Payload:         row.Payload,
-		ReplayOfEventID: row.EventID,
-		TargetGroup:     pgtype.Text{String: row.ConsumerGroup, Valid: true},
-	})
-	if err != nil {
-		return "", fmt.Errorf("create replay outbox event: %w", err)
-	}
-
-	affected, err := qtx.MarkDLQMessageReplayed(ctx, generated.MarkDLQMessageReplayedParams{
+	affected, err := r.queries.MarkDLQMessageReplayed(ctx, generated.MarkDLQMessageReplayedParams{
 		ReplayOutboxID: outboxUUID,
 		ID:             idUUID,
 	})
 	if err != nil {
-		return "", fmt.Errorf("mark dlq message replayed: %w", err)
+		return false, fmt.Errorf("mark dlq message replayed: %w", err)
 	}
-	if affected == 0 {
-		return "", dlq.ErrAlreadyReplayed
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return "", fmt.Errorf("commit replay transaction: %w", err)
-	}
-	return outboxID, nil
+	return affected == 1, nil
 }

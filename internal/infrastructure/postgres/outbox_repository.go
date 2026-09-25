@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	appDLQ "github.com/ayo6706/cross-border-ecommerce/internal/application/dlq"
 	appOutbox "github.com/ayo6706/cross-border-ecommerce/internal/application/outbox"
 	"github.com/ayo6706/cross-border-ecommerce/internal/infrastructure/postgres/generated"
 	"github.com/ayo6706/cross-border-ecommerce/internal/platform/uuid"
@@ -14,7 +15,10 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-var _ appOutbox.Store = (*OutboxRepository)(nil)
+var (
+	_ appOutbox.Store     = (*OutboxRepository)(nil)
+	_ appDLQ.OutboxWriter = (*OutboxRepository)(nil)
+)
 
 type OutboxRepository struct {
 	queries *generated.Queries
@@ -75,6 +79,41 @@ func (r *OutboxRepository) CreateEvent(
 		return fmt.Errorf("create outbox event: %w", err)
 	}
 
+	return nil
+}
+
+// CreateReplayEvent writes an outbox event that re-publishes a dead-lettered message to one consumer
+// group under its original event_id.
+func (r *OutboxRepository) CreateReplayEvent(ctx context.Context, e appDLQ.ReplayEvent) error {
+	id, err := parseUUID(e.ID)
+	if err != nil {
+		return fmt.Errorf("invalid replay outbox id: %w", err)
+	}
+	if strings.TrimSpace(e.ReplayOfEventID) == "" {
+		return errors.New("replay event id cannot be empty")
+	}
+	if strings.TrimSpace(e.TargetGroup) == "" {
+		return errors.New("replay target group cannot be empty")
+	}
+	if strings.TrimSpace(e.EventType) == "" {
+		return errors.New("event type cannot be empty")
+	}
+	if len(e.Payload) == 0 {
+		return errors.New("outbox event payload cannot be empty")
+	}
+
+	err = r.queries.CreateReplayOutboxEvent(ctx, generated.CreateReplayOutboxEventParams{
+		ID:              id,
+		AggregateType:   e.AggregateType,
+		AggregateID:     e.AggregateID,
+		EventType:       e.EventType,
+		Payload:         e.Payload,
+		ReplayOfEventID: pgtype.Text{String: e.ReplayOfEventID, Valid: true},
+		TargetGroup:     pgtype.Text{String: e.TargetGroup, Valid: true},
+	})
+	if err != nil {
+		return fmt.Errorf("create replay outbox event: %w", err)
+	}
 	return nil
 }
 
