@@ -7,15 +7,15 @@ import (
 	"log/slog"
 	"time"
 
+	appMessaging "github.com/ayo6706/cross-border-ecommerce/internal/application/messaging"
 	"github.com/ayo6706/cross-border-ecommerce/internal/platform/uuid"
 )
 
 var (
-	ErrBrokerUnavailable = errors.New("broker unavailable")
-	ErrInvalidConfig     = errors.New("invalid relay configuration")
-	ErrNilStore          = errors.New("store cannot be nil")
-	ErrNilPublisher      = errors.New("publisher cannot be nil")
-	ErrNilLogger         = errors.New("logger cannot be nil")
+	ErrInvalidConfig = errors.New("invalid relay configuration")
+	ErrNilStore      = errors.New("store cannot be nil")
+	ErrNilPublisher  = errors.New("publisher cannot be nil")
+	ErrNilLogger     = errors.New("logger cannot be nil")
 )
 
 type Event struct {
@@ -176,7 +176,7 @@ func (r *Relay) RunOnce(ctx context.Context) (claimed, published int, err error)
 			continue
 		}
 
-		if errors.Is(pubErr, ErrBrokerUnavailable) {
+		if errors.Is(pubErr, appMessaging.ErrBrokerUnavailable) {
 			var markErr error
 			if len(publishedIDs) > 0 {
 				if _, err := r.store.MarkPublished(ctx, claimToken, publishedIDs); err != nil {

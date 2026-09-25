@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	appMessaging "github.com/ayo6706/cross-border-ecommerce/internal/application/messaging"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -243,7 +244,7 @@ func TestRunOnce_BrokerUnavailable(t *testing.T) {
 	pub := &mockPublisher{
 		publishFn: func(ctx context.Context, e Event) error {
 			if e.ID == "e2" {
-				return ErrBrokerUnavailable
+				return appMessaging.ErrBrokerUnavailable
 			}
 			return nil
 		},
@@ -263,7 +264,7 @@ func TestRunOnce_BrokerUnavailable(t *testing.T) {
 	assert.Equal(t, 3, claimed)
 	assert.Equal(t, 1, published)
 	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrBrokerUnavailable)
+	assert.ErrorIs(t, err, appMessaging.ErrBrokerUnavailable)
 
 	assert.Equal(t, []string{"e1"}, store.publishedIDs)
 	var releasedAll []string
@@ -290,7 +291,7 @@ func TestRunOnce_MixedBatch_PoisonOkBrokerDown(t *testing.T) {
 				return errPoison
 			}
 			if e.ID == "e3" {
-				return ErrBrokerUnavailable
+				return appMessaging.ErrBrokerUnavailable
 			}
 			return nil
 		},
@@ -310,7 +311,7 @@ func TestRunOnce_MixedBatch_PoisonOkBrokerDown(t *testing.T) {
 	assert.Equal(t, 3, claimed)
 	assert.Equal(t, 1, published)
 	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrBrokerUnavailable)
+	assert.ErrorIs(t, err, appMessaging.ErrBrokerUnavailable)
 
 	assert.Equal(t, []string{"e2"}, store.publishedIDs)
 	assert.Equal(t, "malformed event schema", store.recordedFails["e1"])

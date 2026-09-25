@@ -47,6 +47,9 @@ Outbox Relay Tuning Variables (with defaults):
 - `OUTBOX_MAX_BACKOFF`: Maximum retry backoff duration (default: `5m`).
 - `OUTBOX_MAX_ATTEMPTS`: Max retry attempts before marking an event as `FAILED` (default: `10`).
 
+Stream Broker Tuning Variables (with defaults):
+- `STREAM_RETENTION`: Time-based retention cutoff for stream trimming (default: `168h` / 7 days).
+
 Source credentials are never stored in source config. API sources reference
 secrets instead, e.g. `"auth_kind": "bearer", "auth_ref": "env:SUPPLIER_TOKEN"`,
 and the value is read from the environment when the adapter is built.

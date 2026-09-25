@@ -63,7 +63,7 @@ func run() error {
 	}
 	defer pool.Close()
 
-	redisPub, err := redis.NewPublisher(ctx, cfg.Redis.URL)
+	redisPub, err := redis.NewPublisher(ctx, cfg.Redis.URL, redis.WithRetention(cfg.Stream.Retention))
 	if err != nil {
 		return fmt.Errorf("connect to redis: %w", err)
 	}
