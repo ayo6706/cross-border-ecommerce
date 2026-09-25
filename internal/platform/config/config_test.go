@@ -74,8 +74,17 @@ func TestLoad_Defaults(t *testing.T) {
 	if cfg.Stream.ConsumerBlock != 2*time.Second {
 		t.Errorf("expected default Stream ConsumerBlock 2s, got %v", cfg.Stream.ConsumerBlock)
 	}
-	if cfg.Stream.ClaimMinIdle != 30*time.Second {
-		t.Errorf("expected default Stream ClaimMinIdle 30s, got %v", cfg.Stream.ClaimMinIdle)
+	if cfg.Stream.ClaimMinIdle != 60*time.Second {
+		t.Errorf("expected default Stream ClaimMinIdle 60s, got %v", cfg.Stream.ClaimMinIdle)
+	}
+	if cfg.Stream.RetryMaxAttempts != 5 {
+		t.Errorf("expected default Stream RetryMaxAttempts 5, got %d", cfg.Stream.RetryMaxAttempts)
+	}
+	if cfg.Stream.RetryBaseBackoff != 200*time.Millisecond {
+		t.Errorf("expected default Stream RetryBaseBackoff 200ms, got %v", cfg.Stream.RetryBaseBackoff)
+	}
+	if cfg.Stream.RetryMaxBackoff != 2*time.Second {
+		t.Errorf("expected default Stream RetryMaxBackoff 2s, got %v", cfg.Stream.RetryMaxBackoff)
 	}
 	if cfg.Stream.ClaimInterval != 10*time.Second {
 		t.Errorf("expected default Stream ClaimInterval 10s, got %v", cfg.Stream.ClaimInterval)
@@ -119,39 +128,42 @@ func TestLoad_CustomOverrides(t *testing.T) {
 	t.Parallel()
 
 	env := map[string]string{
-		"PORT":                    "9000",
-		"SERVER_READ_TIMEOUT":     "5s",
-		"SERVER_WRITE_TIMEOUT":    "5s",
-		"SERVER_IDLE_TIMEOUT":     "30s",
-		"SERVER_SHUTDOWN_TIMEOUT": "10s",
-		"DATABASE_URL":            "postgres://user:pass@dbhost:5432/testdb",
-		"DB_MAX_CONNS":            "50",
-		"DB_MIN_CONNS":            "10",
-		"DB_MAX_CONN_IDLE_TIME":   "10m",
-		"DB_MAX_CONN_LIFETIME":    "30m",
-		"DB_CONNECT_TIMEOUT":      "3s",
-		"LOG_LEVEL":               "DEBUG",
-		"LOG_FORMAT":              "TEXT",
-		"LOG_ADD_SOURCE":          "true",
-		"APP_ENV":                 "production",
-		"SERVICE_NAME":            "trade-api",
-		"REDIS_URL":               "redis://redis.internal:6379",
-		"STREAM_RETENTION":        "72h",
-		"STREAM_CONSUMER_BLOCK":   "5s",
-		"STREAM_CLAIM_MIN_IDLE":   "2m",
-		"STREAM_CLAIM_INTERVAL":   "15s",
-		"STREAM_CONSUMER_BATCH":   "25",
-		"STREAM_HANDLER_TIMEOUT":  "45s",
-		"IDEMPOTENCY_LEASE_TTL":   "60s",
-		"WORKER_CONCURRENCY":      "30",
-		"WORKER_QUEUE_SIZE":       "50",
-		"WORKER_DRAIN_TIMEOUT":    "20s",
-		"OUTBOX_BATCH_SIZE":       "200",
-		"OUTBOX_POLL_INTERVAL":    "1s",
-		"OUTBOX_LEASE":            "45s",
-		"OUTBOX_BASE_BACKOFF":     "2s",
-		"OUTBOX_MAX_BACKOFF":      "10m",
-		"OUTBOX_MAX_ATTEMPTS":     "20",
+		"PORT":                      "9000",
+		"SERVER_READ_TIMEOUT":       "5s",
+		"SERVER_WRITE_TIMEOUT":      "5s",
+		"SERVER_IDLE_TIMEOUT":       "30s",
+		"SERVER_SHUTDOWN_TIMEOUT":   "10s",
+		"DATABASE_URL":              "postgres://user:pass@dbhost:5432/testdb",
+		"DB_MAX_CONNS":              "50",
+		"DB_MIN_CONNS":              "10",
+		"DB_MAX_CONN_IDLE_TIME":     "10m",
+		"DB_MAX_CONN_LIFETIME":      "30m",
+		"DB_CONNECT_TIMEOUT":        "3s",
+		"LOG_LEVEL":                 "DEBUG",
+		"LOG_FORMAT":                "TEXT",
+		"LOG_ADD_SOURCE":            "true",
+		"APP_ENV":                   "production",
+		"SERVICE_NAME":              "trade-api",
+		"REDIS_URL":                 "redis://redis.internal:6379",
+		"STREAM_RETENTION":          "72h",
+		"STREAM_CONSUMER_BLOCK":     "5s",
+		"STREAM_CLAIM_MIN_IDLE":     "5m",
+		"STREAM_CLAIM_INTERVAL":     "15s",
+		"STREAM_CONSUMER_BATCH":     "25",
+		"STREAM_HANDLER_TIMEOUT":    "45s",
+		"STREAM_RETRY_MAX_ATTEMPTS": "3",
+		"STREAM_RETRY_BASE_BACKOFF": "100ms",
+		"STREAM_RETRY_MAX_BACKOFF":  "1s",
+		"IDEMPOTENCY_LEASE_TTL":     "60s",
+		"WORKER_CONCURRENCY":        "30",
+		"WORKER_QUEUE_SIZE":         "50",
+		"WORKER_DRAIN_TIMEOUT":      "20s",
+		"OUTBOX_BATCH_SIZE":         "200",
+		"OUTBOX_POLL_INTERVAL":      "1s",
+		"OUTBOX_LEASE":              "45s",
+		"OUTBOX_BASE_BACKOFF":       "2s",
+		"OUTBOX_MAX_BACKOFF":        "10m",
+		"OUTBOX_MAX_ATTEMPTS":       "20",
 	}
 
 	cfg, err := config.LoadFromLookup(func(k string) string {
@@ -191,8 +203,8 @@ func TestLoad_CustomOverrides(t *testing.T) {
 	if cfg.Stream.ConsumerBlock != 5*time.Second {
 		t.Errorf("expected Stream ConsumerBlock 5s, got %v", cfg.Stream.ConsumerBlock)
 	}
-	if cfg.Stream.ClaimMinIdle != 2*time.Minute {
-		t.Errorf("expected Stream ClaimMinIdle 2m, got %v", cfg.Stream.ClaimMinIdle)
+	if cfg.Stream.ClaimMinIdle != 5*time.Minute {
+		t.Errorf("expected Stream ClaimMinIdle 5m, got %v", cfg.Stream.ClaimMinIdle)
 	}
 	if cfg.Stream.ClaimInterval != 15*time.Second {
 		t.Errorf("expected Stream ClaimInterval 15s, got %v", cfg.Stream.ClaimInterval)
@@ -202,6 +214,15 @@ func TestLoad_CustomOverrides(t *testing.T) {
 	}
 	if cfg.Stream.HandlerTimeout != 45*time.Second {
 		t.Errorf("expected Stream HandlerTimeout 45s, got %v", cfg.Stream.HandlerTimeout)
+	}
+	if cfg.Stream.RetryMaxAttempts != 3 {
+		t.Errorf("expected Stream RetryMaxAttempts 3, got %d", cfg.Stream.RetryMaxAttempts)
+	}
+	if cfg.Stream.RetryBaseBackoff != 100*time.Millisecond {
+		t.Errorf("expected Stream RetryBaseBackoff 100ms, got %v", cfg.Stream.RetryBaseBackoff)
+	}
+	if cfg.Stream.RetryMaxBackoff != 1*time.Second {
+		t.Errorf("expected Stream RetryMaxBackoff 1s, got %v", cfg.Stream.RetryMaxBackoff)
 	}
 	if cfg.Worker.Concurrency != 30 {
 		t.Errorf("expected Worker Concurrency 30, got %d", cfg.Worker.Concurrency)
@@ -361,6 +382,49 @@ func TestConfig_ValidationFailures(t *testing.T) {
 			modify: func(c *config.Config) {
 				c.Stream.ClaimMinIdle = 5 * time.Second
 				c.Stream.HandlerTimeout = 10 * time.Second
+			},
+			expectedErr: config.ErrInvalidStreamConfig,
+		},
+		{
+			name: "stream retry max attempts zero",
+			modify: func(c *config.Config) {
+				c.Stream.RetryMaxAttempts = 0
+			},
+			expectedErr: config.ErrInvalidStreamConfig,
+		},
+		{
+			name: "stream retry max attempts excessive greater than 100",
+			modify: func(c *config.Config) {
+				c.Stream.RetryMaxAttempts = 101
+			},
+			expectedErr: config.ErrInvalidStreamConfig,
+		},
+		{
+			name: "stream retry max attempts int overflow math.MaxInt32",
+			modify: func(c *config.Config) {
+				c.Stream.RetryMaxAttempts = 1 << 31
+			},
+			expectedErr: config.ErrInvalidStreamConfig,
+		},
+		{
+			name: "stream retry base backoff zero",
+			modify: func(c *config.Config) {
+				c.Stream.RetryBaseBackoff = 0
+			},
+			expectedErr: config.ErrInvalidStreamConfig,
+		},
+		{
+			name: "stream retry max backoff less than base",
+			modify: func(c *config.Config) {
+				c.Stream.RetryBaseBackoff = 5 * time.Second
+				c.Stream.RetryMaxBackoff = 1 * time.Second
+			},
+			expectedErr: config.ErrInvalidStreamConfig,
+		},
+		{
+			name: "stream worst-case retry window exceeds claim min idle",
+			modify: func(c *config.Config) {
+				c.Stream.HandlerTimeout = 12 * time.Second // 5 * 12s + 4 * 2s = 68s >= 60s
 			},
 			expectedErr: config.ErrInvalidStreamConfig,
 		},

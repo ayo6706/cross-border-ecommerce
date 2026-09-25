@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/ayo6706/cross-border-ecommerce/internal/platform/backoff"
 )
 
 var (
@@ -62,12 +64,15 @@ func (r RedisConfig) Validate() error {
 }
 
 type StreamConfig struct {
-	Retention      time.Duration
-	ConsumerBlock  time.Duration
-	ClaimMinIdle   time.Duration
-	ClaimInterval  time.Duration
-	ConsumerBatch  int
-	HandlerTimeout time.Duration
+	Retention        time.Duration
+	ConsumerBlock    time.Duration
+	ClaimMinIdle     time.Duration
+	ClaimInterval    time.Duration
+	ConsumerBatch    int
+	HandlerTimeout   time.Duration
+	RetryMaxAttempts int
+	RetryBaseBackoff time.Duration
+	RetryMaxBackoff  time.Duration
 }
 
 func (s StreamConfig) Validate() error {
@@ -80,6 +85,10 @@ func (s StreamConfig) Validate() error {
 	if s.ClaimMinIdle <= s.HandlerTimeout {
 		return fmt.Errorf("%w: claim min idle (%v) must be strictly greater than handler timeout (%v)",
 			ErrInvalidStreamConfig, s.ClaimMinIdle, s.HandlerTimeout)
+	}
+	if err := backoff.ValidateRetryPolicy(s.RetryMaxAttempts, s.RetryBaseBackoff, s.RetryMaxBackoff,
+		s.HandlerTimeout, s.ClaimMinIdle); err != nil {
+		return fmt.Errorf("%w: %w", ErrInvalidStreamConfig, err)
 	}
 	return nil
 }
@@ -255,7 +264,7 @@ func LoadFromLookup(lookup func(string) string) (*Config, error) {
 		return nil, fmt.Errorf("invalid STREAM_CONSUMER_BLOCK: %w", err)
 	}
 
-	streamClaimMinIdle, err := getEnvDuration(lookup, "STREAM_CLAIM_MIN_IDLE", 30*time.Second)
+	streamClaimMinIdle, err := getEnvDuration(lookup, "STREAM_CLAIM_MIN_IDLE", 60*time.Second)
 	if err != nil {
 		return nil, fmt.Errorf("invalid STREAM_CLAIM_MIN_IDLE: %w", err)
 	}
@@ -273,6 +282,21 @@ func LoadFromLookup(lookup func(string) string) (*Config, error) {
 	streamHandlerTimeout, err := getEnvDuration(lookup, "STREAM_HANDLER_TIMEOUT", 5*time.Second)
 	if err != nil {
 		return nil, fmt.Errorf("invalid STREAM_HANDLER_TIMEOUT: %w", err)
+	}
+
+	streamRetryMaxAttempts, err := getEnvInt(lookup, "STREAM_RETRY_MAX_ATTEMPTS", 5)
+	if err != nil {
+		return nil, fmt.Errorf("invalid STREAM_RETRY_MAX_ATTEMPTS: %w", err)
+	}
+
+	streamRetryBaseBackoff, err := getEnvDuration(lookup, "STREAM_RETRY_BASE_BACKOFF", 200*time.Millisecond)
+	if err != nil {
+		return nil, fmt.Errorf("invalid STREAM_RETRY_BASE_BACKOFF: %w", err)
+	}
+
+	streamRetryMaxBackoff, err := getEnvDuration(lookup, "STREAM_RETRY_MAX_BACKOFF", 2*time.Second)
+	if err != nil {
+		return nil, fmt.Errorf("invalid STREAM_RETRY_MAX_BACKOFF: %w", err)
 	}
 
 	workerConcurrency, err := getEnvInt(lookup, "WORKER_CONCURRENCY", 10)
@@ -334,12 +358,15 @@ func LoadFromLookup(lookup func(string) string) (*Config, error) {
 			URL: getEnvString(lookup, "REDIS_URL", ""),
 		},
 		Stream: StreamConfig{
-			Retention:      streamRetention,
-			ConsumerBlock:  streamConsumerBlock,
-			ClaimMinIdle:   streamClaimMinIdle,
-			ClaimInterval:  streamClaimInterval,
-			ConsumerBatch:  streamConsumerBatch,
-			HandlerTimeout: streamHandlerTimeout,
+			Retention:        streamRetention,
+			ConsumerBlock:    streamConsumerBlock,
+			ClaimMinIdle:     streamClaimMinIdle,
+			ClaimInterval:    streamClaimInterval,
+			ConsumerBatch:    streamConsumerBatch,
+			HandlerTimeout:   streamHandlerTimeout,
+			RetryMaxAttempts: streamRetryMaxAttempts,
+			RetryBaseBackoff: streamRetryBaseBackoff,
+			RetryMaxBackoff:  streamRetryMaxBackoff,
 		},
 		Worker: WorkerConfig{
 			Concurrency:  workerConcurrency,
