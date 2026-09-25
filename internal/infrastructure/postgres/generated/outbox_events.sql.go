@@ -26,7 +26,9 @@ SET claim_token = $1::uuid,
     available_at = NOW() + $2::interval
 FROM candidate
 WHERE o.id = candidate.id
-RETURNING o.id, o.aggregate_type, o.aggregate_id, o.event_type, o.payload, o.retry_count, o.created_at
+RETURNING o.id, o.aggregate_type, o.aggregate_id, o.event_type, o.payload, o.retry_count, o.created_at,
+          COALESCE(o.replay_of_event_id, o.id::text)::varchar AS event_id,
+          COALESCE(o.target_group, '')::varchar AS target_group
 `
 
 type ClaimOutboxBatchParams struct {
@@ -43,6 +45,8 @@ type ClaimOutboxBatchRow struct {
 	Payload       []byte             `json:"payload"`
 	RetryCount    int32              `json:"retry_count"`
 	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	EventID       string             `json:"event_id"`
+	TargetGroup   string             `json:"target_group"`
 }
 
 func (q *Queries) ClaimOutboxBatch(ctx context.Context, arg ClaimOutboxBatchParams) ([]ClaimOutboxBatchRow, error) {
@@ -62,6 +66,8 @@ func (q *Queries) ClaimOutboxBatch(ctx context.Context, arg ClaimOutboxBatchPara
 			&i.Payload,
 			&i.RetryCount,
 			&i.CreatedAt,
+			&i.EventID,
+			&i.TargetGroup,
 		); err != nil {
 			return nil, err
 		}
@@ -100,6 +106,43 @@ func (q *Queries) CreateOutboxEvent(ctx context.Context, arg CreateOutboxEventPa
 		arg.AggregateID,
 		arg.EventType,
 		arg.Payload,
+	)
+	return err
+}
+
+const createReplayOutboxEvent = `-- name: CreateReplayOutboxEvent :exec
+INSERT INTO outbox_events (
+    id,
+    aggregate_type,
+    aggregate_id,
+    event_type,
+    payload,
+    replay_of_event_id,
+    target_group
+) VALUES (
+    $1, $2, $3, $4, $5, $6, $7
+)
+`
+
+type CreateReplayOutboxEventParams struct {
+	ID              pgtype.UUID `json:"id"`
+	AggregateType   string      `json:"aggregate_type"`
+	AggregateID     string      `json:"aggregate_id"`
+	EventType       string      `json:"event_type"`
+	Payload         []byte      `json:"payload"`
+	ReplayOfEventID pgtype.Text `json:"replay_of_event_id"`
+	TargetGroup     pgtype.Text `json:"target_group"`
+}
+
+func (q *Queries) CreateReplayOutboxEvent(ctx context.Context, arg CreateReplayOutboxEventParams) error {
+	_, err := q.db.Exec(ctx, createReplayOutboxEvent,
+		arg.ID,
+		arg.AggregateType,
+		arg.AggregateID,
+		arg.EventType,
+		arg.Payload,
+		arg.ReplayOfEventID,
+		arg.TargetGroup,
 	)
 	return err
 }

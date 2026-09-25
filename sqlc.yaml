@@ -11,6 +11,7 @@ sql:
       - "migrations/000007_product_identity_versioning_changes.up.sql"
       - "migrations/000008_outbox_relay.up.sql"
       - "migrations/000009_idempotency_keys.up.sql"
+      - "migrations/000010_dlq_messages_and_outbox_replay.up.sql"
     queries: "internal/infrastructure/postgres/queries"
     gen:
       go:

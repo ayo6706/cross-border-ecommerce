@@ -8,6 +8,31 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type DlqMessage struct {
+	ID              pgtype.UUID        `json:"id"`
+	Stream          string             `json:"stream"`
+	ConsumerGroup   string             `json:"consumer_group"`
+	StreamMessageID string             `json:"stream_message_id"`
+	EventID         pgtype.Text        `json:"event_id"`
+	EventType       string             `json:"event_type"`
+	AggregateType   string             `json:"aggregate_type"`
+	AggregateID     string             `json:"aggregate_id"`
+	CorrelationID   string             `json:"correlation_id"`
+	Payload         []byte             `json:"payload"`
+	FailureClass    string             `json:"failure_class"`
+	LastError       string             `json:"last_error"`
+	Stack           pgtype.Text        `json:"stack"`
+	Attempts        int32              `json:"attempts"`
+	ConsumerName    string             `json:"consumer_name"`
+	EventCreatedAt  pgtype.Timestamptz `json:"event_created_at"`
+	FirstFailedAt   pgtype.Timestamptz `json:"first_failed_at"`
+	DeadLetteredAt  pgtype.Timestamptz `json:"dead_lettered_at"`
+	Status          string             `json:"status"`
+	ReplayedAt      pgtype.Timestamptz `json:"replayed_at"`
+	ReplayOutboxID  pgtype.UUID        `json:"replay_outbox_id"`
+	Replayable      bool               `json:"replayable"`
+}
+
 type IdempotencyKey struct {
 	Scope          string             `json:"scope"`
 	Key            string             `json:"key"`
@@ -56,18 +81,20 @@ type IngestionRunProcessing struct {
 }
 
 type OutboxEvent struct {
-	ID            pgtype.UUID        `json:"id"`
-	AggregateType string             `json:"aggregate_type"`
-	AggregateID   string             `json:"aggregate_id"`
-	EventType     string             `json:"event_type"`
-	Payload       []byte             `json:"payload"`
-	Status        string             `json:"status"`
-	RetryCount    int32              `json:"retry_count"`
-	CreatedAt     pgtype.Timestamptz `json:"created_at"`
-	ProcessedAt   pgtype.Timestamptz `json:"processed_at"`
-	AvailableAt   pgtype.Timestamptz `json:"available_at"`
-	ClaimToken    pgtype.UUID        `json:"claim_token"`
-	LastError     pgtype.Text        `json:"last_error"`
+	ID              pgtype.UUID        `json:"id"`
+	AggregateType   string             `json:"aggregate_type"`
+	AggregateID     string             `json:"aggregate_id"`
+	EventType       string             `json:"event_type"`
+	Payload         []byte             `json:"payload"`
+	Status          string             `json:"status"`
+	RetryCount      int32              `json:"retry_count"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	ProcessedAt     pgtype.Timestamptz `json:"processed_at"`
+	AvailableAt     pgtype.Timestamptz `json:"available_at"`
+	ClaimToken      pgtype.UUID        `json:"claim_token"`
+	LastError       pgtype.Text        `json:"last_error"`
+	ReplayOfEventID pgtype.Text        `json:"replay_of_event_id"`
+	TargetGroup     pgtype.Text        `json:"target_group"`
 }
 
 type Product struct {

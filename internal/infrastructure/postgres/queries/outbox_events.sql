@@ -9,6 +9,19 @@ INSERT INTO outbox_events (
     $1, $2, $3, $4, $5
 );
 
+-- name: CreateReplayOutboxEvent :exec
+INSERT INTO outbox_events (
+    id,
+    aggregate_type,
+    aggregate_id,
+    event_type,
+    payload,
+    replay_of_event_id,
+    target_group
+) VALUES (
+    $1, $2, $3, $4, $5, $6, $7
+);
+
 -- name: ClaimOutboxBatch :many
 WITH candidate AS (
     SELECT id
@@ -24,7 +37,9 @@ SET claim_token = @claim_token::uuid,
     available_at = NOW() + @lease_duration::interval
 FROM candidate
 WHERE o.id = candidate.id
-RETURNING o.id, o.aggregate_type, o.aggregate_id, o.event_type, o.payload, o.retry_count, o.created_at;
+RETURNING o.id, o.aggregate_type, o.aggregate_id, o.event_type, o.payload, o.retry_count, o.created_at,
+          COALESCE(o.replay_of_event_id, o.id::text)::varchar AS event_id,
+          COALESCE(o.target_group, '')::varchar AS target_group;
 
 -- name: MarkOutboxPublished :execrows
 UPDATE outbox_events

@@ -24,10 +24,12 @@ type Querier interface {
 	CreateProductVersion(ctx context.Context, arg CreateProductVersionParams) (CreateProductVersionRow, error)
 	CreateProductVersionWithRun(ctx context.Context, arg CreateProductVersionWithRunParams) (ProductVersion, error)
 	CreateRawRecord(ctx context.Context, arg CreateRawRecordParams) (RawRecord, error)
+	CreateReplayOutboxEvent(ctx context.Context, arg CreateReplayOutboxEventParams) error
 	DeleteProduct(ctx context.Context, id pgtype.UUID) error
 	DeleteSource(ctx context.Context, id string) error
 	EnsureRunProcessingExists(ctx context.Context, runID pgtype.UUID) (IngestionRunProcessing, error)
 	FailRunProcessing(ctx context.Context, arg FailRunProcessingParams) (IngestionRunProcessing, error)
+	GetDLQReplaySource(ctx context.Context, id pgtype.UUID) (GetDLQReplaySourceRow, error)
 	GetIdempotencyKey(ctx context.Context, arg GetIdempotencyKeyParams) (IdempotencyKey, error)
 	GetIngestionRunByID(ctx context.Context, id pgtype.UUID) (IngestionRun, error)
 	GetLatestIngestionRunBySource(ctx context.Context, sourceID string) (IngestionRun, error)
@@ -40,6 +42,7 @@ type Querier interface {
 	GetSourceByID(ctx context.Context, id string) (Source, error)
 	GuardedUpdateProductFingerprintOnly(ctx context.Context, arg GuardedUpdateProductFingerprintOnlyParams) (Product, error)
 	GuardedUpdateProductVersion(ctx context.Context, arg GuardedUpdateProductVersionParams) (Product, error)
+	InsertDLQMessage(ctx context.Context, arg InsertDLQMessageParams) error
 	ListActiveSources(ctx context.Context) ([]Source, error)
 	ListIngestionRunsBySource(ctx context.Context, arg ListIngestionRunsBySourceParams) ([]IngestionRun, error)
 	ListProductChangesByProductID(ctx context.Context, arg ListProductChangesByProductIDParams) ([]ProductChange, error)
@@ -51,6 +54,7 @@ type Querier interface {
 	ListRawRecordsByRunIDKeysetFirstPage(ctx context.Context, arg ListRawRecordsByRunIDKeysetFirstPageParams) ([]RawRecord, error)
 	ListRawRecordsBySourceAndExternalID(ctx context.Context, arg ListRawRecordsBySourceAndExternalIDParams) ([]RawRecord, error)
 	ListSources(ctx context.Context) ([]Source, error)
+	MarkDLQMessageReplayed(ctx context.Context, arg MarkDLQMessageReplayedParams) (int64, error)
 	MarkOutboxPublished(ctx context.Context, arg MarkOutboxPublishedParams) (int64, error)
 	RecordOutboxPublishFailure(ctx context.Context, arg RecordOutboxPublishFailureParams) (int64, error)
 	ReleaseIdempotencyKey(ctx context.Context, arg ReleaseIdempotencyKeyParams) (int64, error)
