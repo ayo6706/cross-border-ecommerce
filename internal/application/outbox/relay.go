@@ -127,12 +127,13 @@ func (r *Relay) settleOnCancel(ctx context.Context, claimToken string, published
 
 func eventIDs(events []Event) []string {
 	ids := make([]string, len(events))
-	for i, e := range events {
-		ids[i] = e.ID
+	for i := range events {
+		ids[i] = events[i].ID
 	}
 	return ids
 }
 
+//nolint:funlen,gocognit // legacy baseline 2026-09-26: fix in ENG-051
 func (r *Relay) RunOnce(ctx context.Context) (claimed, published int, err error) {
 	claimToken, err := uuid.NewString()
 	if err != nil {
@@ -153,8 +154,7 @@ func (r *Relay) RunOnce(ctx context.Context) (claimed, published int, err error)
 	for i := 0; i < len(events); i++ {
 		if ctx.Err() != nil {
 			settleErr := r.settleOnCancel(ctx, claimToken, publishedIDs, eventIDs(events[i:]))
-			allErrs := append(errs, ctx.Err(), settleErr)
-			return len(events), len(publishedIDs), errors.Join(allErrs...)
+			return len(events), len(publishedIDs), errors.Join(errors.Join(errs...), ctx.Err(), settleErr)
 		}
 
 		event := events[i]
@@ -179,14 +179,17 @@ func (r *Relay) RunOnce(ctx context.Context) (claimed, published int, err error)
 				r.logger.Error("failed to release outbox claims after broker outage", slog.Any("error", err))
 			}
 
-			allErrs := append(errs, fmt.Errorf("publish event %s: %w", event.ID, pubErr), markErr, relErr)
-			return len(events), len(publishedIDs), errors.Join(allErrs...)
+			return len(events), len(publishedIDs), errors.Join(
+				errors.Join(errs...),
+				fmt.Errorf("publish event %s: %w", event.ID, pubErr),
+				markErr,
+				relErr,
+			)
 		}
 
 		if ctx.Err() != nil {
 			settleErr := r.settleOnCancel(ctx, claimToken, publishedIDs, eventIDs(events[i:]))
-			allErrs := append(errs, ctx.Err(), settleErr)
-			return len(events), len(publishedIDs), errors.Join(allErrs...)
+			return len(events), len(publishedIDs), errors.Join(errors.Join(errs...), ctx.Err(), settleErr)
 		}
 
 		bo := platformBackoff.Exponential(event.RetryCount, r.cfg.BaseBackoff, r.cfg.MaxBackoff)
@@ -212,9 +215,9 @@ func (r *Relay) RunOnce(ctx context.Context) (claimed, published int, err error)
 	}
 
 	minCreatedAt := events[0].CreatedAt
-	for _, e := range events[1:] {
-		if e.CreatedAt.Before(minCreatedAt) {
-			minCreatedAt = e.CreatedAt
+	for i := 1; i < len(events); i++ {
+		if events[i].CreatedAt.Before(minCreatedAt) {
+			minCreatedAt = events[i].CreatedAt
 		}
 	}
 	oldestAge := time.Since(minCreatedAt)

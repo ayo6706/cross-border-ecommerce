@@ -8,11 +8,11 @@ import (
 )
 
 func TestCursorPagination(t *testing.T) {
-	strat := pagination.NewCursorPagination("after", "pagination.nextToken")
+	strategy := pagination.NewCursorPagination("after", "pagination.nextToken")
 
 	t.Run("ApplyPaginationSetsQueryParam", func(t *testing.T) {
 		req, _ := http.NewRequest("GET", "https://api.example.com/items", nil)
-		err := strat.ApplyPagination(req, "cursor:tok_abc123")
+		err := strategy.ApplyPagination(req, "cursor:tok_abc123")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -23,7 +23,7 @@ func TestCursorPagination(t *testing.T) {
 
 	t.Run("ExtractNextCheckpointExtractsToken", func(t *testing.T) {
 		body := []byte(`{"pagination": {"nextToken": "tok_xyz789"}}`)
-		cp, err := strat.ExtractNextCheckpoint(nil, body, "", 10)
+		cp, err := strategy.ExtractNextCheckpoint(nil, body, "", 10)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -34,7 +34,7 @@ func TestCursorPagination(t *testing.T) {
 
 	t.Run("EchoedCursorTerminatesStream", func(t *testing.T) {
 		body := []byte(`{"pagination": {"nextToken": "tok_same"}}`)
-		cp, err := strat.ExtractNextCheckpoint(nil, body, "cursor:tok_same", 10)
+		cp, err := strategy.ExtractNextCheckpoint(nil, body, "cursor:tok_same", 10)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -45,11 +45,11 @@ func TestCursorPagination(t *testing.T) {
 }
 
 func TestPagePagination(t *testing.T) {
-	strat := pagination.NewPagePagination("page", "limit", 25)
+	strategy := pagination.NewPagePagination("page", "limit", 25)
 
 	t.Run("ApplyPaginationInitialPage", func(t *testing.T) {
 		req, _ := http.NewRequest("GET", "https://api.example.com/items", nil)
-		err := strat.ApplyPagination(req, "")
+		err := strategy.ApplyPagination(req, "")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -59,7 +59,7 @@ func TestPagePagination(t *testing.T) {
 	})
 
 	t.Run("AdvancesWhenFullBatch", func(t *testing.T) {
-		cp, err := strat.ExtractNextCheckpoint(nil, []byte("{}"), "1", 25)
+		cp, err := strategy.ExtractNextCheckpoint(nil, []byte("{}"), "1", 25)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -69,7 +69,7 @@ func TestPagePagination(t *testing.T) {
 	})
 
 	t.Run("TerminatesWhenPartialBatch", func(t *testing.T) {
-		cp, err := strat.ExtractNextCheckpoint(nil, []byte("{}"), "1", 10)
+		cp, err := strategy.ExtractNextCheckpoint(nil, []byte("{}"), "1", 10)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -80,7 +80,7 @@ func TestPagePagination(t *testing.T) {
 }
 
 func TestLinkHeaderPagination(t *testing.T) {
-	strat := pagination.NewLinkHeaderPagination()
+	strategy := pagination.NewLinkHeaderPagination()
 
 	resp := &http.Response{
 		Header: http.Header{
@@ -88,7 +88,7 @@ func TestLinkHeaderPagination(t *testing.T) {
 		},
 	}
 
-	cp, err := strat.ExtractNextCheckpoint(resp, nil, "", 50)
+	cp, err := strategy.ExtractNextCheckpoint(resp, nil, "", 50)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

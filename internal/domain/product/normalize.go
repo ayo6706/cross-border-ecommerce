@@ -21,6 +21,8 @@ const (
 
 // Normalize converts a raw record's JSON byte payload into a NormalizedProduct
 // according to the provided FieldMapping.
+//
+//nolint:funlen,gocognit // legacy baseline 2026-09-26: fix in ENG-044
 func Normalize(payload []byte, m FieldMapping) (NormalizedProduct, error) {
 	if len(payload) == 0 {
 		return NormalizedProduct{}, ErrMalformedRecord
@@ -168,6 +170,8 @@ func extractScalarString(v any) (string, error) {
 // collapseWhitespace applies Unicode NFC normalization, strips zero-width runes
 // (U+200B, U+FEFF, U+200C, U+200D), collapses internal whitespace runs to a single space,
 // and trims leading/trailing spaces.
+//
+//nolint:funlen,gocognit // legacy baseline 2026-09-26: fix in ENG-044
 func collapseWhitespace(s string) string {
 	if s == "" {
 		return ""

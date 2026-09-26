@@ -1,4 +1,4 @@
-package postgres
+package postgres //nolint:dupl // legacy baseline 2026-09-26: fix in ENG-018
 
 import (
 	"context"

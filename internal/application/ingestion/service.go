@@ -84,19 +84,19 @@ func (s *Service) RecordBatch(ctx context.Context, runID string, metrics ingesti
 	return nil
 }
 
-func (s *Service) CompleteRun(ctx context.Context, runID string, checkpoint string) error {
+func (s *Service) CompleteRun(ctx context.Context, runID, checkpoint string) error {
 	return s.transitionRun(ctx, runID, "complete", func(run *ingestion.IngestionRun, now time.Time) error {
 		return run.Complete(checkpoint, now)
 	})
 }
 
-func (s *Service) FailRun(ctx context.Context, runID string, errorSummary string) error {
+func (s *Service) FailRun(ctx context.Context, runID, errorSummary string) error {
 	return s.transitionRun(ctx, runID, "fail", func(run *ingestion.IngestionRun, now time.Time) error {
 		return run.Fail(errorSummary, now)
 	})
 }
 
-func (s *Service) CancelRun(ctx context.Context, runID string, reason string) error {
+func (s *Service) CancelRun(ctx context.Context, runID, reason string) error {
 	return s.transitionRun(ctx, runID, "cancel", func(run *ingestion.IngestionRun, now time.Time) error {
 		return run.Cancel(reason, now)
 	})

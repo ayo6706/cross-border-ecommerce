@@ -108,6 +108,8 @@ func NewRESTAdapter(cfg RESTAdapterConfig) (*RESTAdapter, error) {
 }
 
 // Fetch executes a single paginated HTTP fetch against the source endpoint.
+//
+//nolint:funlen,gocognit // legacy baseline 2026-09-26: fix in ENG-049
 func (a *RESTAdapter) Fetch(ctx context.Context, req ingestion.FetchRequest) (ingestion.FetchResult, error) {
 	if a.limiter != nil {
 		if err := a.limiter.Wait(ctx); err != nil {
@@ -115,7 +117,7 @@ func (a *RESTAdapter) Fetch(ctx context.Context, req ingestion.FetchRequest) (in
 		}
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, a.baseURL, nil)
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, a.baseURL, http.NoBody)
 	if err != nil {
 		return ingestion.FetchResult{}, fmt.Errorf("create http request: %w", err)
 	}

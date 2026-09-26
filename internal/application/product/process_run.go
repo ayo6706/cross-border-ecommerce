@@ -70,6 +70,7 @@ func NewRunProcessor(
 	}, nil
 }
 
+//nolint:funlen,gocognit // legacy baseline 2026-09-26: fix in ENG-044
 func (p *RunProcessor) ProcessRun(ctx context.Context, runID string, opts ProcessRunOptions) (*ProcessRunResult, error) {
 	trimmedRunID := strings.TrimSpace(runID)
 	if trimmedRunID == "" {
@@ -236,6 +237,7 @@ func (p *RunProcessor) ProcessRun(ctx context.Context, runID string, opts Proces
 	}, nil
 }
 
+//nolint:funlen,gocognit // legacy baseline 2026-09-26: fix in ENG-044
 func (p *RunProcessor) processPageWithRetry(
 	ctx context.Context,
 	validRecords []domainProduct.BatchIncomingRecord,

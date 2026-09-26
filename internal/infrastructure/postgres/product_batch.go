@@ -70,7 +70,9 @@ func (r *ProductRepository) updateProductVersions(ctx context.Context, updates [
 	}
 	var arg generated.BatchGuardedUpdateProductVersionParams
 	var ids planIDs
-	for _, u := range sortedByKey(updates, func(u product.ProductGuardedUpdate) string { return string(u.ProductID) }) {
+	sorted := sortedByKey(updates, func(u product.ProductGuardedUpdate) string { return string(u.ProductID) })
+	for i := range sorted {
+		u := &sorted[i]
 		arg.Ids = append(arg.Ids, ids.required("product id", string(u.ProductID)))
 		arg.ToVersionIds = append(arg.ToVersionIds, ids.required("to_version_id", u.ToVersionID))
 		arg.ExpectedVersionIds = append(arg.ExpectedVersionIds, ids.optional("expected_version_id", u.ExpectedVersionID))

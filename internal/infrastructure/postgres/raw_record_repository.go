@@ -56,6 +56,7 @@ func (r *RawRecordRepository) Save(ctx context.Context, record *ingestion.RawRec
 	return nil
 }
 
+//nolint:funlen // legacy baseline 2026-09-26: fix in ENG-049
 func (r *RawRecordRepository) SaveBatch(ctx context.Context, records []*ingestion.RawRecord) error {
 	if len(records) == 0 {
 		return nil
@@ -72,7 +73,8 @@ func (r *RawRecordRepository) SaveBatch(ctx context.Context, records []*ingestio
 
 	if cf, ok := r.db.(copyFromDB); ok {
 		rows := make([][]any, 0, len(paramsList))
-		for _, p := range paramsList {
+		for i := range paramsList {
+			p := &paramsList[i]
 			rows = append(rows, []any{
 				p.ID,
 				p.SourceID,
@@ -112,8 +114,8 @@ func (r *RawRecordRepository) SaveBatch(ctx context.Context, records []*ingestio
 		return nil
 	}
 
-	for i, params := range paramsList {
-		_, err := r.queries.CreateRawRecord(ctx, params)
+	for i := range paramsList {
+		_, err := r.queries.CreateRawRecord(ctx, paramsList[i])
 		if err != nil {
 			return fmt.Errorf("fallback insert raw record %s: %w", records[i].ID, err)
 		}
@@ -178,7 +180,7 @@ func (r *RawRecordRepository) FindByID(ctx context.Context, id string) (*ingesti
 		return nil, fmt.Errorf("find raw record by id: %w", err)
 	}
 
-	return toDomainRawRecord(row), nil
+	return toDomainRawRecord(&row), nil
 }
 
 func (r *RawRecordRepository) FindLatestBySourceAndExternalID(
@@ -204,7 +206,7 @@ func (r *RawRecordRepository) FindLatestBySourceAndExternalID(
 		return nil, fmt.Errorf("find latest raw record: %w", err)
 	}
 
-	return toDomainRawRecord(row), nil
+	return toDomainRawRecord(&row), nil
 }
 
 func (r *RawRecordRepository) ListBySourceAndExternalID(
@@ -230,8 +232,8 @@ func (r *RawRecordRepository) ListBySourceAndExternalID(
 	}
 
 	records := make([]*ingestion.RawRecord, 0, len(rows))
-	for _, row := range rows {
-		records = append(records, toDomainRawRecord(row))
+	for i := range rows {
+		records = append(records, toDomainRawRecord(&rows[i]))
 	}
 	return records, nil
 }
@@ -255,8 +257,8 @@ func (r *RawRecordRepository) ListByRunID(
 	}
 
 	records := make([]*ingestion.RawRecord, 0, len(rows))
-	for _, row := range rows {
-		records = append(records, toDomainRawRecord(row))
+	for i := range rows {
+		records = append(records, toDomainRawRecord(&rows[i]))
 	}
 	return records, nil
 }
@@ -297,13 +299,13 @@ func (r *RawRecordRepository) ListKeysetByRunID(
 	}
 
 	records := make([]*ingestion.RawRecord, 0, len(rows))
-	for _, row := range rows {
-		records = append(records, toDomainRawRecord(row))
+	for i := range rows {
+		records = append(records, toDomainRawRecord(&rows[i]))
 	}
 	return records, nil
 }
 
-func toDomainRawRecord(row generated.RawRecord) *ingestion.RawRecord {
+func toDomainRawRecord(row *generated.RawRecord) *ingestion.RawRecord {
 	return &ingestion.RawRecord{
 		ID:                uuidToString(row.ID),
 		SourceID:          source.ID(row.SourceID),

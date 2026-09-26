@@ -49,7 +49,7 @@ func (r *ProductRepository) FindByID(ctx context.Context, id product.ID) (*produ
 		return nil, fmt.Errorf("find product by id: %w", err)
 	}
 
-	return toDomainProduct(row), nil
+	return toDomainProduct(&row), nil
 }
 
 func (r *ProductRepository) Save(ctx context.Context, p *product.Product) error {
@@ -131,13 +131,14 @@ func (r *ProductRepository) List(ctx context.Context, params product.ListParams)
 	}
 
 	result := make([]*product.Product, 0, len(rows))
-	for _, row := range rows {
-		result = append(result, toDomainProduct(row))
+	for i := range rows {
+		result = append(result, toDomainProduct(&rows[i]))
 	}
 
 	return result, nil
 }
 
+//nolint:funlen // legacy baseline 2026-09-26: fix in ENG-044
 func (r *ProductRepository) FindSnapshotsByIdentities(ctx context.Context, identities []product.IdentityRef) (map[string]*product.Snapshot, error) {
 	if len(identities) == 0 {
 		return make(map[string]*product.Snapshot), nil
@@ -159,7 +160,8 @@ func (r *ProductRepository) FindSnapshotsByIdentities(ctx context.Context, ident
 	}
 
 	results := make(map[string]*product.Snapshot, len(rows))
-	for _, row := range rows {
+	for i := range rows {
+		row := &rows[i]
 		var currentVersionID *string
 		if row.CurrentVersionID.Valid {
 			v := uuidToString(row.CurrentVersionID)
@@ -232,7 +234,7 @@ func mapPostgresError(err error) error {
 	return err
 }
 
-func toDomainProduct(row generated.Product) *product.Product {
+func toDomainProduct(row *generated.Product) *product.Product {
 	var currentVersionID *string
 	if row.CurrentVersionID.Valid {
 		v := uuidToString(row.CurrentVersionID)

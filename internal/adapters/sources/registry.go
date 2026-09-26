@@ -133,6 +133,7 @@ func (r *Registry) buildDefaultAdapter(ctx context.Context, src *source.Source) 
 	}
 }
 
+//nolint:funlen // legacy baseline 2026-09-26: fix in ENG-049
 func (r *Registry) buildAPIAdapter(ctx context.Context, src *source.Source) (ingestion.Adapter, error) {
 	apiCfg, err := src.ParseAPIConfig()
 	if err != nil {

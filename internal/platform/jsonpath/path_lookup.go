@@ -18,6 +18,8 @@ var (
 // - Non-empty, not ".", no leading/trailing or consecutive dots
 // - Bracket indices must be closed, non-empty ASCII digits (e.g. "[0]"), without invalid chars
 // - Cannot have unclosed brackets or orphan closing brackets
+//
+//nolint:funlen,gocognit // legacy baseline 2026-09-26: fix in ENG-049
 func ValidatePath(path string) error {
 	trimmed := strings.TrimSpace(path)
 	if trimmed == "" || trimmed == "." {
@@ -62,10 +64,8 @@ func ValidatePath(path string) error {
 					return fmt.Errorf("%w: non-numeric array index %q at position %d in %q", ErrInvalidPathSyntax, c, i, path)
 				}
 				bracketDigits++
-			} else {
-				if c == ' ' || c == '\t' || c == '\n' || c == '\r' {
-					return fmt.Errorf("%w: whitespace in path at position %d in %q", ErrInvalidPathSyntax, i, path)
-				}
+			} else if c == ' ' || c == '\t' || c == '\n' || c == '\r' {
+				return fmt.Errorf("%w: whitespace in path at position %d in %q", ErrInvalidPathSyntax, i, path)
 			}
 		}
 	}
@@ -155,6 +155,8 @@ func TokenizePath(path string) []string {
 // - Exponents are expanded so the output has no 'e' or 'E'
 // - Trailing fractional zeros are stripped ("65.0" -> "65", "65.50" -> "65.5")
 // - "-0" and "-0.0" map to "0"
+//
+//nolint:funlen,gocognit // legacy baseline 2026-09-26: fix in ENG-044
 func CanonicalizeNumber(raw string) (string, error) {
 	s := strings.TrimSpace(raw)
 	if s == "" {
@@ -238,13 +240,14 @@ func CanonicalizeNumber(raw string) (string, error) {
 	newDecPos := int64(decPos) + exp
 
 	var res string
-	if newDecPos <= 0 {
+	switch {
+	case newDecPos <= 0:
 		zeros := int(-newDecPos)
 		res = "0." + strings.Repeat("0", zeros) + allDigits
-	} else if newDecPos >= int64(len(allDigits)) {
+	case newDecPos >= int64(len(allDigits)):
 		zeros := int(newDecPos - int64(len(allDigits)))
 		res = allDigits + strings.Repeat("0", zeros)
-	} else {
+	default:
 		res = allDigits[:newDecPos] + "." + allDigits[newDecPos:]
 	}
 

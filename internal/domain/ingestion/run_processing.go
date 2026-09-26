@@ -168,7 +168,7 @@ func (rp *RunProcessing) Complete(token string, now time.Time) error {
 	return nil
 }
 
-func (rp *RunProcessing) Fail(token string, errSummary string, now time.Time) error {
+func (rp *RunProcessing) Fail(token, errSummary string, now time.Time) error {
 	if rp == nil {
 		return errors.New("run processing cannot be nil")
 	}

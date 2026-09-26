@@ -60,10 +60,10 @@ func (r *RunProcessingRepository) ClaimNext(ctx context.Context, claimToken stri
 		return nil, fmt.Errorf("claim next run processing: %w", err)
 	}
 
-	return toDomainRunProcessing(row), nil
+	return toDomainRunProcessing(&row), nil
 }
 
-func (r *RunProcessingRepository) ClaimSpecific(ctx context.Context, runID string, claimToken string, leaseDuration time.Duration) (*ingestion.RunProcessing, error) {
+func (r *RunProcessingRepository) ClaimSpecific(ctx context.Context, runID, claimToken string, leaseDuration time.Duration) (*ingestion.RunProcessing, error) {
 	rUUID, err := parseUUID(runID)
 	if err != nil {
 		return nil, fmt.Errorf("%w: invalid run id: %w", ingestion.ErrInvalidRunID, err)
@@ -90,7 +90,7 @@ func (r *RunProcessingRepository) ClaimSpecific(ctx context.Context, runID strin
 		return nil, fmt.Errorf("claim specific run processing: %w", err)
 	}
 
-	return toDomainRunProcessing(row), nil
+	return toDomainRunProcessing(&row), nil
 }
 
 func (r *RunProcessingRepository) GetByID(ctx context.Context, runID string) (*ingestion.RunProcessing, error) {
@@ -107,7 +107,7 @@ func (r *RunProcessingRepository) GetByID(ctx context.Context, runID string) (*i
 		return nil, fmt.Errorf("get run processing by id: %w", err)
 	}
 
-	return toDomainRunProcessing(row), nil
+	return toDomainRunProcessing(&row), nil
 }
 
 func (r *RunProcessingRepository) EnsureExists(ctx context.Context, runID string) (*ingestion.RunProcessing, error) {
@@ -121,9 +121,10 @@ func (r *RunProcessingRepository) EnsureExists(ctx context.Context, runID string
 		return nil, fmt.Errorf("ensure run processing exists: %w", err)
 	}
 
-	return toDomainRunProcessing(row), nil
+	return toDomainRunProcessing(&row), nil
 }
 
+//nolint:funlen // legacy baseline 2026-09-26: fix in ENG-016
 func (r *RunProcessingRepository) UpdateProgress(
 	ctx context.Context,
 	runID string,
@@ -177,10 +178,10 @@ func (r *RunProcessingRepository) UpdateProgress(
 		return nil, fmt.Errorf("update run processing progress: %w", err)
 	}
 
-	return toDomainRunProcessing(row), nil
+	return toDomainRunProcessing(&row), nil
 }
 
-func (r *RunProcessingRepository) Release(ctx context.Context, runID string, claimToken string) error {
+func (r *RunProcessingRepository) Release(ctx context.Context, runID, claimToken string) error {
 	rUUID, err := parseUUID(runID)
 	if err != nil {
 		return fmt.Errorf("%w: invalid run id: %w", ingestion.ErrInvalidRunID, err)
@@ -200,7 +201,7 @@ func (r *RunProcessingRepository) Release(ctx context.Context, runID string, cla
 	return nil
 }
 
-func (r *RunProcessingRepository) Complete(ctx context.Context, runID string, claimToken string) error {
+func (r *RunProcessingRepository) Complete(ctx context.Context, runID, claimToken string) error {
 	rUUID, err := parseUUID(runID)
 	if err != nil {
 		return fmt.Errorf("%w: invalid run id: %w", ingestion.ErrInvalidRunID, err)
@@ -223,7 +224,7 @@ func (r *RunProcessingRepository) Complete(ctx context.Context, runID string, cl
 	return nil
 }
 
-func (r *RunProcessingRepository) Fail(ctx context.Context, runID string, claimToken string, errSummary string) error {
+func (r *RunProcessingRepository) Fail(ctx context.Context, runID, claimToken, errSummary string) error {
 	rUUID, err := parseUUID(runID)
 	if err != nil {
 		return fmt.Errorf("%w: invalid run id: %w", ingestion.ErrInvalidRunID, err)
@@ -263,10 +264,10 @@ func (r *RunProcessingRepository) ResetFromStart(ctx context.Context, runID stri
 		return nil, fmt.Errorf("reset run processing: %w", err)
 	}
 
-	return toDomainRunProcessing(row), nil
+	return toDomainRunProcessing(&row), nil
 }
 
-func toDomainRunProcessing(row generated.IngestionRunProcessing) *ingestion.RunProcessing {
+func toDomainRunProcessing(row *generated.IngestionRunProcessing) *ingestion.RunProcessing {
 	var claimToken *string
 	if row.ClaimToken.Valid {
 		v := uuidToString(row.ClaimToken)

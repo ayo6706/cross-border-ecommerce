@@ -20,7 +20,7 @@ type TokenBucketLimiter struct {
 	lastRefillAt time.Time
 }
 
-func NewTokenBucketLimiter(ratePerSecond int, burst int) (*TokenBucketLimiter, error) {
+func NewTokenBucketLimiter(ratePerSecond, burst int) (*TokenBucketLimiter, error) {
 	if ratePerSecond <= 0 {
 		return nil, errors.New("rate per second must be positive")
 	}

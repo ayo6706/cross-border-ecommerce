@@ -204,6 +204,8 @@ func (f *identityFold) apply(rec BatchIncomingRecord) error {
 
 // addVersion records a NEW or CHANGED transition (the next version, its change row and its
 // ProductChanged event) and moves the running state to that version.
+//
+//nolint:funlen // legacy baseline 2026-09-26: fix in ENG-044
 func (f *identityFold) addVersion(rec BatchIncomingRecord, transition TransitionResult) error {
 	if f.cur == nil {
 		ids, err := newIDs(2)

@@ -67,6 +67,8 @@ func NewGuard(store Store, leaseTTL time.Duration, logger *slog.Logger) (*Guard,
 }
 
 // Wrap wraps a messaging.Handler with idempotency enforcement.
+//
+//nolint:funlen,gocognit // legacy baseline 2026-09-26: fix in ENG-025
 func (g *Guard) Wrap(scope string, next messaging.Handler) (messaging.Handler, error) {
 	if strings.TrimSpace(scope) == "" {
 		return nil, ErrInvalidScope

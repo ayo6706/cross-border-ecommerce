@@ -152,14 +152,14 @@ func TestRESTAdapter_RealWorldSuppliers(t *testing.T) {
 		}))
 		defer server.Close()
 
-		compId, _ := identity.NewCompositeIdentityStrategy([]string{"warehouse_id", "part_number"}, ":")
+		compID, _ := identity.NewCompositeIdentityStrategy([]string{"warehouse_id", "part_number"}, ":")
 		adapter, err := sources.NewRESTAdapter(sources.RESTAdapterConfig{
 			SourceID:   source.ID("sap-erp-de"),
 			BaseURL:    server.URL,
 			Client:     server.Client(),
 			Pagination: pagination.NewCursorPagination("scroll_id", "payload.paging.scroll_id"),
 			Extractor:  extraction.NewPathRecordExtractor("payload.catalog"),
-			Identity:   compId,
+			Identity:   compID,
 		})
 		if err != nil {
 			t.Fatalf("unexpected init error: %v", err)

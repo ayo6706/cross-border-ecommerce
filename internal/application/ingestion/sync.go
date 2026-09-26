@@ -46,6 +46,8 @@ func NewSyncCoordinator(runService *Service, txRunner TxRunner) (*SyncCoordinato
 // SyncSource fetches batches from the adapter and persists each batch's records
 // together with the run's progress and checkpoint in one transaction, so the
 // checkpoint never advances past records that were not saved.
+//
+//nolint:funlen,gocognit // legacy baseline 2026-09-26: fix in ENG-049
 func (c *SyncCoordinator) SyncSource(ctx context.Context, params SyncParams) (*domainIngestion.IngestionRun, error) {
 	if params.Adapter == nil {
 		return nil, errors.New("source adapter is required")

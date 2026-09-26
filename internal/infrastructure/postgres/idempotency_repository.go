@@ -34,6 +34,7 @@ func (r *IdempotencyRepository) WithTx(tx pgx.Tx) *IdempotencyRepository {
 	}
 }
 
+//nolint:funlen // legacy baseline 2026-09-26: fix in ENG-025
 func (r *IdempotencyRepository) ClaimKey(
 	ctx context.Context,
 	scope, key string,
@@ -109,7 +110,7 @@ func (r *IdempotencyRepository) ClaimKey(
 	return appIdempotency.Claim{}, appIdempotency.ErrKeyInProgress
 }
 
-func (r *IdempotencyRepository) CompleteKey(ctx context.Context, scope, key string, token string) error {
+func (r *IdempotencyRepository) CompleteKey(ctx context.Context, scope, key, token string) error {
 	if strings.TrimSpace(scope) == "" {
 		return appIdempotency.ErrInvalidScope
 	}
@@ -135,7 +136,7 @@ func (r *IdempotencyRepository) CompleteKey(ctx context.Context, scope, key stri
 	return nil
 }
 
-func (r *IdempotencyRepository) ReleaseKey(ctx context.Context, scope, key string, token string) error {
+func (r *IdempotencyRepository) ReleaseKey(ctx context.Context, scope, key, token string) error {
 	if strings.TrimSpace(scope) == "" {
 		return appIdempotency.ErrInvalidScope
 	}

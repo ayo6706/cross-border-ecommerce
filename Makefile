@@ -33,7 +33,8 @@ test-race:
 test-integration:
 	TEST_DATABASE_URL="$(TEST_DATABASE_URL)" TEST_REDIS_URL="$(TEST_REDIS_URL)" $(GOTEST) -v -race -count=1 -p 1 ./... # -p 1: packages share one test DB
 
-# Every mandatory gate; starts a throwaway PostgreSQL when TEST_DATABASE_URL is unset.
+# Every mandatory gate (the same script CI runs); starts throwaway PostgreSQL/Redis when
+# TEST_DATABASE_URL/TEST_REDIS_URL are unset in the environment.
 verify:
 	./scripts/verify.sh
 
@@ -49,6 +50,7 @@ migrate-up:
 migrate-down:
 	$(GOCMD) run ./cmd/migrate down
 
+# Same invocation as the golangci-lint gate in scripts/verify.sh (which also checks the pinned version).
 lint:
 	golangci-lint run ./...
 

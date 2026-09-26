@@ -65,7 +65,7 @@ func generateRequestID() string {
 
 func sanitizeHeaderID(raw string) string {
 	trimmed := strings.TrimSpace(raw)
-	if len(trimmed) == 0 || len(trimmed) > 128 {
+	if trimmed == "" || len(trimmed) > 128 {
 		return ""
 	}
 	for _, r := range trimmed {

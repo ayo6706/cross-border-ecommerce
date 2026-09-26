@@ -38,6 +38,7 @@ func run() error {
 	}
 }
 
+//nolint:funlen // legacy baseline 2026-09-26: fix in ENG-018
 func runProcess(args []string) error {
 	fs := flag.NewFlagSet("process", flag.ExitOnError)
 	runID := fs.String("run", "", "Ingestion run UUID to process")

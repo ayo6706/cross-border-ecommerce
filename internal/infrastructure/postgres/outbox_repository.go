@@ -169,6 +169,7 @@ func (r *OutboxRepository) CreateReplayEvent(ctx context.Context, e appDLQ.Repla
 	return nil
 }
 
+//nolint:funlen // legacy baseline 2026-09-26: fix in ENG-051
 func (r *OutboxRepository) ClaimBatch(
 	ctx context.Context,
 	claimToken string,
@@ -205,7 +206,8 @@ func (r *OutboxRepository) ClaimBatch(
 	}
 
 	events := make([]appOutbox.Event, len(rows))
-	for i, row := range rows {
+	for i := range rows {
+		row := &rows[i]
 		events[i] = appOutbox.Event{
 			ID:            uuidToString(row.ID),
 			EventID:       row.EventID,

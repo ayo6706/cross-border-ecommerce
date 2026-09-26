@@ -57,10 +57,8 @@ func DecideTransition(current *Snapshot, in IncomingRecord) TransitionResult {
 				return TransitionResult{Type: TransitionStale}
 			}
 		}
-	} else {
-		if in.ReceivedAt.Before(current.LastReceivedAt) {
-			return TransitionResult{Type: TransitionStale}
-		}
+	} else if in.ReceivedAt.Before(current.LastReceivedAt) {
+		return TransitionResult{Type: TransitionStale}
 	}
 
 	if !strings.HasPrefix(current.CurrentFingerprint, FingerprintV1Prefix) && current.StoredCurrentVersion != nil {

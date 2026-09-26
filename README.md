@@ -70,17 +70,24 @@ and the value is read from the environment when the adapter is built.
 ### Common Commands
 
 ```bash
-# Start local PostgreSQL (dev + test databases)
+# Start local PostgreSQL and Redis (dev + test databases)
 make db-up
 
 # Apply migrations to the dev database
 make migrate-up
 
+# golangci-lint (version pinned in .golangci-lint-version; includes funlen/gocognit/dupl)
+make lint
+
 # Unit tests (integration tests skip without TEST_DATABASE_URL)
 make test
 
-# Unit + PostgreSQL integration tests with the race detector (same as CI)
+# Unit + PostgreSQL & Redis live integration tests with the race detector
 make test-integration
+
+# Every gate, the same script CI runs: gofmt, go vet, staticcheck (go.mod tool), golangci-lint,
+# sqlc diff, tests against live PostgreSQL + Redis; any skipped test fails. VERIFY_RACE=1 adds -race.
+make verify
 
 # Build executables into bin/
 make build
