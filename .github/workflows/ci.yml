@@ -58,6 +58,6 @@ jobs:
       - name: Verify gates
         env:
           TEST_DATABASE_URL: postgres://postgres:postgrespassword@localhost:5432/crossborder_test?sslmode=disable
-          TEST_REDIS_URL: redis://localhost:6379/15
+          TEST_REDIS_URL: redis://localhost:6390/15 # PROBE F1: nothing listens here, so the Redis live suites skip
           VERIFY_RACE: "1"
         run: ./scripts/verify.sh
