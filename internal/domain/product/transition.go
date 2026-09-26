@@ -31,7 +31,7 @@ type Snapshot struct {
 }
 
 type IncomingRecord struct {
-	Normalized      *NormalizedProduct
+	Normalized      NormalizedProduct
 	Fingerprint     string
 	SourceUpdatedAt *time.Time
 	ReceivedAt      time.Time
@@ -79,8 +79,8 @@ func DecideTransition(current *Snapshot, in IncomingRecord) TransitionResult {
 	}
 
 	var diffs []string
-	if current.StoredCurrentVersion != nil && in.Normalized != nil {
-		diffs = DetectFieldChanges(*current.StoredCurrentVersion, *in.Normalized)
+	if current.StoredCurrentVersion != nil {
+		diffs = DetectFieldChanges(*current.StoredCurrentVersion, in.Normalized)
 	}
 
 	return TransitionResult{

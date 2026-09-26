@@ -1,7 +1,6 @@
 package product
 
 import (
-	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -23,11 +22,26 @@ type BatchIncomingRecord struct {
 	RawRecordID       string
 	SourceID          string
 	ExternalProductID string
-	Normalized        *NormalizedProduct
+	Normalized        NormalizedProduct
 	Fingerprint       string
 	SourceUpdatedAt   *time.Time
 	ReceivedAt        time.Time
 	IngestionRunID    string
+}
+
+type BatchMetrics struct {
+	Seen      int
+	New       int
+	Changed   int
+	Unchanged int
+	Failed    int
+}
+
+func (m BatchMetrics) Validate() error {
+	if m.Seen < 0 || m.New < 0 || m.Changed < 0 || m.Unchanged < 0 || m.Failed < 0 {
+		return ErrNegativeMetric
+	}
+	return nil
 }
 
 type ProductGuardedUpdate struct {
@@ -74,11 +88,7 @@ type BatchPlan struct {
 	SourcesToUpdateWatermark    []SourceWatermarkUpdate
 	SourcesToUpdateChanged      []SourceChangedUpdate
 
-	RecordsSeen      int
-	RecordsNew       int
-	RecordsChanged   int
-	RecordsUnchanged int
-	RecordsFailed    int
+	BatchMetrics
 }
 
 // DecideBatch folds a page of normalized records into one BatchPlan. Each identity's records
@@ -86,9 +96,13 @@ type BatchPlan struct {
 // alone; the rows to write are then derived once, from the identity's state before and after.
 func DecideBatch(snapshots map[string]*Snapshot, incoming []BatchIncomingRecord, now time.Time) (*BatchPlan, error) {
 	if now.IsZero() {
-		return nil, errors.New("now timestamp cannot be zero")
+		return nil, ErrZeroTimestamp
 	}
-	plan := &BatchPlan{RecordsSeen: len(incoming)}
+	plan := &BatchPlan{
+		BatchMetrics: BatchMetrics{
+			Seen: len(incoming),
+		},
+	}
 	for _, group := range groupByIdentity(incoming) {
 		fold := newIdentityFold(plan, group, snapshots[group.key], now)
 		for _, rec := range group.records {
@@ -114,6 +128,8 @@ func groupByIdentity(records []BatchIncomingRecord) []identityGroup {
 	index := make(map[string]int)
 	var groups []identityGroup
 	for _, rec := range records {
+		rec.SourceID = strings.TrimSpace(rec.SourceID)
+		rec.ExternalProductID = strings.TrimSpace(rec.ExternalProductID)
 		key := IdentityKey(rec.SourceID, rec.ExternalProductID)
 		i, ok := index[key]
 		if !ok {
@@ -181,7 +197,7 @@ func (f *identityFold) apply(rec BatchIncomingRecord) error {
 
 	switch transition.Type {
 	case TransitionStale:
-		f.plan.RecordsUnchanged++
+		f.plan.Unchanged++
 		return nil
 	case TransitionNew, TransitionChanged:
 		if err := f.addVersion(rec, transition); err != nil {
@@ -189,9 +205,9 @@ func (f *identityFold) apply(rec BatchIncomingRecord) error {
 		}
 	case TransitionVersionMismatch:
 		f.cur.CurrentFingerprint = rec.Fingerprint
-		f.plan.RecordsUnchanged++
+		f.plan.Unchanged++
 	case TransitionUnchanged:
-		f.plan.RecordsUnchanged++
+		f.plan.Unchanged++
 	default:
 		return fmt.Errorf("%w: unknown transition type %s", ErrInvalidTransition, transition.Type)
 	}
@@ -267,9 +283,9 @@ func (f *identityFold) addVersion(rec BatchIncomingRecord, transition Transition
 		ChangedFields: changedFields,
 	})
 	if changeType == ChangeTypeNew {
-		f.plan.RecordsNew++
+		f.plan.New++
 	} else {
-		f.plan.RecordsChanged++
+		f.plan.Changed++
 	}
 
 	f.cur.CurrentVersionID = &version.ID

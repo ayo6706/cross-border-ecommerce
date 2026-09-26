@@ -179,7 +179,7 @@ func (p *RunProcessor) ProcessRun(ctx context.Context, runID string, opts Proces
 				RawRecordID:       record.ID,
 				SourceID:          string(record.SourceID),
 				ExternalProductID: record.ExternalProductID,
-				Normalized:        &normalized,
+				Normalized:        normalized,
 				Fingerprint:       fingerprint,
 				SourceUpdatedAt:   record.SourceUpdatedAt,
 				ReceivedAt:        record.ReceivedAt,
@@ -312,9 +312,9 @@ func (p *RunProcessor) processPageWithRetry(
 			changedCount := 0
 			unchangedCount := 0
 			if plan != nil {
-				newCount = plan.RecordsNew
-				changedCount = plan.RecordsChanged
-				unchangedCount = plan.RecordsUnchanged
+				newCount = plan.New
+				changedCount = plan.Changed
+				unchangedCount = plan.Unchanged
 			}
 
 			rp, err := repos.RunProcessing.UpdateProgress(

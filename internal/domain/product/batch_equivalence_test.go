@@ -141,10 +141,10 @@ func deref(s *string) string {
 type counters struct{ seen, new, changed, unchanged int }
 
 func (c *counters) add(p *domainProduct.BatchPlan) {
-	c.seen += p.RecordsSeen
-	c.new += p.RecordsNew
-	c.changed += p.RecordsChanged
-	c.unchanged += p.RecordsUnchanged
+	c.seen += p.Seen
+	c.new += p.New
+	c.changed += p.Changed
+	c.unchanged += p.Unchanged
 }
 
 // TestDecideBatch_PageEqualsOneRecordAtATime is the refactoring safety net for DecideBatch:
@@ -153,14 +153,14 @@ func (c *counters) add(p *domainProduct.BatchPlan) {
 func TestDecideBatch_PageEqualsOneRecordAtATime(t *testing.T) {
 	base := time.Date(2026, 9, 1, 10, 0, 0, 0, time.UTC)
 	at := func(minutes int) *time.Time { ts := base.Add(time.Duration(minutes) * time.Minute); return &ts }
-	product := func(name string) *domainProduct.NormalizedProduct {
-		return &domainProduct.NormalizedProduct{CanonicalName: name, Brand: "B", OriginCountry: "US"}
+	product := func(name string) domainProduct.NormalizedProduct {
+		return domainProduct.NormalizedProduct{CanonicalName: name, Brand: "B", OriginCountry: "US"}
 	}
 	rec := func(ext, name string, sua *time.Time, ra int) domainProduct.BatchIncomingRecord {
 		n := product(name)
 		return domainProduct.BatchIncomingRecord{
 			RawRecordID: fmt.Sprintf("raw-%s-%03d", ext, ra), SourceID: "src", ExternalProductID: ext,
-			Normalized: n, Fingerprint: domainProduct.Fingerprint(*n), SourceUpdatedAt: sua,
+			Normalized: n, Fingerprint: domainProduct.Fingerprint(n), SourceUpdatedAt: sua,
 			ReceivedAt: *at(ra), IngestionRunID: "00000000-0000-4000-8000-000000000001",
 		}
 	}
@@ -175,7 +175,7 @@ func TestDecideBatch_PageEqualsOneRecordAtATime(t *testing.T) {
 			StoredCurrentVersion: v,
 		}
 	}
-	fp := func(name string) string { return domainProduct.Fingerprint(*product(name)) }
+	fp := func(name string) string { return domainProduct.Fingerprint(product(name)) }
 
 	type seeded struct {
 		key  string
