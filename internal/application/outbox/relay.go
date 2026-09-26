@@ -243,7 +243,10 @@ func (r *Relay) Run(ctx context.Context) error {
 		claimed, _, err := r.RunOnce(ctx)
 		if err != nil {
 			if ctx.Err() != nil {
-				return nil
+				if isOnlyContextCanceled(err) {
+					return nil
+				}
+				return err
 			}
 			consecutiveFailures++
 			bo := platformBackoff.Exponential(consecutiveFailures-1, r.cfg.BaseBackoff, r.cfg.MaxBackoff)
@@ -278,3 +281,19 @@ func (r *Relay) Run(ctx context.Context) error {
 		}
 	}
 }
+
+func isOnlyContextCanceled(err error) bool {
+	if err == nil {
+		return false
+	}
+	if u, ok := err.(interface{ Unwrap() []error }); ok {
+		for _, e := range u.Unwrap() {
+			if !isOnlyContextCanceled(e) {
+				return false
+			}
+		}
+		return true
+	}
+	return errors.Is(err, context.Canceled)
+}
+

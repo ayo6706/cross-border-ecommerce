@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -38,10 +39,6 @@ func run() error {
 		return fmt.Errorf("validate redis configuration: %w", err)
 	}
 
-	if err := cfg.Worker.ValidateAgainstDBPool(cfg.Database.MaxConns); err != nil {
-		return fmt.Errorf("validate worker configuration: %w", err)
-	}
-
 	logger := logging.NewLogger(os.Stdout, logging.Options{
 		Level:     cfg.Log.Level,
 		Format:    cfg.Log.Format,
@@ -52,7 +49,7 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	logger.Info("starting stream consumer and outbox worker daemon",
+	logger.Info("starting outbox worker and run processing daemon",
 		slog.String("service", cfg.App.ServiceName),
 		slog.String("environment", cfg.App.Environment),
 	)
@@ -136,7 +133,7 @@ func run() error {
 		return relay.Run(gCtx)
 	})
 
-	if err := g.Wait(); err != nil && ctx.Err() == nil {
+	if err := g.Wait(); err != nil && !isOnlyContextCanceled(err) {
 		return fmt.Errorf("worker group execution error: %w", err)
 	}
 
@@ -215,3 +212,19 @@ func runProcessingLoop(
 		}
 	}
 }
+
+func isOnlyContextCanceled(err error) bool {
+	if err == nil {
+		return false
+	}
+	if u, ok := err.(interface{ Unwrap() []error }); ok {
+		for _, e := range u.Unwrap() {
+			if !isOnlyContextCanceled(e) {
+				return false
+			}
+		}
+		return true
+	}
+	return errors.Is(err, context.Canceled)
+}
+
