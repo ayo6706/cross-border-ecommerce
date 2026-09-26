@@ -560,14 +560,15 @@ func TestProcessRunRecords_ConcurrentSameIdentity(t *testing.T) {
 	var wg sync.WaitGroup
 	errs := make([]error, 2)
 
+	opts1, opts2 := testProcessRunOptions(t), testProcessRunOptions(t) // built on the test goroutine
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		_, errs[0] = env.processor.ProcessRun(ctx, run1.ID, testProcessRunOptions(t))
+		_, errs[0] = env.processor.ProcessRun(ctx, run1.ID, opts1)
 	}()
 	go func() {
 		defer wg.Done()
-		_, errs[1] = env.processor.ProcessRun(ctx, run2.ID, testProcessRunOptions(t))
+		_, errs[1] = env.processor.ProcessRun(ctx, run2.ID, opts2)
 	}()
 	wg.Wait()
 
@@ -707,8 +708,7 @@ func TestProcessRunRecords_ErrorBudgetExceeded_FailsLoudly(t *testing.T) {
 	assert.Contains(t, err.Error(), "error budget exceeded")
 
 	// Verify run processing state is FAILED and counters reflect the failing record
-	rp, err := env.processingRepo.GetByID(ctx, run.ID)
-	require.NoError(t, err)
+	rp := readRunProcessing(t, env.pool, run.ID)
 	assert.Equal(t, domainIngestion.ProcessingFailed, rp.Status)
 	assert.Equal(t, 100, rp.Seen)
 	assert.Equal(t, 100, rp.Failed)
@@ -811,8 +811,7 @@ func TestProcessRunRecords_CancelAndResume(t *testing.T) {
 	require.Error(t, err)
 
 	// Processing status should be released to PENDING
-	rp, err := env.processingRepo.GetByID(ctx, run.ID)
-	require.NoError(t, err)
+	rp := readRunProcessing(t, env.pool, run.ID)
 	assert.Equal(t, domainIngestion.ProcessingPending, rp.Status)
 	assert.Equal(t, 3, rp.Seen)
 
@@ -880,8 +879,7 @@ func TestWorker_ClaimNext_Then_ProcessRun(t *testing.T) {
 	assert.Equal(t, 5, res.New)
 
 	// Verify run state is now COMPLETED
-	finalRp, err := env.processingRepo.GetByID(ctx, run.ID)
-	require.NoError(t, err)
+	finalRp := readRunProcessing(t, env.pool, run.ID)
 	assert.Equal(t, domainIngestion.ProcessingCompleted, finalRp.Status)
 }
 
@@ -1054,7 +1052,8 @@ func TestE2E_IngestTwice_OnlyChangedVersioned(t *testing.T) {
 // Option validation runs before any repository call, so it needs no database.
 func TestProcessRun_ValidationRejectsInvalidOptions(t *testing.T) {
 	t.Parallel()
-	proc, err := appProduct.NewRunProcessor(unusedRunRepo{}, unusedSourceRepo{}, unusedRawRepo{}, unusedProcessingRepo{}, unusedTxRunner{})
+	proc, err := appProduct.NewRunProcessor(
+		unusedRunRepo{}, unusedSourceRepo{}, unusedRawRepo{}, unusedProcessingRepo{}, unusedTxRunner{})
 	require.NoError(t, err)
 
 	valid := func() appProduct.ProcessRunOptions {
@@ -1065,17 +1064,19 @@ func TestProcessRun_ValidationRejectsInvalidOptions(t *testing.T) {
 			ErrorBudget:   domainIngestion.ErrorBudget{MaxErrorRate: 0.10, MinSampleRows: 10},
 		}
 	}
+	type opts = appProduct.ProcessRunOptions
 	cases := []struct {
 		name  string
 		runID string
-		alter func(*appProduct.ProcessRunOptions)
+		alter func(*opts)
 		want  error
 	}{
-		{"empty run id", "", func(*appProduct.ProcessRunOptions) {}, domainIngestion.ErrInvalidRunID},
-		{"empty claim token", "run-1", func(o *appProduct.ProcessRunOptions) { o.ClaimToken = "" }, domainIngestion.ErrInvalidClaimToken},
-		{"zero lease", "run-1", func(o *appProduct.ProcessRunOptions) { o.LeaseDuration = 0 }, domainIngestion.ErrInvalidLeaseDuration},
-		{"zero batch size", "run-1", func(o *appProduct.ProcessRunOptions) { o.BatchSize = 0 }, domainIngestion.ErrInvalidBatchSize},
-		{"zero error budget", "run-1", func(o *appProduct.ProcessRunOptions) { o.ErrorBudget = domainIngestion.ErrorBudget{} }, domainIngestion.ErrInvalidErrorBudget},
+		{"empty run id", "", func(*opts) {}, domainIngestion.ErrInvalidRunID},
+		{"empty claim token", "run-1", func(o *opts) { o.ClaimToken = "" }, domainIngestion.ErrInvalidClaimToken},
+		{"zero lease", "run-1", func(o *opts) { o.LeaseDuration = 0 }, domainIngestion.ErrInvalidLeaseDuration},
+		{"zero batch size", "run-1", func(o *opts) { o.BatchSize = 0 }, domainIngestion.ErrInvalidBatchSize},
+		{"zero error budget", "run-1", func(o *opts) { o.ErrorBudget = domainIngestion.ErrorBudget{} },
+			domainIngestion.ErrInvalidErrorBudget},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1100,3 +1101,27 @@ type (
 	}
 	unusedTxRunner struct{ appProduct.TxRunner }
 )
+
+// runProcessingRow is the persisted processing state a test asserts on, read straight from the
+// table: production code has no reason to read it back.
+type runProcessingRow struct {
+	Status domainIngestion.ProcessingStatus
+	Seen   int
+	Failed int
+	Cursor *string
+}
+
+func readRunProcessing(t testing.TB, pool *pgxpool.Pool, runID string) runProcessingRow {
+	t.Helper()
+	var (
+		row    runProcessingRow
+		status string
+	)
+	err := pool.QueryRow(context.Background(),
+		`SELECT status, records_seen, records_failed, cursor_raw_record_id::text
+		FROM ingestion_run_processing WHERE run_id = $1`,
+		runID).Scan(&status, &row.Seen, &row.Failed, &row.Cursor)
+	require.NoError(t, err)
+	row.Status = domainIngestion.ProcessingStatus(status)
+	return row
+}

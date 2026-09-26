@@ -69,10 +69,10 @@ func TestRunProcessingRepository_GuardFailures_Live(t *testing.T) {
 		err := repo.Fail(ctx, runID, newUUID(), "boom")
 		require.ErrorIs(t, err, ingestion.ErrLeaseLost, "a worker that lost its lease must not report the run failed")
 
-		state, err := repo.GetByID(ctx, runID)
-		require.NoError(t, err)
-		require.Equal(t, ingestion.ProcessingRunning, state.Status)
-		require.NotNil(t, state.ClaimToken)
-		require.Equal(t, owner, *state.ClaimToken)
+		var status, holder string
+		require.NoError(t, pool.QueryRow(ctx,
+			"SELECT status, claim_token::text FROM ingestion_run_processing WHERE run_id = $1", runID).Scan(&status, &holder))
+		require.Equal(t, string(ingestion.ProcessingRunning), status)
+		require.Equal(t, owner, holder)
 	})
 }

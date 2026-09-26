@@ -322,7 +322,8 @@ func TestOutboxRelay_Live(t *testing.T) {
 
 		// Expire the lease in the database rather than sleeping past it: a sleep only races the
 		// lease under load (test-hygiene §3).
-		_, err = pool.Exec(ctx, "UPDATE outbox_events SET available_at = NOW() - interval '1 second' WHERE status = 'PENDING'")
+		_, err = pool.Exec(ctx,
+			"UPDATE outbox_events SET available_at = NOW() - interval '1 second' WHERE status = 'PENDING'")
 		require.NoError(t, err)
 
 		// Second run with normal store: publishes again and marks PROCESSED

@@ -379,11 +379,10 @@ func TestProcessRunBatch_F1_BadRowAbortsCopyRollsBack(t *testing.T) {
 	}
 
 	// Cursor must remain at the last record of page 1
-	rp, err := env.processingRepo.GetByID(ctx, run.ID)
-	require.NoError(t, err)
+	rp := readRunProcessing(t, env.pool, run.ID)
 	assert.Equal(t, domainIngestion.ProcessingFailed, rp.Status)
 	assert.Equal(t, 5, rp.Seen)
-	assert.Equal(t, page1[4].ID, *rp.CursorRawRecordID)
+	assert.Equal(t, page1[4].ID, *rp.Cursor)
 }
 
 type failOnPageTxRunner struct {
@@ -699,8 +698,7 @@ func TestProcessRunBatch_F4_ContextCancelledMidBatch(t *testing.T) {
 	assert.ErrorIs(t, err, context.Canceled)
 
 	// Verify lease was released cleanly
-	rp, err := env.processingRepo.GetByID(context.Background(), run.ID)
-	require.NoError(t, err)
+	rp := readRunProcessing(t, env.pool, run.ID)
 	assert.Equal(t, domainIngestion.ProcessingPending, rp.Status, "lease must be released on context cancellation")
 	assert.Equal(t, 10, rp.Seen, "page 1 must be committed and checkpointed")
 
@@ -948,18 +946,16 @@ func TestProcessRunBatch_ConcurrentRunsSameSource(t *testing.T) {
 	var wg sync.WaitGroup
 	errs := make([]error, 2)
 
+	smallBatch := func(o *appProduct.ProcessRunOptions) { o.BatchSize = 10 }
+	optsA, optsB := testProcessRunOptions(t, smallBatch), testProcessRunOptions(t, smallBatch) // built on the test goroutine
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		_, errs[0] = env.processor.ProcessRun(ctx, runA.ID, testProcessRunOptions(t, func(o *appProduct.ProcessRunOptions) {
-			o.BatchSize = 10
-		}))
+		_, errs[0] = env.processor.ProcessRun(ctx, runA.ID, optsA)
 	}()
 	go func() {
 		defer wg.Done()
-		_, errs[1] = env.processor.ProcessRun(ctx, runB.ID, testProcessRunOptions(t, func(o *appProduct.ProcessRunOptions) {
-			o.BatchSize = 10
-		}))
+		_, errs[1] = env.processor.ProcessRun(ctx, runB.ID, optsB)
 	}()
 	wg.Wait()
 
@@ -1052,7 +1048,9 @@ type nilProgressRepo struct {
 	domainIngestion.RunProcessingRepository
 }
 
-func (nilProgressRepo) UpdateProgress(context.Context, string, string, domainIngestion.BatchMetrics, *string, time.Duration) (*domainIngestion.RunProcessing, error) {
+func (nilProgressRepo) UpdateProgress(
+	context.Context, string, string, domainIngestion.BatchMetrics, *string, time.Duration,
+) (*domainIngestion.RunProcessing, error) {
 	return nil, nil
 }
 
@@ -1087,7 +1085,8 @@ func TestProcessRunBatch_NilProgressState_Fails(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, env.rawRepo.SaveBatch(ctx, []*domainIngestion.RawRecord{rec}))
 
-	proc, err := appProduct.NewRunProcessor(env.runRepo, env.sourceRepo, env.rawRepo, env.processingRepo, nilProgressTxRunner{env.txRunner})
+	proc, err := appProduct.NewRunProcessor(
+		env.runRepo, env.sourceRepo, env.rawRepo, env.processingRepo, nilProgressTxRunner{env.txRunner})
 	require.NoError(t, err)
 
 	_, err = proc.ProcessRun(ctx, run.ID, testProcessRunOptions(t))

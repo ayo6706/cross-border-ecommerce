@@ -93,23 +93,6 @@ func (r *RunProcessingRepository) ClaimSpecific(ctx context.Context, runID, clai
 	return toDomainRunProcessing(&row), nil
 }
 
-func (r *RunProcessingRepository) GetByID(ctx context.Context, runID string) (*ingestion.RunProcessing, error) {
-	rUUID, err := parseUUID(runID)
-	if err != nil {
-		return nil, fmt.Errorf("%w: invalid run id: %w", ingestion.ErrInvalidRunID, err)
-	}
-
-	row, err := r.queries.GetRunProcessingByID(ctx, rUUID)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, ingestion.ErrRunProcessingNotFound
-		}
-		return nil, fmt.Errorf("get run processing by id: %w", err)
-	}
-
-	return toDomainRunProcessing(&row), nil
-}
-
 func (r *RunProcessingRepository) EnsureExists(ctx context.Context, runID string) (*ingestion.RunProcessing, error) {
 	rUUID, err := parseUUID(runID)
 	if err != nil {
@@ -214,7 +197,9 @@ func (r *RunProcessingRepository) Release(ctx context.Context, runID, claimToken
 	return nil
 }
 
-func (r *RunProcessingRepository) Complete(ctx context.Context, runID, claimToken string) (*ingestion.RunProcessing, error) {
+func (r *RunProcessingRepository) Complete(
+	ctx context.Context, runID, claimToken string,
+) (*ingestion.RunProcessing, error) {
 	rUUID, err := parseUUID(runID)
 	if err != nil {
 		return nil, fmt.Errorf("%w: invalid run id: %w", ingestion.ErrInvalidRunID, err)

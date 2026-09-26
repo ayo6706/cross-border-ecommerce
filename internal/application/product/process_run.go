@@ -238,7 +238,9 @@ func (p *RunProcessor) failRun(ctx context.Context, runID, claimToken, reason st
 	return p.processingRepo.Fail(cleanupCtx, runID, claimToken, reason)
 }
 
-func (p *RunProcessor) completeRun(ctx context.Context, runID, claimToken string) (*domainIngestion.RunProcessing, error) {
+func (p *RunProcessor) completeRun(
+	ctx context.Context, runID, claimToken string,
+) (*domainIngestion.RunProcessing, error) {
 	cleanupCtx, cancel := finalWriteContext(ctx)
 	defer cancel()
 	return p.processingRepo.Complete(cleanupCtx, runID, claimToken)

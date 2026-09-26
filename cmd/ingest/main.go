@@ -143,7 +143,9 @@ func runProcess(args []string) error {
 
 // processRunOptions builds the options ProcessRun requires: a fresh claim token for this
 // invocation and the error budget from configuration.
-func processRunOptions(cfg config.IngestionConfig, lease time.Duration, batchSize int, fromStart bool) (appProduct.ProcessRunOptions, error) {
+func processRunOptions(
+	cfg config.IngestionConfig, lease time.Duration, batchSize int, fromStart bool,
+) (appProduct.ProcessRunOptions, error) {
 	budget, err := cfg.ErrorBudget()
 	if err != nil {
 		return appProduct.ProcessRunOptions{}, err

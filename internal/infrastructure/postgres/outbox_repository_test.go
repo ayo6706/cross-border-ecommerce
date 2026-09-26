@@ -246,7 +246,8 @@ func TestOutboxStore_Live(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, events, 1)
 		// Expire the stale relay's lease so another relay can claim the row.
-		_, err = pool.Exec(ctx, "UPDATE outbox_events SET available_at = NOW() - interval '1 second' WHERE id = $1", events[0].ID)
+		_, err = pool.Exec(ctx,
+			"UPDATE outbox_events SET available_at = NOW() - interval '1 second' WHERE id = $1", events[0].ID)
 		require.NoError(t, err)
 
 		owner, err := uuid.NewString()
@@ -259,7 +260,8 @@ func TestOutboxStore_Live(t *testing.T) {
 		require.ErrorIs(t, err, appOutbox.ErrClaimLost)
 
 		var retries int
-		require.NoError(t, pool.QueryRow(ctx, "SELECT retry_count FROM outbox_events WHERE id = $1", events[0].ID).Scan(&retries))
+		require.NoError(t, pool.QueryRow(ctx,
+			"SELECT retry_count FROM outbox_events WHERE id = $1", events[0].ID).Scan(&retries))
 		assert.Equal(t, 0, retries, "the stale relay must not bump the new owner's retry count")
 	})
 

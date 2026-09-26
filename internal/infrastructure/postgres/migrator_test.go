@@ -206,8 +206,11 @@ func TestMigrator_LiveLifecycle(t *testing.T) {
 func indexDefinitions(ctx context.Context, t *testing.T, pool *pgxpool.Pool) []string {
 	t.Helper()
 	var invalid int
-	if err := pool.QueryRow(ctx, `SELECT count(*) FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
-		JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND NOT i.indisvalid`).Scan(&invalid); err != nil {
+	const countInvalid = `SELECT count(*) FROM pg_index i
+		JOIN pg_class c ON c.oid = i.indexrelid
+		JOIN pg_namespace n ON n.oid = c.relnamespace
+		WHERE n.nspname = 'public' AND NOT i.indisvalid`
+	if err := pool.QueryRow(ctx, countInvalid).Scan(&invalid); err != nil {
 		t.Fatalf("count invalid indexes: %v", err)
 	}
 	if invalid != 0 {

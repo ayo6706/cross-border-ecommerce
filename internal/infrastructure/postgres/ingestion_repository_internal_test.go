@@ -47,7 +47,8 @@ func TestListLimit(t *testing.T) {
 func TestToRunCounters_RejectsOverflow(t *testing.T) {
 	t.Parallel()
 
-	if _, err := toRunCounters(ingestion.BatchMetrics{Seen: 1, New: 2, Changed: 3, Unchanged: 4, Failed: math.MaxInt32 + 1}); err == nil {
+	overflow := ingestion.BatchMetrics{Seen: 1, New: 2, Changed: 3, Unchanged: 4, Failed: math.MaxInt32 + 1}
+	if _, err := toRunCounters(overflow); err == nil {
 		t.Fatal("expected overflow error for failed counter")
 	}
 	c, err := toRunCounters(ingestion.BatchMetrics{Seen: 1, New: 2, Changed: 3, Unchanged: 4, Failed: 5})

@@ -172,7 +172,8 @@ func (m *Migrator) parseMigration(name string) (Migration, error) {
 	if err != nil {
 		return Migration{}, fmt.Errorf("read migration file %s: %w", name, err)
 	}
-	noTx, err := parseNoTransaction(string(script))
+	text := strings.TrimPrefix(string(script), "\ufeff") // a BOM is not SQL; PostgreSQL would reject it
+	noTx, err := parseNoTransaction(text)
 	if err != nil {
 		return Migration{}, fmt.Errorf("migration %s: %w", name, err)
 	}
@@ -182,12 +183,12 @@ func (m *Migrator) parseMigration(name string) (Migration, error) {
 		Direction:     MigrationDirection(matches[3]),
 		Path:          name,
 		NoTransaction: noTx,
-		script:        string(script),
+		script:        text,
 	}, nil
 }
 
 func parseNoTransaction(script string) (bool, error) {
-	firstLine, body, _ := strings.Cut(strings.TrimPrefix(script, "\ufeff"), "\n")
+	firstLine, body, _ := strings.Cut(script, "\n")
 	if strings.TrimSpace(firstLine) != noTransactionDirective {
 		return false, nil
 	}

@@ -82,8 +82,11 @@ func (m *mockStore) RecordFailure(ctx context.Context, claimToken, id, cause str
 	if m.recordErr != nil {
 		return m.recordErr
 	}
+	// Same guard as the repository: only the claim holder records a failure. The fake never
+	// hands a claimed event to another token, so a takeover is covered by the live
+	// TestOutboxStore_Live/record_failure_with_lost_claim, not here.
 	if !slices.Contains(m.claimedTokens[claimToken], id) {
-		return ErrClaimLost // same guard as the repository: only the claim holder records a failure
+		return ErrClaimLost
 	}
 	m.recordedFails[id] = cause
 	return nil
@@ -549,8 +552,12 @@ func TestIsOnlyContextCanceled(t *testing.T) {
 		{"joined cancellations", errors.Join(context.Canceled, fmt.Errorf("nested: %w", context.Canceled)), true},
 		{"unrelated error", errors.New("db error"), false},
 		{"join with a real error", errors.Join(context.Canceled, errors.New("db error")), false},
-		{"real error nested in a join", errors.Join(fmt.Errorf("w: %w", context.Canceled), errors.Join(context.Canceled, errors.New("connection lost"))), false},
-		{"single wrap around a mixed join", fmt.Errorf("batch: %w", errors.Join(context.Canceled, errors.New("release failed"))), false},
+		{"real error nested in a join", errors.Join(
+			fmt.Errorf("w: %w", context.Canceled),
+			errors.Join(context.Canceled, errors.New("connection lost")),
+		), false},
+		{"single wrap around a mixed join",
+			fmt.Errorf("batch: %w", errors.Join(context.Canceled, errors.New("release failed"))), false},
 	}
 	for _, tc := range cases {
 		assert.Equal(t, tc.want, isOnlyContextCanceled(tc.err), tc.name)
