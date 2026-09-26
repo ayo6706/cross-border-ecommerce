@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"strings"
 	"testing"
 	"testing/fstest"
 	"time"
@@ -217,4 +218,171 @@ func tableExists(ctx context.Context, t *testing.T, pool *pgxpool.Pool, table st
 		t.Fatalf("query table %s existence failed: %v", table, err)
 	}
 	return exists
+}
+
+func TestMigrator_DiscoverMigrations_RejectsMalformedSQLFileName(t *testing.T) {
+	t.Parallel()
+
+	memFS := fstest.MapFS{
+		"000001_init.up.sql":    &fstest.MapFile{Data: []byte("SELECT 1;")},
+		"000001_init.down.sql":  &fstest.MapFile{Data: []byte("SELECT 1;")},
+		"0002-add index.up.sql": &fstest.MapFile{Data: []byte("SELECT 2;")},
+	}
+	migrator, err := postgres.NewMigrator(&pgxpool.Pool{}, memFS)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	_, err = migrator.DiscoverMigrations()
+	if !errors.Is(err, postgres.ErrMalformedMigrationName) {
+		t.Fatalf("a .sql file that does not match the naming pattern must fail discovery, got %v", err)
+	}
+}
+
+func TestMigrator_DiscoverMigrations_NoTransactionDirective(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]struct {
+		script   string
+		wantErr  error
+		wantNoTx bool
+	}{
+		"single concurrent statement": {
+			script:   "-- migrate:no-transaction\nCREATE INDEX CONCURRENTLY IF NOT EXISTS idx_a ON t (a);\n",
+			wantNoTx: true,
+		},
+		"semicolon inside a string and a comment is not a separator": {
+			script:   "-- migrate:no-transaction\n-- drops; nothing else\nCOMMENT ON TABLE t IS 'a;b';",
+			wantNoTx: true,
+		},
+		"two statements": {
+			script:  "-- migrate:no-transaction\nCREATE INDEX CONCURRENTLY idx_a ON t (a);\nCREATE INDEX CONCURRENTLY idx_b ON t (b);",
+			wantErr: postgres.ErrInvalidNoTxMigration,
+		},
+		"empty body": {
+			script:  "-- migrate:no-transaction\n-- nothing here\n",
+			wantErr: postgres.ErrInvalidNoTxMigration,
+		},
+		"dollar quoting is refused": {
+			script:  "-- migrate:no-transaction\nDO $$ BEGIN PERFORM 1; END $$;",
+			wantErr: postgres.ErrInvalidNoTxMigration,
+		},
+		"directive not on the first line is a normal migration": {
+			script: "SELECT 1;\n-- migrate:no-transaction\nSELECT 2;",
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			memFS := fstest.MapFS{"000001_idx.up.sql": &fstest.MapFile{Data: []byte(tc.script)}}
+			migrator, err := postgres.NewMigrator(&pgxpool.Pool{}, memFS)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			got, err := migrator.DiscoverMigrations()
+			if tc.wantErr != nil {
+				if !errors.Is(err, tc.wantErr) {
+					t.Fatalf("want %v, got %v", tc.wantErr, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got[0].NoTransaction != tc.wantNoTx {
+				t.Fatalf("NoTransaction = %v, want %v", got[0].NoTransaction, tc.wantNoTx)
+			}
+		})
+	}
+}
+
+// TestMigrator_NoTransaction_Live runs no-transaction migrations in a private schema so the
+// shared schema_migrations table is untouched. The steps depend on each other and run in order.
+func TestMigrator_NoTransaction_Live(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	const schema = "migrator_notx_test"
+	admin := openLivePool(ctx, t, connStr)
+	mustExec(ctx, t, admin, "DROP SCHEMA IF EXISTS "+schema+" CASCADE")
+	mustExec(ctx, t, admin, "CREATE SCHEMA "+schema)
+	t.Cleanup(func() { mustExec(context.Background(), t, admin, "DROP SCHEMA IF EXISTS "+schema+" CASCADE") })
+
+	pool := openLivePool(ctx, t, withSearchPath(connStr, schema))
+	mustExec(ctx, t, pool, "CREATE TABLE t (a INT NOT NULL)")
+	mustExec(ctx, t, pool, "INSERT INTO t (a) VALUES (1), (1)")
+
+	up := func(script string) error {
+		migrator, err := postgres.NewMigrator(pool, fstest.MapFS{
+			"000001_uq_t_a.up.sql": &fstest.MapFile{Data: []byte("-- migrate:no-transaction\n" + script)},
+		})
+		if err != nil {
+			t.Fatalf("new migrator: %v", err)
+		}
+		return migrator.Up(ctx)
+	}
+	version := func() int64 {
+		migrator, _ := postgres.NewMigrator(pool, fstest.MapFS{})
+		v, err := migrator.Version(ctx)
+		if err != nil {
+			t.Fatalf("version: %v", err)
+		}
+		return v
+	}
+
+	// A failing statement (duplicate keys) is not recorded, so it can be retried after a fix.
+	// PostgreSQL leaves the half-built index behind as INVALID.
+	if err := up("CREATE UNIQUE INDEX CONCURRENTLY uq_t_a ON t (a);"); !errors.Is(err, postgres.ErrMigrationFailed) {
+		t.Fatalf("want ErrMigrationFailed, got %v", err)
+	}
+	if v := version(); v != 0 {
+		t.Fatalf("failed no-transaction migration must not be recorded, version = %d", v)
+	}
+
+	// IF NOT EXISTS sees the INVALID leftover and succeeds without building anything; the
+	// migrator must notice and refuse to record it.
+	const idempotent = "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS uq_t_a ON t (a);"
+	if err := up(idempotent); !errors.Is(err, postgres.ErrInvalidIndex) {
+		t.Fatalf("want ErrInvalidIndex, got %v", err)
+	}
+	if v := version(); v != 0 {
+		t.Fatalf("migration that left an invalid index must not be recorded, version = %d", v)
+	}
+
+	// After the data and the leftover are fixed, the same migration applies and is recorded.
+	mustExec(ctx, t, pool, "DELETE FROM t WHERE ctid NOT IN (SELECT min(ctid) FROM t)")
+	mustExec(ctx, t, pool, "DROP INDEX uq_t_a")
+	if err := up(idempotent); err != nil {
+		t.Fatalf("retry after fix: %v", err)
+	}
+	if v := version(); v != 1 {
+		t.Fatalf("version = %d, want 1", v)
+	}
+}
+
+func openLivePool(ctx context.Context, t *testing.T, connStr string) *pgxpool.Pool {
+	t.Helper()
+	pool, err := postgres.NewPool(ctx, connStr, postgres.WithConnectTimeout(3*time.Second), postgres.WithMaxConns(2), postgres.WithMinConns(1))
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	t.Cleanup(pool.Close)
+	return pool
+}
+
+func mustExec(ctx context.Context, t *testing.T, pool *pgxpool.Pool, sql string) {
+	t.Helper()
+	if _, err := pool.Exec(ctx, sql); err != nil {
+		t.Fatalf("exec %q: %v", sql, err)
+	}
+}
+
+func withSearchPath(connStr, schema string) string {
+	sep := "?"
+	if strings.Contains(connStr, "?") {
+		sep = "&"
+	}
+	return connStr + sep + "search_path=" + schema
 }
