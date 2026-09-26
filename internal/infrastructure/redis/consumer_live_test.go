@@ -1992,14 +1992,17 @@ func TestPublisher_Live(t *testing.T) {
 	t.Run("retention_minid", func(t *testing.T) {
 		stream := uniqueTestStream("retention")
 
-		pubNoRetention := infraRedis.NewPublisherFromClient(client)
+		// Old entries get explicit IDs an hour in the past. Stream IDs come from the Redis
+		// clock while the retention cutoff comes from this host's clock; with auto IDs, a
+		// short sleep and a 100 ms window, host/container clock skew (measured at ~0.4 s,
+		// drifting in both directions under Docker Desktop) made the test fail 8 in 30 runs.
+		oldMs := time.Now().Add(-time.Hour).UnixMilli()
 		for i := 0; i < 250; i++ {
-			err := pubNoRetention.Publish(ctx, appOutbox.Event{
-				ID:        fmt.Sprintf("evt-old-%d", i),
-				EventType: stream,
-				Payload:   []byte(`{"old":true}`),
-				CreatedAt: time.Now().UTC(),
-			})
+			err := client.XAdd(ctx, &goredis.XAddArgs{
+				Stream: stream,
+				ID:     fmt.Sprintf("%d-%d", oldMs, i),
+				Values: map[string]any{"event_id": fmt.Sprintf("evt-old-%d", i), "payload": `{"old":true}`},
+			}).Err()
 			require.NoError(t, err)
 		}
 
@@ -2007,9 +2010,7 @@ func TestPublisher_Live(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, int64(250), lenBefore)
 
-		time.Sleep(150 * time.Millisecond)
-
-		pubWithRetention := infraRedis.NewPublisherFromClient(client, infraRedis.WithRetention(100*time.Millisecond))
+		pubWithRetention := infraRedis.NewPublisherFromClient(client, infraRedis.WithRetention(time.Minute))
 		err = pubWithRetention.Publish(ctx, appOutbox.Event{
 			ID:        "evt-new",
 			EventType: stream,
