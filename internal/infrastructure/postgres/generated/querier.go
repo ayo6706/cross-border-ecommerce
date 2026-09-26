@@ -27,7 +27,6 @@ type Querier interface {
 	CopyProductVersions(ctx context.Context, arg []CopyProductVersionsParams) (int64, error)
 	CopyProducts(ctx context.Context, arg []CopyProductsParams) (int64, error)
 	CreateIngestionRun(ctx context.Context, arg CreateIngestionRunParams) (IngestionRun, error)
-	CreateOutboxEvent(ctx context.Context, arg CreateOutboxEventParams) error
 	CreateProductVersion(ctx context.Context, arg CreateProductVersionParams) (CreateProductVersionRow, error)
 	CreateRawRecord(ctx context.Context, arg CreateRawRecordParams) (RawRecord, error)
 	CreateReplayOutboxEvent(ctx context.Context, arg CreateReplayOutboxEventParams) error

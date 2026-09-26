@@ -87,37 +87,6 @@ type CopyOutboxEventsParams struct {
 	Payload       []byte      `json:"payload"`
 }
 
-const createOutboxEvent = `-- name: CreateOutboxEvent :exec
-INSERT INTO outbox_events (
-    id,
-    aggregate_type,
-    aggregate_id,
-    event_type,
-    payload
-) VALUES (
-    $1, $2, $3, $4, $5
-)
-`
-
-type CreateOutboxEventParams struct {
-	ID            pgtype.UUID `json:"id"`
-	AggregateType string      `json:"aggregate_type"`
-	AggregateID   string      `json:"aggregate_id"`
-	EventType     string      `json:"event_type"`
-	Payload       []byte      `json:"payload"`
-}
-
-func (q *Queries) CreateOutboxEvent(ctx context.Context, arg CreateOutboxEventParams) error {
-	_, err := q.db.Exec(ctx, createOutboxEvent,
-		arg.ID,
-		arg.AggregateType,
-		arg.AggregateID,
-		arg.EventType,
-		arg.Payload,
-	)
-	return err
-}
-
 const createReplayOutboxEvent = `-- name: CreateReplayOutboxEvent :exec
 INSERT INTO outbox_events (
     id,

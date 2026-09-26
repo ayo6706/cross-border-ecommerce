@@ -13,7 +13,6 @@ import (
 	appProduct "github.com/ayo6706/cross-border-ecommerce/internal/application/product"
 	domainProduct "github.com/ayo6706/cross-border-ecommerce/internal/domain/product"
 	"github.com/ayo6706/cross-border-ecommerce/internal/infrastructure/postgres/generated"
-	"github.com/ayo6706/cross-border-ecommerce/internal/platform/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 )
@@ -43,48 +42,10 @@ func (r *OutboxRepository) WithTx(tx pgx.Tx) *OutboxRepository {
 	}
 }
 
-func (r *OutboxRepository) CreateEvent(
-	ctx context.Context,
-	aggregateType string,
-	aggregateID string,
-	eventType string,
-	payload []byte,
-) error {
-	if strings.TrimSpace(aggregateType) == "" {
-		return errors.New("aggregate type cannot be empty")
-	}
-	if strings.TrimSpace(aggregateID) == "" {
-		return errors.New("aggregate id cannot be empty")
-	}
-	if strings.TrimSpace(eventType) == "" {
-		return errors.New("event type cannot be empty")
-	}
-	if len(payload) == 0 {
-		return errors.New("outbox event payload cannot be empty")
-	}
-
-	eventID, err := uuid.NewString()
-	if err != nil {
-		return fmt.Errorf("generate outbox event id: %w", err)
-	}
-	eventUUID, err := parseUUID(eventID)
-	if err != nil {
-		return fmt.Errorf("parse outbox event id: %w", err)
-	}
-
-	err = r.queries.CreateOutboxEvent(ctx, generated.CreateOutboxEventParams{
-		ID:            eventUUID,
-		AggregateType: strings.TrimSpace(aggregateType),
-		AggregateID:   strings.TrimSpace(aggregateID),
-		EventType:     strings.TrimSpace(eventType),
-		Payload:       payload,
-	})
-	if err != nil {
-		return fmt.Errorf("create outbox event: %w", err)
-	}
-
-	return nil
-}
+const (
+	AggregateTypeProduct    = "product"
+	EventTypeProductChanged = "product.changed"
+)
 
 // productChangedPayload is the published product.changed contract. Consumers decode this
 // shape, so a field rename is a breaking change.
@@ -122,9 +83,9 @@ func (r *OutboxRepository) CreateProductChangedEvents(ctx context.Context, event
 		}
 		params[i] = generated.CopyOutboxEventsParams{
 			ID:            id,
-			AggregateType: domainProduct.AggregateTypeProduct,
+			AggregateType: AggregateTypeProduct,
 			AggregateID:   string(e.ProductID),
-			EventType:     domainProduct.EventTypeProductChanged,
+			EventType:     EventTypeProductChanged,
 			Payload:       payload,
 		}
 	}

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ayo6706/cross-border-ecommerce/internal/infrastructure/postgres"
+	domainProduct "github.com/ayo6706/cross-border-ecommerce/internal/domain/product"
 	"github.com/ayo6706/cross-border-ecommerce/internal/platform/uuid"
 	"github.com/ayo6706/cross-border-ecommerce/migrations"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -23,6 +24,33 @@ func TestOutboxRepository_ConstructorValidation(t *testing.T) {
 	repo, err := postgres.NewOutboxRepository(nil)
 	assert.Error(t, err)
 	assert.Nil(t, repo)
+}
+
+func createTestOutboxEvent(t *testing.T, ctx context.Context, repo *postgres.OutboxRepository, prodID string) {
+	t.Helper()
+	err := repo.CreateProductChangedEvents(ctx, []domainProduct.ProductChanged{{
+		ProductID:     domainProduct.ID(prodID),
+		VersionID:     "v-1",
+		VersionNumber: 1,
+		Fingerprint:   "fp-1",
+		ChangeType:    domainProduct.ChangeTypeNew,
+	}})
+	require.NoError(t, err)
+}
+
+func createTestOutboxEvents(t *testing.T, ctx context.Context, repo *postgres.OutboxRepository, count int) {
+	t.Helper()
+	events := make([]domainProduct.ProductChanged, count)
+	for i := 0; i < count; i++ {
+		events[i] = domainProduct.ProductChanged{
+			ProductID:     domainProduct.ID(fmt.Sprintf("prod-%d", i)),
+			VersionID:     "v-1",
+			VersionNumber: 1,
+			Fingerprint:   "fp-1",
+			ChangeType:    domainProduct.ChangeTypeNew,
+		}
+	}
+	require.NoError(t, repo.CreateProductChangedEvents(ctx, events))
 }
 
 func setupLiveOutboxDB(t *testing.T) (*pgxpool.Pool, *postgres.OutboxRepository) {
@@ -82,10 +110,8 @@ func TestOutboxStore_Live(t *testing.T) {
 		_, err := pool.Exec(ctx, "TRUNCATE outbox_events CASCADE")
 		require.NoError(t, err)
 
-		err = repo.CreateEvent(ctx, "product", "prod-1", "product.changed", []byte(`{"v":1}`))
-		require.NoError(t, err)
-		err = repo.CreateEvent(ctx, "product", "prod-2", "product.changed", []byte(`{"v":2}`))
-		require.NoError(t, err)
+		createTestOutboxEvent(t, ctx, repo, "prod-1")
+		createTestOutboxEvent(t, ctx, repo, "prod-2")
 
 		tokenA, err := uuid.NewString()
 		require.NoError(t, err)
@@ -118,10 +144,7 @@ func TestOutboxStore_Live(t *testing.T) {
 		require.NoError(t, err)
 
 		totalRows := 500
-		for i := 0; i < totalRows; i++ {
-			err = repo.CreateEvent(ctx, "product", fmt.Sprintf("prod-%d", i), "product.changed", []byte(`{"v":1}`))
-			require.NoError(t, err)
-		}
+		createTestOutboxEvents(t, ctx, repo, totalRows)
 
 		concurrency := 4
 		var wg sync.WaitGroup
@@ -171,8 +194,7 @@ func TestOutboxStore_Live(t *testing.T) {
 		_, err := pool.Exec(ctx, "TRUNCATE outbox_events CASCADE")
 		require.NoError(t, err)
 
-		err = repo.CreateEvent(ctx, "product", "prod-lease", "product.changed", []byte(`{"v":1}`))
-		require.NoError(t, err)
+		createTestOutboxEvent(t, ctx, repo, "prod-lease")
 
 		tokenA, err := uuid.NewString()
 		require.NoError(t, err)
@@ -209,8 +231,7 @@ func TestOutboxStore_Live(t *testing.T) {
 		_, err := pool.Exec(ctx, "TRUNCATE outbox_events CASCADE")
 		require.NoError(t, err)
 
-		err = repo.CreateEvent(ctx, "product", "prod-poison", "product.changed", []byte(`{"v":1}`))
-		require.NoError(t, err)
+		createTestOutboxEvent(t, ctx, repo, "prod-poison")
 
 		maxAttempts := 3
 

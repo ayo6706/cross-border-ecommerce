@@ -39,7 +39,7 @@ type IncomingRecord struct {
 }
 
 // DecideTransition evaluates an incoming normalized record against the existing product snapshot.
-// It enforces out-of-order protection, version mismatch upgrades, and identity resolution.
+// It enforces out-of-order protection and change detection across fields.
 func DecideTransition(current *Snapshot, in IncomingRecord) TransitionResult {
 	if current == nil {
 		return TransitionResult{

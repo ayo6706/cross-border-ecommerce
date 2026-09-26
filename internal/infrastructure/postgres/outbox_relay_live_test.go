@@ -198,7 +198,7 @@ func TestOutboxRelay_Live(t *testing.T) {
 
 		// Check outbox row created in DB
 		var eventID, status string
-		err = pool.QueryRow(ctx, "SELECT id, status FROM outbox_events WHERE event_type = $1", domainProduct.EventTypeProductChanged).Scan(&eventID, &status)
+		err = pool.QueryRow(ctx, "SELECT id, status FROM outbox_events WHERE event_type = $1", postgres.EventTypeProductChanged).Scan(&eventID, &status)
 		require.NoError(t, err)
 		assert.Equal(t, "PENDING", status)
 
@@ -228,12 +228,12 @@ func TestOutboxRelay_Live(t *testing.T) {
 		assert.NotNil(t, processedAt)
 
 		// Check Redis Stream product.changed
-		entries, err := rClient.XRange(ctx, domainProduct.EventTypeProductChanged, "-", "+").Result()
+		entries, err := rClient.XRange(ctx, postgres.EventTypeProductChanged, "-", "+").Result()
 		require.NoError(t, err)
 		require.Len(t, entries, 1)
 		assert.Equal(t, eventID, entries[0].Values["event_id"])
-		assert.Equal(t, domainProduct.AggregateTypeProduct, entries[0].Values["aggregate_type"])
-		assert.Equal(t, domainProduct.EventTypeProductChanged, entries[0].Values["event_type"])
+		assert.Equal(t, postgres.AggregateTypeProduct, entries[0].Values["aggregate_type"])
+		assert.Equal(t, postgres.EventTypeProductChanged, entries[0].Values["event_type"])
 	})
 
 	// E2: Redis unreachable (127.0.0.1:1): rows PENDING, retry_count 0, claims released
@@ -241,7 +241,13 @@ func TestOutboxRelay_Live(t *testing.T) {
 		_, err := pool.Exec(ctx, "TRUNCATE outbox_events CASCADE")
 		require.NoError(t, err)
 
-		err = outboxRepo.CreateEvent(ctx, "product", "prod-bdown", "product.changed", []byte(`{"v":1}`))
+		err = outboxRepo.CreateProductChangedEvents(ctx, []domainProduct.ProductChanged{{
+			ProductID:     domainProduct.ID("prod-bdown"),
+			VersionID:     "v-1",
+			VersionNumber: 1,
+			Fingerprint:   "fp-1",
+			ChangeType:    domainProduct.ChangeTypeNew,
+		}})
 		require.NoError(t, err)
 
 		deadClient := goredis.NewClient(&goredis.Options{
@@ -286,7 +292,13 @@ func TestOutboxRelay_Live(t *testing.T) {
 		require.NoError(t, err)
 		_ = rClient.FlushDB(ctx).Err()
 
-		err = outboxRepo.CreateEvent(ctx, "product", "prod-crash", "product.changed", []byte(`{"v":1}`))
+		err = outboxRepo.CreateProductChangedEvents(ctx, []domainProduct.ProductChanged{{
+			ProductID:     domainProduct.ID("prod-crash"),
+			VersionID:     "v-1",
+			VersionNumber: 1,
+			Fingerprint:   "fp-1",
+			ChangeType:    domainProduct.ChangeTypeNew,
+		}})
 		require.NoError(t, err)
 
 		brokenStore := &failMarkStore{OutboxRepository: *outboxRepo}
