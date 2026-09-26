@@ -249,7 +249,6 @@ func (p *planIDs) required(field, s string) pgtype.UUID {
 	return u
 }
 
-// optional maps a nil or blank ID to SQL NULL.
 func (p *planIDs) optional(field string, s *string) pgtype.UUID {
 	if s == nil || strings.TrimSpace(*s) == "" {
 		return pgtype.UUID{}
@@ -257,7 +256,6 @@ func (p *planIDs) optional(field string, s *string) pgtype.UUID {
 	return p.required(field, *s)
 }
 
-// sortedByKey returns a sorted copy, leaving the caller's plan untouched.
 func sortedByKey[T any](rows []T, key func(T) string) []T {
 	sorted := slices.Clone(rows)
 	slices.SortFunc(sorted, func(a, b T) int { return strings.Compare(key(a), key(b)) })
