@@ -79,6 +79,15 @@ func (r *ProductRepository) Save(ctx context.Context, p *product.Product) error 
 		versionUUID = parsed
 	}
 
+	createdAt, err := requiredTimestamptz(p.CreatedAt)
+	if err != nil {
+		return fmt.Errorf("product created_at: %w", err)
+	}
+	updatedAt, err := requiredTimestamptz(p.UpdatedAt)
+	if err != nil {
+		return fmt.Errorf("product updated_at: %w", err)
+	}
+
 	saved, err := r.queries.UpsertProduct(ctx, generated.UpsertProductParams{
 		ID:                 idUUID,
 		CanonicalName:      p.CanonicalName,
@@ -88,8 +97,8 @@ func (r *ProductRepository) Save(ctx context.Context, p *product.Product) error 
 		Status:             string(p.Status),
 		CurrentVersionID:   versionUUID,
 		CurrentFingerprint: p.CurrentFingerprint,
-		CreatedAt:          requiredTimestamptz(p.CreatedAt),
-		UpdatedAt:          requiredTimestamptz(p.UpdatedAt),
+		CreatedAt:          createdAt,
+		UpdatedAt:          updatedAt,
 	})
 	if err != nil {
 		return mapPostgresError(fmt.Errorf("upsert product: %w", err))

@@ -1,6 +1,7 @@
 package postgres
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"time"
@@ -63,12 +64,14 @@ func toTimestamptz(t *time.Time) pgtype.Timestamptz {
 	return pgtype.Timestamptz{Time: t.UTC(), Valid: true}
 }
 
-// requiredTimestamptz converts a time.Time to a valid UTC pgtype.Timestamptz.
-func requiredTimestamptz(t time.Time) pgtype.Timestamptz {
+var ErrZeroTimestamp = errors.New("timestamp cannot be zero")
+
+// requiredTimestamptz converts a time.Time to a valid UTC pgtype.Timestamptz or returns an error on zero time.
+func requiredTimestamptz(t time.Time) (pgtype.Timestamptz, error) {
 	if t.IsZero() {
-		return pgtype.Timestamptz{Time: time.Now().UTC(), Valid: true}
+		return pgtype.Timestamptz{}, ErrZeroTimestamp
 	}
-	return pgtype.Timestamptz{Time: t.UTC(), Valid: true}
+	return pgtype.Timestamptz{Time: t.UTC(), Valid: true}, nil
 }
 
 // fromTimestamptz converts a pgtype.Timestamptz to *time.Time in UTC.

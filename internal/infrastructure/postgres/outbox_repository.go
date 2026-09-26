@@ -243,7 +243,7 @@ func (r *OutboxRepository) RecordFailure(
 		Valid:        true,
 	}
 
-	_, err = r.queries.RecordOutboxPublishFailure(ctx, generated.RecordOutboxPublishFailureParams{
+	affected, err := r.queries.RecordOutboxPublishFailure(ctx, generated.RecordOutboxPublishFailureParams{
 		LastError: pgtype.Text{
 			String: cause,
 			Valid:  cause != "",
@@ -255,6 +255,9 @@ func (r *OutboxRepository) RecordFailure(
 	})
 	if err != nil {
 		return fmt.Errorf("record outbox publish failure: %w", err)
+	}
+	if affected == 0 {
+		return appOutbox.ErrClaimLost
 	}
 
 	return nil

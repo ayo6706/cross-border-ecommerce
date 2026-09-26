@@ -17,6 +17,7 @@ const (
 var (
 	ErrLeaseLost             = errors.New("run processing lease lost")
 	ErrRunProcessingNotFound = errors.New("run processing state not found")
+	ErrLeaseHeld             = errors.New("active run processing lease held by another worker")
 )
 
 type RunProcessing struct {

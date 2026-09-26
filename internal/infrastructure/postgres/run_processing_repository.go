@@ -85,7 +85,13 @@ func (r *RunProcessingRepository) ClaimSpecific(ctx context.Context, runID, clai
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, fmt.Errorf("cannot claim run %s: run not found or active lease held", runID)
+			if _, getErr := r.queries.GetRunProcessingByID(ctx, rUUID); getErr != nil {
+				if errors.Is(getErr, pgx.ErrNoRows) {
+					return nil, ingestion.ErrRunProcessingNotFound
+				}
+				return nil, fmt.Errorf("probe run processing %s: %w", runID, getErr)
+			}
+			return nil, ingestion.ErrLeaseHeld
 		}
 		return nil, fmt.Errorf("claim specific run processing: %w", err)
 	}
@@ -124,7 +130,6 @@ func (r *RunProcessingRepository) EnsureExists(ctx context.Context, runID string
 	return toDomainRunProcessing(&row), nil
 }
 
-//nolint:funlen // legacy baseline 2026-09-26: fix in ENG-016
 func (r *RunProcessingRepository) UpdateProgress(
 	ctx context.Context,
 	runID string,
@@ -133,26 +138,48 @@ func (r *RunProcessingRepository) UpdateProgress(
 	cursorID *string,
 	leaseDuration time.Duration,
 ) (*ingestion.RunProcessing, error) {
+	params, err := parseUpdateProgressParams(runID, claimToken, seen, newRecs, changed, unchanged, failed, cursorID, leaseDuration)
+	if err != nil {
+		return nil, err
+	}
+
+	row, err := r.queries.UpdateRunProcessingProgress(ctx, params)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ingestion.ErrLeaseLost
+		}
+		return nil, fmt.Errorf("update run processing progress: %w", err)
+	}
+
+	return toDomainRunProcessing(&row), nil
+}
+
+func parseUpdateProgressParams(
+	runID, claimToken string,
+	seen, newRecs, changed, unchanged, failed int,
+	cursorID *string,
+	leaseDuration time.Duration,
+) (generated.UpdateRunProcessingProgressParams, error) {
 	rUUID, err := parseUUID(runID)
 	if err != nil {
-		return nil, fmt.Errorf("%w: invalid run id: %w", ingestion.ErrInvalidRunID, err)
+		return generated.UpdateRunProcessingProgressParams{}, fmt.Errorf("%w: invalid run id: %w", ingestion.ErrInvalidRunID, err)
 	}
 	tokenUUID, err := parseUUID(claimToken)
 	if err != nil {
-		return nil, fmt.Errorf("invalid claim token uuid: %w", err)
+		return generated.UpdateRunProcessingProgressParams{}, fmt.Errorf("invalid claim token uuid: %w", err)
 	}
 
 	var cUUID pgtype.UUID
 	if cursorID != nil && strings.TrimSpace(*cursorID) != "" {
 		cUUID, err = parseUUID(*cursorID)
 		if err != nil {
-			return nil, fmt.Errorf("invalid cursor uuid: %w", err)
+			return generated.UpdateRunProcessingProgressParams{}, fmt.Errorf("invalid cursor uuid: %w", err)
 		}
 	}
 
 	counters, err := toRunCounters(seen, newRecs, changed, unchanged, failed)
 	if err != nil {
-		return nil, err
+		return generated.UpdateRunProcessingProgressParams{}, err
 	}
 
 	leaseInterval := pgtype.Interval{
@@ -160,7 +187,7 @@ func (r *RunProcessingRepository) UpdateProgress(
 		Valid:        true,
 	}
 
-	row, err := r.queries.UpdateRunProcessingProgress(ctx, generated.UpdateRunProcessingProgressParams{
+	return generated.UpdateRunProcessingProgressParams{
 		RunID:         rUUID,
 		ClaimToken:    tokenUUID,
 		CursorID:      cUUID,
@@ -170,15 +197,7 @@ func (r *RunProcessingRepository) UpdateProgress(
 		UnchangedInc:  counters.unchanged,
 		FailedInc:     counters.failed,
 		LeaseDuration: leaseInterval,
-	})
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, ingestion.ErrLeaseLost
-		}
-		return nil, fmt.Errorf("update run processing progress: %w", err)
-	}
-
-	return toDomainRunProcessing(&row), nil
+	}, nil
 }
 
 func (r *RunProcessingRepository) Release(ctx context.Context, runID, claimToken string) error {
@@ -244,7 +263,16 @@ func (r *RunProcessingRepository) Fail(ctx context.Context, runID, claimToken, e
 		ClaimToken:   tokenUUID,
 		ErrorSummary: strings.TrimSpace(errSummary),
 	})
-	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			if _, getErr := r.queries.GetRunProcessingByID(ctx, rUUID); getErr != nil {
+				if errors.Is(getErr, pgx.ErrNoRows) {
+					return ingestion.ErrRunProcessingNotFound
+				}
+				return fmt.Errorf("probe run processing %s: %w", runID, getErr)
+			}
+			return ingestion.ErrLeaseLost
+		}
 		return fmt.Errorf("fail run processing: %w", err)
 	}
 	return nil
@@ -259,7 +287,13 @@ func (r *RunProcessingRepository) ResetFromStart(ctx context.Context, runID stri
 	row, err := r.queries.ResetRunProcessingFromStart(ctx, rUUID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, fmt.Errorf("cannot reset run %s: active lease held by running worker", runID)
+			if _, getErr := r.queries.GetRunProcessingByID(ctx, rUUID); getErr != nil {
+				if errors.Is(getErr, pgx.ErrNoRows) {
+					return nil, ingestion.ErrRunProcessingNotFound
+				}
+				return nil, fmt.Errorf("probe run processing %s: %w", runID, getErr)
+			}
+			return nil, ingestion.ErrLeaseHeld
 		}
 		return nil, fmt.Errorf("reset run processing: %w", err)
 	}

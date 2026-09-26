@@ -17,6 +17,7 @@ var (
 	ErrNilStore      = errors.New("store cannot be nil")
 	ErrNilPublisher  = errors.New("publisher cannot be nil")
 	ErrNilLogger     = errors.New("logger cannot be nil")
+	ErrClaimLost     = errors.New("outbox event claim lost")
 )
 
 type Event struct {

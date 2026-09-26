@@ -123,6 +123,15 @@ func (r *SourceRepository) Save(ctx context.Context, s *source.Source) error {
 		return fmt.Errorf("%w: %v", source.ErrInvalidRateLimit, err)
 	}
 
+	createdAt, err := requiredTimestamptz(s.CreatedAt)
+	if err != nil {
+		return fmt.Errorf("source created_at: %w", err)
+	}
+	updatedAt, err := requiredTimestamptz(s.UpdatedAt)
+	if err != nil {
+		return fmt.Errorf("source updated_at: %w", err)
+	}
+
 	saved, err := r.queries.UpsertSource(ctx, generated.UpsertSourceParams{
 		ID:        string(s.ID),
 		Name:      s.Name,
@@ -130,8 +139,8 @@ func (r *SourceRepository) Save(ctx context.Context, s *source.Source) error {
 		Config:    configBytes,
 		RateLimit: rl32,
 		Enabled:   s.Enabled,
-		CreatedAt: requiredTimestamptz(s.CreatedAt),
-		UpdatedAt: requiredTimestamptz(s.UpdatedAt),
+		CreatedAt: createdAt,
+		UpdatedAt: updatedAt,
 	})
 	if err != nil {
 		return fmt.Errorf("upsert source: %w", err)

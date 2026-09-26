@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/ayo6706/cross-border-ecommerce/internal/domain/product"
 	"github.com/ayo6706/cross-border-ecommerce/internal/infrastructure/postgres/generated"
@@ -81,7 +82,7 @@ func (r *ProductRepository) updateProductVersions(ctx context.Context, updates [
 		arg.Descriptions = append(arg.Descriptions, u.Description)
 		arg.Brands = append(arg.Brands, u.Brand)
 		arg.OriginCountries = append(arg.OriginCountries, u.OriginCountry)
-		arg.UpdatedAts = append(arg.UpdatedAts, requiredTimestamptz(u.UpdatedAt))
+		arg.UpdatedAts = append(arg.UpdatedAts, ids.requiredTime("updated_at", u.UpdatedAt))
 	}
 	if ids.err != nil {
 		return ids.err
@@ -103,7 +104,7 @@ func (r *ProductRepository) updateProductFingerprints(ctx context.Context, updat
 		arg.Ids = append(arg.Ids, ids.required("product id", string(u.ProductID)))
 		arg.ExpectedVersionIds = append(arg.ExpectedVersionIds, ids.optional("expected_version_id", u.ExpectedVersionID))
 		arg.CurrentFingerprints = append(arg.CurrentFingerprints, u.CurrentFingerprint)
-		arg.UpdatedAts = append(arg.UpdatedAts, requiredTimestamptz(u.UpdatedAt))
+		arg.UpdatedAts = append(arg.UpdatedAts, ids.requiredTime("updated_at", u.UpdatedAt))
 	}
 	if ids.err != nil {
 		return ids.err
@@ -123,17 +124,18 @@ func (r *ProductRepository) updateSourcesOnChanged(ctx context.Context, updates 
 	var ids planIDs
 	for _, u := range sortedByKey(updates, func(u product.SourceChangedUpdate) string { return u.ProductSourceID }) {
 		arg.Ids = append(arg.Ids, ids.required("product source id", u.ProductSourceID))
-		arg.LastChangedAts = append(arg.LastChangedAts, requiredTimestamptz(u.LastChangedAt))
+		arg.LastChangedAts = append(arg.LastChangedAts, ids.requiredTime("last_changed_at", u.LastChangedAt))
 		arg.SourceUpdatedAts = append(arg.SourceUpdatedAts, toTimestamptz(u.SourceUpdatedAt))
-		arg.ReceivedAts = append(arg.ReceivedAts, requiredTimestamptz(u.ReceivedAt))
+		arg.ReceivedAts = append(arg.ReceivedAts, ids.requiredTime("received_at", u.ReceivedAt))
 	}
 	if ids.err != nil {
 		return ids.err
 	}
-	if _, err := r.queries.BatchUpdateProductSourceOnChanged(ctx, arg); err != nil {
+	updated, err := r.queries.BatchUpdateProductSourceOnChanged(ctx, arg)
+	if err != nil {
 		return mapPostgresError(fmt.Errorf("batch update product source on changed: %w", err))
 	}
-	return nil
+	return requireAllUpdated(int(updated), len(updates))
 }
 
 // updateSourceWatermarks ignores the affected-row count on purpose: the query skips
@@ -147,7 +149,7 @@ func (r *ProductRepository) updateSourceWatermarks(ctx context.Context, updates 
 	for _, u := range sortedByKey(updates, func(u product.SourceWatermarkUpdate) string { return u.ProductSourceID }) {
 		arg.Ids = append(arg.Ids, ids.required("product source id", u.ProductSourceID))
 		arg.SourceUpdatedAts = append(arg.SourceUpdatedAts, toTimestamptz(u.SourceUpdatedAt))
-		arg.ReceivedAts = append(arg.ReceivedAts, requiredTimestamptz(u.ReceivedAt))
+		arg.ReceivedAts = append(arg.ReceivedAts, ids.requiredTime("received_at", u.ReceivedAt))
 	}
 	if ids.err != nil {
 		return ids.err
@@ -169,8 +171,8 @@ func copyProductParams(p *product.Product) (generated.CopyProductsParams, error)
 		OriginCountry:      p.OriginCountry,
 		Status:             string(p.Status),
 		CurrentFingerprint: p.CurrentFingerprint,
-		CreatedAt:          requiredTimestamptz(p.CreatedAt),
-		UpdatedAt:          requiredTimestamptz(p.UpdatedAt),
+		CreatedAt:          ids.requiredTime("created_at", p.CreatedAt),
+		UpdatedAt:          ids.requiredTime("updated_at", p.UpdatedAt),
 	}
 	return params, ids.err
 }
@@ -182,10 +184,10 @@ func copyProductSourceParams(ps *product.ProductSource) (generated.CopyProductSo
 		ProductID:           ids.required("product id", string(ps.ProductID)),
 		SourceID:            ps.SourceID,
 		ExternalProductID:   ps.ExternalProductID,
-		FirstSeenAt:         requiredTimestamptz(ps.FirstSeenAt),
-		LastChangedAt:       requiredTimestamptz(ps.LastChangedAt),
+		FirstSeenAt:         ids.requiredTime("first_seen_at", ps.FirstSeenAt),
+		LastChangedAt:       ids.requiredTime("last_changed_at", ps.LastChangedAt),
 		LastSourceUpdatedAt: toTimestamptz(ps.LastSourceUpdatedAt),
-		LastReceivedAt:      requiredTimestamptz(ps.LastReceivedAt),
+		LastReceivedAt:      ids.requiredTime("last_received_at", ps.LastReceivedAt),
 	}
 	return params, ids.err
 }
@@ -211,7 +213,7 @@ func copyProductVersionParams(pv *product.ProductVersion) (generated.CopyProduct
 		Brand:          pv.Brand,
 		OriginCountry:  pv.OriginCountry,
 		Attributes:     attributes,
-		CreatedAt:      requiredTimestamptz(pv.CreatedAt),
+		CreatedAt:      ids.requiredTime("created_at", pv.CreatedAt),
 	}
 	return params, ids.err
 }
@@ -231,13 +233,25 @@ func copyProductChangeParams(pc *product.ProductChange) (generated.CopyProductCh
 		RawRecordID:    ids.optional("raw record id", pc.RawRecordID),
 		ChangeType:     string(pc.ChangeType),
 		ChangedFields:  changedFields,
-		DetectedAt:     requiredTimestamptz(pc.DetectedAt),
+		DetectedAt:     ids.requiredTime("detected_at", pc.DetectedAt),
 	}
 	return params, ids.err
 }
 
 type planIDs struct {
 	err error
+}
+
+func (p *planIDs) requiredTime(field string, t time.Time) pgtype.Timestamptz {
+	if p.err != nil {
+		return pgtype.Timestamptz{}
+	}
+	tz, err := requiredTimestamptz(t)
+	if err != nil {
+		p.err = fmt.Errorf("%w: invalid %s: %w", product.ErrInvalidProductState, field, err)
+		return pgtype.Timestamptz{}
+	}
+	return tz
 }
 
 func (p *planIDs) required(field, s string) pgtype.UUID {

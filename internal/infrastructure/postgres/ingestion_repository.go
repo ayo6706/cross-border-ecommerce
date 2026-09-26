@@ -50,6 +50,15 @@ func (r *IngestionRepository) CreateRun(ctx context.Context, run *ingestion.Inge
 		return fmt.Errorf("%w: %w", ingestion.ErrInvalidRunState, err)
 	}
 
+	createdAt, err := requiredTimestamptz(run.CreatedAt)
+	if err != nil {
+		return fmt.Errorf("run created_at: %w", err)
+	}
+	updatedAt, err := requiredTimestamptz(run.UpdatedAt)
+	if err != nil {
+		return fmt.Errorf("run updated_at: %w", err)
+	}
+
 	row, err := r.queries.CreateIngestionRun(ctx, generated.CreateIngestionRunParams{
 		ID:               uuidVal,
 		SourceID:         string(run.SourceID),
@@ -63,8 +72,8 @@ func (r *IngestionRepository) CreateRun(ctx context.Context, run *ingestion.Inge
 		ErrorSummary:     run.ErrorSummary,
 		StartedAt:        toTimestamptz(run.StartedAt),
 		CompletedAt:      toTimestamptz(run.CompletedAt),
-		CreatedAt:        requiredTimestamptz(run.CreatedAt),
-		UpdatedAt:        requiredTimestamptz(run.UpdatedAt),
+		CreatedAt:        createdAt,
+		UpdatedAt:        updatedAt,
 	})
 	if err != nil {
 		var pgErr *pgconn.PgError
@@ -103,8 +112,9 @@ func (r *IngestionRepository) UpdateProgress(ctx context.Context, id string, met
 		return ingestion.ErrRunNotFound
 	}
 
-	if updatedAt.IsZero() {
-		updatedAt = time.Now().UTC()
+	updatedAtTz, err := requiredTimestamptz(updatedAt)
+	if err != nil {
+		return fmt.Errorf("run updated_at: %w", err)
 	}
 
 	counters, err := toRunCounters(metrics.Seen, metrics.New, metrics.Changed, metrics.Unchanged, metrics.Failed)
@@ -119,7 +129,7 @@ func (r *IngestionRepository) UpdateProgress(ctx context.Context, id string, met
 		UnchangedIncrement: counters.unchanged,
 		FailedIncrement:    counters.failed,
 		Checkpoint:         checkpoint,
-		UpdatedAt:          requiredTimestamptz(updatedAt),
+		UpdatedAt:          updatedAtTz,
 		ID:                 uuidVal,
 	})
 	if err != nil {
@@ -146,12 +156,17 @@ func (r *IngestionRepository) UpdateStatus(ctx context.Context, run *ingestion.I
 		return ingestion.ErrRunNotFound
 	}
 
+	updatedAt, err := requiredTimestamptz(run.UpdatedAt)
+	if err != nil {
+		return fmt.Errorf("run updated_at: %w", err)
+	}
+
 	_, err = r.queries.UpdateIngestionRunStatus(ctx, generated.UpdateIngestionRunStatusParams{
 		Status:         string(run.Status),
 		ErrorSummary:   run.ErrorSummary,
 		Checkpoint:     run.Checkpoint,
 		CompletedAt:    toTimestamptz(run.CompletedAt),
-		UpdatedAt:      requiredTimestamptz(run.UpdatedAt),
+		UpdatedAt:      updatedAt,
 		ID:             uuidVal,
 		ExpectedStatus: string(from),
 	})

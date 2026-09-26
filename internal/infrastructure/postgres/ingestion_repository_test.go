@@ -85,12 +85,15 @@ func newTestSource(t *testing.T, pool *pgxpool.Pool) source.ID {
 		_ = sourceRepo.Delete(cleanupCtx, testSourceID)
 	})
 
+	now := time.Now().UTC()
 	err = sourceRepo.Save(context.Background(), &source.Source{
 		ID:                 testSourceID,
 		Name:               "Ingestion Run Test Source",
 		Type:               source.TypeAPI,
 		RateLimitPerSecond: 100,
 		Enabled:            true,
+		CreatedAt:          now,
+		UpdatedAt:          now,
 	})
 	if err != nil {
 		t.Fatalf("failed to seed test source: %v", err)
