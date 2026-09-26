@@ -12,6 +12,13 @@ sql:
       - "migrations/000008_outbox_relay.up.sql"
       - "migrations/000009_idempotency_keys.up.sql"
       - "migrations/000010_dlq_messages_and_outbox_replay.up.sql"
+      - "migrations/000011_drop_idx_outbox_aggregate.up.sql"
+      - "migrations/000012_drop_idx_product_versions_product_id.up.sql"
+      - "migrations/000013_drop_idx_product_versions_fingerprint.up.sql"
+      - "migrations/000014_drop_idx_product_changes_run_id.up.sql"
+      - "migrations/000015_drop_idx_idempotency_keys_expires_at.up.sql"
+      - "migrations/000016_drop_idx_dlq_messages_status.up.sql"
+      - "migrations/000017_drop_idx_dlq_messages_lookup.up.sql"
     queries: "internal/infrastructure/postgres/queries"
     gen:
       go:
