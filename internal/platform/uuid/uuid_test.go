@@ -58,3 +58,29 @@ func TestFormat(t *testing.T) {
 		t.Errorf("expected %s, got %s", expected, formatted)
 	}
 }
+
+func TestValidate(t *testing.T) {
+	t.Parallel()
+
+	s, err := uuid.NewString()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if err := uuid.Validate(s); err != nil {
+		t.Errorf("expected generated uuid to be valid, got %v", err)
+	}
+
+	invalidCases := []string{
+		"",
+		"not-a-uuid",
+		"00000000-0000-0000-0000-00000000000",   // 35 chars
+		"00000000-0000-0000-0000-0000000000000",  // 37 chars
+		"00000000_0000-0000-0000-000000000000",   // bad separator
+		"00000000-0000-0000-0000-00000000000z",   // non-hex char
+	}
+	for _, tc := range invalidCases {
+		if err := uuid.Validate(tc); err == nil {
+			t.Errorf("expected error for %q, got nil", tc)
+		}
+	}
+}

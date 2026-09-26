@@ -153,7 +153,7 @@ func (s *memoryStore) GetKey(ctx context.Context, scope, key string) (idempotenc
 
 	rec, exists := s.records[s.key(scope, key)]
 	if !exists {
-		return idempotency.Record{}, errors.New("not found")
+		return idempotency.Record{}, idempotency.ErrKeyNotFound
 	}
 
 	return idempotency.Record{

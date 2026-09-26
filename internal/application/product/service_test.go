@@ -60,7 +60,7 @@ func (m *mockProductRepository) FindSnapshotsByIdentities(ctx context.Context, i
 
 func (m *mockProductRepository) ApplyBatch(ctx context.Context, plan *product.BatchPlan) error {
 	if plan == nil {
-		return nil
+		return errors.New("batch plan cannot be nil")
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
