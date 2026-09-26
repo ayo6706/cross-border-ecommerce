@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"time"
 )
@@ -34,7 +35,7 @@ func writeNotReady(w http.ResponseWriter) {
 	})
 }
 
-func HandleReadiness(db Pinger) http.HandlerFunc {
+func HandleReadiness(db Pinger, logger *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 
@@ -47,6 +48,9 @@ func HandleReadiness(db Pinger) http.HandlerFunc {
 		defer cancel()
 
 		if err := db.Ping(pingCtx); err != nil {
+			if logger != nil {
+				logger.ErrorContext(r.Context(), "readiness database ping failed", slog.Any("error", err))
+			}
 			writeNotReady(w)
 			return
 		}

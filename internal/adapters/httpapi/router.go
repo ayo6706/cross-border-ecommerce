@@ -23,7 +23,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /health/live", HandleLiveness())
-	mux.HandleFunc("GET /health/ready", HandleReadiness(cfg.DB))
+	mux.HandleFunc("GET /health/ready", HandleReadiness(cfg.DB, cfg.Logger))
 	mux.HandleFunc("POST /v1/dlq/{id}/replay", HandleDLQReplay(cfg.DLQReplayer, cfg.Logger))
 
 	var handler http.Handler = mux
