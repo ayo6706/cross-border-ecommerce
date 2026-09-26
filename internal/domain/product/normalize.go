@@ -8,9 +8,15 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/ayo6706/cross-border-ecommerce/internal/platform/jsonpath"
 	"golang.org/x/text/unicode/norm"
+)
+
+const (
+	MaxCanonicalNameChars = 512
+	MaxBrandChars         = 255
 )
 
 // Normalize converts a raw record's JSON byte payload into a NormalizedProduct
@@ -65,6 +71,9 @@ func Normalize(payload []byte, m FieldMapping) (NormalizedProduct, error) {
 	if canonicalName == "" {
 		return NormalizedProduct{}, ErrMissingCanonicalField
 	}
+	if utf8.RuneCountInString(canonicalName) > MaxCanonicalNameChars {
+		return NormalizedProduct{}, fmt.Errorf("%w: canonical name exceeds %d characters", ErrMalformedRecord, MaxCanonicalNameChars)
+	}
 
 	var description string
 	if m.DescriptionPath != "" {
@@ -85,6 +94,9 @@ func Normalize(payload []byte, m FieldMapping) (NormalizedProduct, error) {
 				return NormalizedProduct{}, fmt.Errorf("%w: brand path: %w", ErrMalformedRecord, err)
 			}
 			brand = collapseWhitespace(str)
+			if utf8.RuneCountInString(brand) > MaxBrandChars {
+				return NormalizedProduct{}, fmt.Errorf("%w: brand exceeds %d characters", ErrMalformedRecord, MaxBrandChars)
+			}
 		}
 	}
 
@@ -166,7 +178,6 @@ func collapseWhitespace(s string) string {
 		nfc = norm.NFC.String(s)
 	}
 
-	// Check if whitespace normalization or zero-width stripping is needed
 	needsCollapse := false
 	if nfc[0] <= ' ' || nfc[len(nfc)-1] <= ' ' {
 		needsCollapse = true
@@ -193,7 +204,6 @@ func collapseWhitespace(s string) string {
 	inWhitespace := false
 
 	for _, r := range nfc {
-		// Strip zero-width runes
 		if r == '\u200B' || r == '\uFEFF' || r == '\u200C' || r == '\u200D' {
 			continue
 		}
