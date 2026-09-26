@@ -174,6 +174,7 @@ func Load() (*Config, error) {
 	return LoadFromLookup(os.Getenv)
 }
 
+//nolint:funlen,gocognit // legacy baseline 2026-09-26: fix in ENG-018
 func LoadFromLookup(lookup func(string) string) (*Config, error) {
 	if lookup == nil {
 		lookup = os.Getenv
@@ -393,6 +394,7 @@ func LoadFromLookup(lookup func(string) string) (*Config, error) {
 	return cfg, nil
 }
 
+//nolint:funlen // legacy baseline 2026-09-26: fix in ENG-018
 func (c *Config) Validate() error {
 	portNum, err := strconv.Atoi(c.Server.Port)
 	if err != nil || portNum < 1 || portNum > 65535 {

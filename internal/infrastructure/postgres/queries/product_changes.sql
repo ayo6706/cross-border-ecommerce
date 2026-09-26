@@ -1,4 +1,11 @@
--- name: CreateProductChange :one
+-- name: ListProductChangesByProductID :many
+SELECT *
+FROM product_changes
+WHERE product_id = $1
+ORDER BY detected_at DESC, id DESC
+LIMIT $2;
+
+-- name: CopyProductChanges :copyfrom
 INSERT INTO product_changes (
     id,
     product_id,
@@ -11,11 +18,4 @@ INSERT INTO product_changes (
     detected_at
 ) VALUES (
     $1, $2, $3, $4, $5, $6, $7, $8, $9
-) RETURNING *;
-
--- name: ListProductChangesByProductID :many
-SELECT *
-FROM product_changes
-WHERE product_id = $1
-ORDER BY detected_at DESC, id DESC
-LIMIT $2;
+);

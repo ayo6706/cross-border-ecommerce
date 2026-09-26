@@ -94,7 +94,7 @@ func (r *IngestionRepository) FindRunByID(ctx context.Context, id string) (*inge
 		return nil, fmt.Errorf("get ingestion run by id: %w", err)
 	}
 
-	return toDomainIngestionRun(row), nil
+	return toDomainIngestionRun(&row), nil
 }
 
 func (r *IngestionRepository) UpdateProgress(ctx context.Context, id string, metrics ingestion.BatchMetrics, checkpoint string, updatedAt time.Time) error {
@@ -183,8 +183,8 @@ func (r *IngestionRepository) ListRunsBySource(ctx context.Context, sourceID sou
 	}
 
 	result := make([]*ingestion.IngestionRun, 0, len(rows))
-	for _, row := range rows {
-		result = append(result, toDomainIngestionRun(row))
+	for i := range rows {
+		result = append(result, toDomainIngestionRun(&rows[i]))
 	}
 
 	return result, nil
@@ -203,10 +203,10 @@ func (r *IngestionRepository) FindLatestRunBySource(ctx context.Context, sourceI
 		return nil, fmt.Errorf("get latest ingestion run: %w", err)
 	}
 
-	return toDomainIngestionRun(row), nil
+	return toDomainIngestionRun(&row), nil
 }
 
-func toDomainIngestionRun(row generated.IngestionRun) *ingestion.IngestionRun {
+func toDomainIngestionRun(row *generated.IngestionRun) *ingestion.IngestionRun {
 	return &ingestion.IngestionRun{
 		ID:               uuidToString(row.ID),
 		SourceID:         source.ID(row.SourceID),

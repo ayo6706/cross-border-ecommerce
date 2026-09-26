@@ -48,7 +48,7 @@ func (r *SourceRepository) FindByID(ctx context.Context, id source.ID) (*source.
 		return nil, fmt.Errorf("find source by id: %w", err)
 	}
 
-	return toDomainSource(row)
+	return toDomainSource(&row)
 }
 
 func (r *SourceRepository) FindActive(ctx context.Context) ([]*source.Source, error) {
@@ -58,8 +58,8 @@ func (r *SourceRepository) FindActive(ctx context.Context) ([]*source.Source, er
 	}
 
 	result := make([]*source.Source, 0, len(rows))
-	for _, row := range rows {
-		src, err := toDomainSource(row)
+	for i := range rows {
+		src, err := toDomainSource(&rows[i])
 		if err != nil {
 			return nil, fmt.Errorf("convert source model: %w", err)
 		}
@@ -76,8 +76,8 @@ func (r *SourceRepository) List(ctx context.Context) ([]*source.Source, error) {
 	}
 
 	result := make([]*source.Source, 0, len(rows))
-	for _, row := range rows {
-		src, err := toDomainSource(row)
+	for i := range rows {
+		src, err := toDomainSource(&rows[i])
 		if err != nil {
 			return nil, fmt.Errorf("convert source model: %w", err)
 		}
@@ -142,7 +142,7 @@ func (r *SourceRepository) Save(ctx context.Context, s *source.Source) error {
 	return nil
 }
 
-func toDomainSource(row generated.Source) (*source.Source, error) {
+func toDomainSource(row *generated.Source) (*source.Source, error) {
 	config := make(map[string]any)
 	if len(row.Config) > 0 {
 		if err := json.Unmarshal(row.Config, &config); err != nil {

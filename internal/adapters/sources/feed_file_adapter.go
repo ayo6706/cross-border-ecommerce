@@ -61,6 +61,7 @@ type feedBatch struct {
 	next    string
 }
 
+//nolint:funlen // legacy baseline 2026-09-26: fix in ENG-049
 func NewFeedFileAdapter(cfg FeedFileConfig) (*FeedFileAdapter, error) {
 	if strings.TrimSpace(string(cfg.SourceID)) == "" {
 		return nil, ingestion.ErrInvalidSourceID
@@ -153,7 +154,7 @@ func (a *FeedFileAdapter) Fetch(ctx context.Context, req ingestion.FetchRequest)
 	if err != nil {
 		return ingestion.FetchResult{}, fmt.Errorf("%w: %w", ingestion.ErrAdapterUnavailable, err)
 	}
-	defer rc.Close()
+	defer rc.Close() //nolint:errcheck // read-only source: a close error cannot invalidate the decoded batch
 
 	stream := a.streamNDJSON
 	if a.format == FeedFormatCSV {
@@ -182,6 +183,7 @@ var _ ingestion.ProbingAdapter = (*FeedFileAdapter)(nil)
 
 var errLineTooLong = errors.New("line exceeds maximum length")
 
+//nolint:funlen,gocognit // legacy baseline 2026-09-26: fix in ENG-049
 func (a *FeedFileAdapter) streamNDJSON(ctx context.Context, rc io.ReadCloser, startOffset int64, limit int) (feedBatch, error) {
 	if seeker, ok := rc.(io.Seeker); ok {
 		if _, err := seeker.Seek(startOffset, io.SeekStart); err != nil {
@@ -296,13 +298,13 @@ func (a *FeedFileAdapter) streamNDJSON(ctx context.Context, rc io.ReadCloser, st
 	return feedBatch{records: records, failed: failed, next: nextCheckpoint}, nil
 }
 
-func readBoundedLine(r *bufio.Reader, maxBytes int) ([]byte, int, error) {
+func readBoundedLine(r *bufio.Reader, maxBytes int) (line []byte, n int, err error) {
 	var buf bytes.Buffer
 	totalConsumed := 0
 	oversized := false
 
 	for {
-		chunk, err := r.ReadSlice('\n')
+		chunk, readErr := r.ReadSlice('\n')
 		chunkLen := len(chunk)
 		totalConsumed += chunkLen
 
@@ -314,14 +316,14 @@ func readBoundedLine(r *bufio.Reader, maxBytes int) ([]byte, int, error) {
 			}
 		}
 
-		if err != nil {
-			if errors.Is(err, bufio.ErrBufferFull) {
+		if readErr != nil {
+			if errors.Is(readErr, bufio.ErrBufferFull) {
 				continue
 			}
 			if oversized {
 				return nil, totalConsumed, errLineTooLong
 			}
-			return buf.Bytes(), totalConsumed, err
+			return buf.Bytes(), totalConsumed, readErr
 		}
 
 		if oversized {
@@ -331,6 +333,7 @@ func readBoundedLine(r *bufio.Reader, maxBytes int) ([]byte, int, error) {
 	}
 }
 
+//nolint:funlen,gocognit // legacy baseline 2026-09-26: fix in ENG-049
 func (a *FeedFileAdapter) streamCSV(ctx context.Context, rc io.ReadCloser, startOffset int64, limit int) (feedBatch, error) {
 	var header []string
 	var headerBytesLen int64

@@ -25,6 +25,15 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
 
     steps:
       - name: Checkout Code
@@ -36,33 +45,19 @@ jobs:
           go-version-file: 'go.mod'
           cache: true
 
-      - name: Verify Formatting (gofmt)
-        run: |
-          diffs=$(gofmt -l .)
-          if [ -n "$diffs" ]; then
-            echo "Unformatted files found:"
-            echo "$diffs"
-            exit 1
-          fi
-
-      - name: Run go vet
-        run: go vet ./...
-
-      - name: Install Staticcheck
-        run: go install honnef.co/go/tools/cmd/staticcheck@latest
-
-      - name: Run Staticcheck
-        run: staticcheck ./...
-
       - name: Install sqlc
         run: go install github.com/sqlc-dev/sqlc/cmd/sqlc@v1.30.0
 
-      - name: Verify sqlc diff
-        run: |
-          sqlc generate
-          git diff --exit-code
+      - name: Install golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version-file: .golangci-lint-version # verify.sh reads the same file and fails on any other version
+          install-only: true # verify.sh runs it, so lint has one invocation
 
-      - name: Run Tests (with race detector & live PostgreSQL)
+      # The same gate script as `make verify`; it fails on any skipped test, so both services are required.
+      - name: Verify gates
         env:
           TEST_DATABASE_URL: postgres://postgres:postgrespassword@localhost:5432/crossborder_test?sslmode=disable
-        run: go test -v -race -count=1 -p 1 ./... # -p 1: packages share one test DB
+          TEST_REDIS_URL: redis://localhost:6379/15
+          VERIFY_RACE: "1"
+        run: ./scripts/verify.sh

@@ -13,31 +13,31 @@ const MaxRetryAttempts = 100
 
 var ErrInvalidRetryPolicy = errors.New("invalid retry policy")
 
-// Exponential returns min(max, base * 2^attempt).
-func Exponential(attempt int, base, max time.Duration) time.Duration {
+// Exponential returns min(maxBackoff, base * 2^attempt).
+func Exponential(attempt int, base, maxBackoff time.Duration) time.Duration {
 	if base <= 0 {
 		return 0
 	}
-	if max <= 0 {
+	if maxBackoff <= 0 {
 		return 0
 	}
 	if attempt < 0 {
 		attempt = 0
 	}
 	if attempt >= 62 {
-		return max
+		return maxBackoff
 	}
 	multiplier := time.Duration(1) << attempt
 	res := base * multiplier
-	if res <= 0 || res > max || res/multiplier != base {
-		return max
+	if res <= 0 || res > maxBackoff || res/multiplier != base {
+		return maxBackoff
 	}
 	return res
 }
 
-// FullJitter returns a random delay in [0, min(max, base * 2^attempt)].
-func FullJitter(attempt int, base, max time.Duration) time.Duration {
-	ceiling := Exponential(attempt, base, max)
+// FullJitter returns a random delay in [0, min(maxBackoff, base * 2^attempt)].
+func FullJitter(attempt int, base, maxBackoff time.Duration) time.Duration {
+	ceiling := Exponential(attempt, base, maxBackoff)
 	if ceiling <= 0 {
 		return 0
 	}

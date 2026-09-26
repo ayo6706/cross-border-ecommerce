@@ -45,6 +45,7 @@ func EncodeEvent(e appOutbox.Event) map[string]any {
 	return m
 }
 
+//nolint:funlen // legacy baseline 2026-09-26: fix in ENG-025
 func DecodeMessage(stream string, raw goredis.XMessage) (appMessaging.Message, error) {
 	if raw.Values == nil {
 		return appMessaging.Message{}, fmt.Errorf("%w: missing message values for stream ID '%s'", ErrCorruptMessage, raw.ID)

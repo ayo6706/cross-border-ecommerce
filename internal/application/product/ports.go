@@ -8,7 +8,7 @@ import (
 )
 
 type OutboxWriter interface {
-	CreateEvent(ctx context.Context, aggregateType string, aggregateID string, eventType string, payload []byte) error
+	CreateProductChangedEvents(ctx context.Context, events []domainProduct.ProductChanged) error
 }
 
 type TxRepos struct {

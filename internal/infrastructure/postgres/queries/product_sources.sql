@@ -1,4 +1,4 @@
--- name: GetProductWithSourceByIdentity :one
+-- name: GetProductWithSourceByIdentities :many
 SELECT 
     ps.id AS product_source_id,
     ps.product_id,
@@ -30,9 +30,13 @@ SELECT
 FROM product_sources ps
 JOIN products p ON ps.product_id = p.id
 LEFT JOIN product_versions pv ON p.current_version_id = pv.id
-WHERE ps.source_id = $1 AND ps.external_product_id = $2;
+WHERE (ps.source_id, ps.external_product_id) IN (
+    SELECT 
+        unnest(@source_ids::varchar[]) AS source_id,
+        unnest(@external_product_ids::varchar[]) AS external_product_id
+);
 
--- name: CreateProductSource :one
+-- name: CopyProductSources :copyfrom
 INSERT INTO product_sources (
     id,
     product_id,
@@ -44,21 +48,32 @@ INSERT INTO product_sources (
     last_received_at
 ) VALUES (
     $1, $2, $3, $4, $5, $6, $7, $8
-) RETURNING *;
+);
 
--- name: UpdateProductSourceWatermark :one
-UPDATE product_sources
-SET last_source_updated_at = GREATEST(last_source_updated_at, @source_updated_at::timestamptz),
-    last_received_at       = GREATEST(last_received_at, @received_at::timestamptz)
-WHERE id = @id::uuid
-  AND (last_source_updated_at IS DISTINCT FROM GREATEST(last_source_updated_at, @source_updated_at::timestamptz)
-       OR last_received_at < @received_at::timestamptz)
-RETURNING *;
+-- name: BatchUpdateProductSourceWatermarks :execrows
+UPDATE product_sources ps
+SET last_source_updated_at = GREATEST(ps.last_source_updated_at, u.source_updated_at),
+    last_received_at       = GREATEST(ps.last_received_at, u.received_at)
+FROM (
+    SELECT
+        unnest(@ids::uuid[]) AS id,
+        unnest(@source_updated_ats::timestamptz[]) AS source_updated_at,
+        unnest(@received_ats::timestamptz[]) AS received_at
+) u
+WHERE ps.id = u.id
+  AND (ps.last_source_updated_at IS DISTINCT FROM GREATEST(ps.last_source_updated_at, u.source_updated_at)
+       OR ps.last_received_at < u.received_at);
 
--- name: UpdateProductSourceOnChanged :one
-UPDATE product_sources
-SET last_changed_at        = @last_changed_at::timestamptz,
-    last_source_updated_at = GREATEST(last_source_updated_at, @source_updated_at::timestamptz),
-    last_received_at       = GREATEST(last_received_at, @received_at::timestamptz)
-WHERE id = @id::uuid
-RETURNING *;
+-- name: BatchUpdateProductSourceOnChanged :execrows
+UPDATE product_sources ps
+SET last_changed_at        = u.last_changed_at,
+    last_source_updated_at = GREATEST(ps.last_source_updated_at, u.source_updated_at),
+    last_received_at       = GREATEST(ps.last_received_at, u.received_at)
+FROM (
+    SELECT
+        unnest(@ids::uuid[]) AS id,
+        unnest(@last_changed_ats::timestamptz[]) AS last_changed_at,
+        unnest(@source_updated_ats::timestamptz[]) AS source_updated_at,
+        unnest(@received_ats::timestamptz[]) AS received_at
+) u
+WHERE ps.id = u.id;

@@ -79,6 +79,14 @@ func (q *Queries) ClaimOutboxBatch(ctx context.Context, arg ClaimOutboxBatchPara
 	return items, nil
 }
 
+type CopyOutboxEventsParams struct {
+	ID            pgtype.UUID `json:"id"`
+	AggregateType string      `json:"aggregate_type"`
+	AggregateID   string      `json:"aggregate_id"`
+	EventType     string      `json:"event_type"`
+	Payload       []byte      `json:"payload"`
+}
+
 const createOutboxEvent = `-- name: CreateOutboxEvent :exec
 INSERT INTO outbox_events (
     id,

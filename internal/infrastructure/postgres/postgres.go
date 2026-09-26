@@ -38,15 +38,15 @@ type config struct {
 
 type Option func(*config)
 
-func WithMaxConns(max int32) Option {
+func WithMaxConns(maxConns int32) Option {
 	return func(c *config) {
-		c.maxConns = max
+		c.maxConns = maxConns
 	}
 }
 
-func WithMinConns(min int32) Option {
+func WithMinConns(minConns int32) Option {
 	return func(c *config) {
-		c.minConns = min
+		c.minConns = minConns
 	}
 }
 
@@ -74,6 +74,7 @@ func WithConnectTimeout(d time.Duration) Option {
 	}
 }
 
+//nolint:funlen // legacy baseline 2026-09-26: fix in ENG-018
 func NewPool(ctx context.Context, connString string, opts ...Option) (*pgxpool.Pool, error) {
 	if ctx == nil {
 		return nil, ErrNilContext

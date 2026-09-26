@@ -26,6 +26,7 @@ func NewPathRecordExtractor(recordsPath string) *PathRecordExtractor {
 	}
 }
 
+//nolint:funlen,gocognit // legacy baseline 2026-09-26: fix in ENG-049
 func (e *PathRecordExtractor) ExtractRecords(payload []byte) ([][]byte, error) {
 	trimmed := bytes.TrimSpace(payload)
 	if len(trimmed) == 0 {

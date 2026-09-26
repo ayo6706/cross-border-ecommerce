@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -9,6 +10,8 @@ import (
 
 	appDLQ "github.com/ayo6706/cross-border-ecommerce/internal/application/dlq"
 	appOutbox "github.com/ayo6706/cross-border-ecommerce/internal/application/outbox"
+	appProduct "github.com/ayo6706/cross-border-ecommerce/internal/application/product"
+	domainProduct "github.com/ayo6706/cross-border-ecommerce/internal/domain/product"
 	"github.com/ayo6706/cross-border-ecommerce/internal/infrastructure/postgres/generated"
 	"github.com/ayo6706/cross-border-ecommerce/internal/platform/uuid"
 	"github.com/jackc/pgx/v5"
@@ -16,8 +19,9 @@ import (
 )
 
 var (
-	_ appOutbox.Store     = (*OutboxRepository)(nil)
-	_ appDLQ.OutboxWriter = (*OutboxRepository)(nil)
+	_ appOutbox.Store         = (*OutboxRepository)(nil)
+	_ appDLQ.OutboxWriter     = (*OutboxRepository)(nil)
+	_ appProduct.OutboxWriter = (*OutboxRepository)(nil)
 )
 
 type OutboxRepository struct {
@@ -82,6 +86,54 @@ func (r *OutboxRepository) CreateEvent(
 	return nil
 }
 
+// productChangedPayload is the published product.changed contract. Consumers decode this
+// shape, so a field rename is a breaking change.
+type productChangedPayload struct {
+	ProductID     string   `json:"product_id"`
+	VersionID     string   `json:"version_id"`
+	VersionNumber int      `json:"version_number"`
+	Fingerprint   string   `json:"fingerprint"`
+	ChangeType    string   `json:"change_type"`
+	ChangedFields []string `json:"changed_fields"`
+}
+
+// CreateProductChangedEvents writes one outbox row per event in a single COPY, inside the
+// caller's transaction, so the events commit or roll back with the versions they describe.
+func (r *OutboxRepository) CreateProductChangedEvents(ctx context.Context, events []domainProduct.ProductChanged) error {
+	if len(events) == 0 {
+		return nil
+	}
+	params := make([]generated.CopyOutboxEventsParams, len(events))
+	for i, e := range events {
+		id, err := newUUID()
+		if err != nil {
+			return fmt.Errorf("generate outbox event id: %w", err)
+		}
+		payload, err := json.Marshal(productChangedPayload{
+			ProductID:     string(e.ProductID),
+			VersionID:     e.VersionID,
+			VersionNumber: e.VersionNumber,
+			Fingerprint:   e.Fingerprint,
+			ChangeType:    string(e.ChangeType),
+			ChangedFields: e.ChangedFields,
+		})
+		if err != nil {
+			return fmt.Errorf("marshal product.changed payload: %w", err)
+		}
+		params[i] = generated.CopyOutboxEventsParams{
+			ID:            id,
+			AggregateType: domainProduct.AggregateTypeProduct,
+			AggregateID:   string(e.ProductID),
+			EventType:     domainProduct.EventTypeProductChanged,
+			Payload:       payload,
+		}
+	}
+	if _, err := r.queries.CopyOutboxEvents(ctx, params); err != nil {
+		return fmt.Errorf("copy outbox events: %w", err)
+	}
+	return nil
+}
+
 // CreateReplayEvent writes an outbox event that re-publishes a dead-lettered message to one consumer
 // group under its original event_id.
 func (r *OutboxRepository) CreateReplayEvent(ctx context.Context, e appDLQ.ReplayEvent) error {
@@ -117,6 +169,7 @@ func (r *OutboxRepository) CreateReplayEvent(ctx context.Context, e appDLQ.Repla
 	return nil
 }
 
+//nolint:funlen // legacy baseline 2026-09-26: fix in ENG-051
 func (r *OutboxRepository) ClaimBatch(
 	ctx context.Context,
 	claimToken string,
@@ -153,7 +206,8 @@ func (r *OutboxRepository) ClaimBatch(
 	}
 
 	events := make([]appOutbox.Event, len(rows))
-	for i, row := range rows {
+	for i := range rows {
+		row := &rows[i]
 		events[i] = appOutbox.Event{
 			ID:            uuidToString(row.ID),
 			EventID:       row.EventID,

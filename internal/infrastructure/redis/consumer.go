@@ -71,6 +71,7 @@ func GenerateConsumerName(prefix string) (string, error) {
 	return fmt.Sprintf("%s-%s", prefix, u), nil
 }
 
+//nolint:funlen,gocognit // legacy baseline 2026-09-26: fix in ENG-025
 func (c ConsumerConfig) Validate() error {
 	if strings.TrimSpace(c.Stream) == "" {
 		return fmt.Errorf("%w: stream name cannot be empty", ErrInvalidConsumerConfig)
@@ -223,23 +224,24 @@ func (c *Consumer) checkLagLoss(ctx context.Context) {
 	}
 	trimmedCount := streamInfo.EntriesAdded - streamInfo.Length
 	for _, g := range groups {
-		if g.Name == c.cfg.Group {
-			var lost int64
-			if g.EntriesRead >= 0 && trimmedCount > g.EntriesRead {
-				lost = trimmedCount - g.EntriesRead
-			}
-			if lost > c.lastReportedLost {
-				c.logger.Error("consumer group lag exceeded stream retention; unread entries permanently lost",
-					slog.String("stream", c.cfg.Stream),
-					slog.String("group", c.cfg.Group),
-					slog.Int64("lost_entries", lost),
-					slog.Int64("trimmed_entries", trimmedCount),
-					slog.Int64("entries_read", g.EntriesRead),
-				)
-			}
-			c.lastReportedLost = lost
-			break
+		if g.Name != c.cfg.Group {
+			continue
 		}
+		var lost int64
+		if g.EntriesRead >= 0 && trimmedCount > g.EntriesRead {
+			lost = trimmedCount - g.EntriesRead
+		}
+		if lost > c.lastReportedLost {
+			c.logger.Error("consumer group lag exceeded stream retention; unread entries permanently lost",
+				slog.String("stream", c.cfg.Stream),
+				slog.String("group", c.cfg.Group),
+				slog.Int64("lost_entries", lost),
+				slog.Int64("trimmed_entries", trimmedCount),
+				slog.Int64("entries_read", g.EntriesRead),
+			)
+		}
+		c.lastReportedLost = lost
+		break
 	}
 }
 
@@ -377,6 +379,7 @@ func (c *Consumer) deadLetterAndAck(ctx context.Context, rawMsg goredis.XMessage
 	c.ack(ctx, rawMsg.ID, eventID)
 }
 
+//nolint:funlen // legacy baseline 2026-09-26: fix in ENG-025
 func (c *Consumer) processMessage(runCtx, taskCtx context.Context, handler appMessaging.Handler, rawMsg goredis.XMessage) {
 	msg, err := DecodeMessage(c.cfg.Stream, rawMsg)
 	if err != nil {
@@ -568,6 +571,7 @@ func (c *Consumer) ensureGroupWithBackoff(ctx context.Context) error {
 	}
 }
 
+//nolint:funlen,gocognit // legacy baseline 2026-09-26: fix in ENG-025
 func (c *Consumer) Run(ctx context.Context, handler appMessaging.Handler) (returnErr error) {
 	if handler == nil {
 		return ErrNilHandler

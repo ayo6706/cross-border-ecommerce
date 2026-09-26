@@ -20,6 +20,7 @@ func main() {
 	}
 }
 
+//nolint:funlen // legacy baseline 2026-09-26: fix in ENG-018
 func run() error {
 	var (
 		dbURLFlag string

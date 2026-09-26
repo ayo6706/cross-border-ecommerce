@@ -1,68 +1,73 @@
+version: "2"
+
+# Pinned version: .golangci-lint-version (verify.sh checks it; CI installs it).
+# staticcheck runs once, from go.mod (`go tool staticcheck`), so its golangci linters are off here.
+# Layering is owned by internal/architecture_test.go, not depguard.
+
 run:
   timeout: 5m
   modules-download-mode: readonly
 
-linters-settings:
-  govet:
-    enable-all: true
-    disable:
-      - fieldalignment
-      - shadow
-  gocyclo:
-    min-complexity: 15
-  gocritic:
-    enabled-tags:
-      - diagnostic
-      - style
-      - performance
-      - experimental
-  revive:
-    rules:
-      - name: exported
-        disabled: false
-      - name: var-naming
-        disabled: false
-      - name: package-comments
-        disabled: true
-  depguard:
-    rules:
-      domain_purity:
-        list-mode: lax
-        files:
-          - "**/internal/domain/**"
-        deny:
-          - pkg: "database/sql"
-            desc: "Domain layer must not depend on database/sql"
-          - pkg: "github.com/jackc/pgx"
-            desc: "Domain layer must not depend on pgx"
-          - pkg: "net/http"
-            desc: "Domain layer must not depend on net/http"
-          - pkg: "github.com/ayo6706/cross-border-ecommerce/internal/infrastructure"
-            desc: "Domain layer must not depend on infrastructure"
-          - pkg: "github.com/ayo6706/cross-border-ecommerce/internal/adapters"
-            desc: "Domain layer must not depend on adapters"
+output:
+  show-stats: false # verify.sh treats any output as a finding
 
 linters:
-  disable-all: true
+  default: none
   enable:
     - errcheck
-    - gosimple
     - govet
     - ineffassign
-    - staticcheck
-    - unused
     - gocritic
-    - gocyclo
     - revive
     - misspell
-    - depguard
+    - funlen
+    - gocognit
+    - dupl
+    - nolintlint
+  settings:
+    govet:
+      enable-all: true
+      disable:
+        - fieldalignment
+        - shadow
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - style
+        - performance
+        - experimental
+      disabled-checks:
+        # Params/config/event structs are passed by value on purpose (immutable inputs, no nil path);
+        # the 80–288 byte copies are not a measured cost. Revisit with a benchmark, not a threshold.
+        - hugeParam
+    revive:
+      rules: # `exported` stays off: comments explain decisions, not restate the identifier
+        - name: var-naming
+    # clean-code-standards.md §3. Functions over these limits on 2026-09-26 carry a per-function
+    # nolint marker naming the issue that fixes them (format: ENG-057, decision 7).
+    funlen:
+      lines: 50
+      statements: 40
+    gocognit:
+      min-complexity: 20
+    dupl:
+      threshold: 100
+    nolintlint: # a suppression that no longer suppresses anything fails, so the legacy list only shrinks
+      require-explanation: true
+      require-specific: true
+      allow-unused: false
+  exclusions:
+    generated: lax
+    rules:
+      - path: _test\.go
+        linters:
+          - errcheck
+          - gocritic
+          - funlen
+          - gocognit
+          - dupl
 
-issues:
-  exclude-dirs:
-    - vendor
-  exclude-rules:
-    - path: _test\.go
-      linters:
-        - gocyclo
-        - errcheck
-        - gocritic
+issues: # report every finding; the defaults hide all but one per line and cap repeats
+  max-issues-per-linter: 0
+  max-same-issues: 0
+  uniq-by-line: false

@@ -27,6 +27,7 @@ type ProductChange struct {
 	DetectedAt     time.Time
 }
 
+//nolint:funlen // legacy baseline 2026-09-26: fix in ENG-016
 func NewProductChange(
 	id string,
 	productID ID,

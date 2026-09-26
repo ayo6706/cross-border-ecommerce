@@ -3,6 +3,7 @@ package product_test
 import (
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/ayo6706/cross-border-ecommerce/internal/domain/product"
@@ -55,10 +56,6 @@ func TestNormalize_MissingRequiredField(t *testing.T) {
 }
 
 func TestNormalize_Malformed(t *testing.T) {
-	mapping := product.FieldMapping{
-		NamePath: "title",
-	}
-
 	tests := []struct {
 		name    string
 		payload []byte
@@ -70,11 +67,17 @@ func TestNormalize_Malformed(t *testing.T) {
 		{"TruncatedJSON", []byte(`{"title": "Wid`)},
 		{"EmptyBytes", []byte(``)},
 		{"BooleanName", []byte(`{"title": true}`)},
+		{"TitleExceeds512", []byte(`{"title": "` + strings.Repeat("a", 513) + `"}`)},
+		{"BrandExceeds255", []byte(`{"title": "Valid", "brand": "` + strings.Repeat("b", 256) + `"}`)},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := product.Normalize(tt.payload, mapping)
+			mappingWithBrand := product.FieldMapping{
+				NamePath:  "title",
+				BrandPath: "brand",
+			}
+			_, err := product.Normalize(tt.payload, mappingWithBrand)
 			if err == nil {
 				t.Fatalf("expected error for %s, got nil", tt.name)
 			}
@@ -247,5 +250,28 @@ func TestNormalize_WhitespaceAndControlCharacters(t *testing.T) {
 				t.Errorf("Description = %q, want %q", p.Description, tt.wantDesc)
 			}
 		})
+	}
+}
+
+func TestNormalize_ColumnLimitsCountCharacters(t *testing.T) {
+	mapping := product.FieldMapping{NamePath: "title", BrandPath: "brand"}
+
+	atLimit := []byte(`{"title": "` + strings.Repeat("日", product.MaxCanonicalNameChars) +
+		`", "brand": "` + strings.Repeat("é", product.MaxBrandChars) + `"}`)
+	got, err := product.Normalize(atLimit, mapping)
+	if err != nil {
+		t.Fatalf("multibyte values at the column limit must be accepted: %v", err)
+	}
+	if n := len([]rune(got.CanonicalName)); n != product.MaxCanonicalNameChars {
+		t.Fatalf("canonical name length = %d runes, want %d", n, product.MaxCanonicalNameChars)
+	}
+
+	overName := []byte(`{"title": "` + strings.Repeat("日", product.MaxCanonicalNameChars+1) + `"}`)
+	if _, err := product.Normalize(overName, mapping); !errors.Is(err, product.ErrMalformedRecord) {
+		t.Fatalf("name over the limit: got %v, want ErrMalformedRecord", err)
+	}
+	overBrand := []byte(`{"title": "ok", "brand": "` + strings.Repeat("é", product.MaxBrandChars+1) + `"}`)
+	if _, err := product.Normalize(overBrand, mapping); !errors.Is(err, product.ErrMalformedRecord) {
+		t.Fatalf("brand over the limit: got %v, want ErrMalformedRecord", err)
 	}
 }

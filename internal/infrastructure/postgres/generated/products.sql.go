@@ -11,6 +11,149 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const batchGuardedUpdateProductFingerprintOnly = `-- name: BatchGuardedUpdateProductFingerprintOnly :many
+UPDATE products p
+SET current_fingerprint = u.current_fingerprint,
+    updated_at = u.updated_at
+FROM (
+    SELECT
+        unnest($1::uuid[]) AS id,
+        unnest($2::varchar[]) AS current_fingerprint,
+        unnest($3::timestamptz[]) AS updated_at,
+        unnest($4::uuid[]) AS expected_version_id
+) u
+WHERE p.id = u.id
+  AND p.current_version_id IS NOT DISTINCT FROM u.expected_version_id
+RETURNING p.id
+`
+
+type BatchGuardedUpdateProductFingerprintOnlyParams struct {
+	Ids                 []pgtype.UUID        `json:"ids"`
+	CurrentFingerprints []string             `json:"current_fingerprints"`
+	UpdatedAts          []pgtype.Timestamptz `json:"updated_ats"`
+	ExpectedVersionIds  []pgtype.UUID        `json:"expected_version_ids"`
+}
+
+func (q *Queries) BatchGuardedUpdateProductFingerprintOnly(ctx context.Context, arg BatchGuardedUpdateProductFingerprintOnlyParams) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, batchGuardedUpdateProductFingerprintOnly,
+		arg.Ids,
+		arg.CurrentFingerprints,
+		arg.UpdatedAts,
+		arg.ExpectedVersionIds,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []pgtype.UUID{}
+	for rows.Next() {
+		var id pgtype.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const batchGuardedUpdateProductVersion = `-- name: BatchGuardedUpdateProductVersion :many
+UPDATE products p
+SET current_version_id = u.to_version_id,
+    current_fingerprint = u.current_fingerprint,
+    canonical_name = u.canonical_name,
+    description = u.description,
+    brand = u.brand,
+    origin_country = u.origin_country,
+    updated_at = u.updated_at
+FROM (
+    SELECT
+        unnest($1::uuid[]) AS id,
+        unnest($2::uuid[]) AS to_version_id,
+        unnest($3::varchar[]) AS current_fingerprint,
+        unnest($4::varchar[]) AS canonical_name,
+        unnest($5::text[]) AS description,
+        unnest($6::varchar[]) AS brand,
+        unnest($7::varchar[]) AS origin_country,
+        unnest($8::timestamptz[]) AS updated_at,
+        unnest($9::uuid[]) AS expected_version_id
+) u
+WHERE p.id = u.id
+  AND p.current_version_id IS NOT DISTINCT FROM u.expected_version_id
+RETURNING p.id
+`
+
+type BatchGuardedUpdateProductVersionParams struct {
+	Ids                 []pgtype.UUID        `json:"ids"`
+	ToVersionIds        []pgtype.UUID        `json:"to_version_ids"`
+	CurrentFingerprints []string             `json:"current_fingerprints"`
+	CanonicalNames      []string             `json:"canonical_names"`
+	Descriptions        []string             `json:"descriptions"`
+	Brands              []string             `json:"brands"`
+	OriginCountries     []string             `json:"origin_countries"`
+	UpdatedAts          []pgtype.Timestamptz `json:"updated_ats"`
+	ExpectedVersionIds  []pgtype.UUID        `json:"expected_version_ids"`
+}
+
+func (q *Queries) BatchGuardedUpdateProductVersion(ctx context.Context, arg BatchGuardedUpdateProductVersionParams) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, batchGuardedUpdateProductVersion,
+		arg.Ids,
+		arg.ToVersionIds,
+		arg.CurrentFingerprints,
+		arg.CanonicalNames,
+		arg.Descriptions,
+		arg.Brands,
+		arg.OriginCountries,
+		arg.UpdatedAts,
+		arg.ExpectedVersionIds,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []pgtype.UUID{}
+	for rows.Next() {
+		var id pgtype.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+type CopyProductVersionsParams struct {
+	ID             pgtype.UUID        `json:"id"`
+	ProductID      pgtype.UUID        `json:"product_id"`
+	VersionNumber  int32              `json:"version_number"`
+	Fingerprint    string             `json:"fingerprint"`
+	CanonicalName  string             `json:"canonical_name"`
+	Description    string             `json:"description"`
+	Brand          string             `json:"brand"`
+	OriginCountry  string             `json:"origin_country"`
+	Attributes     []byte             `json:"attributes"`
+	IngestionRunID pgtype.UUID        `json:"ingestion_run_id"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+}
+
+type CopyProductsParams struct {
+	ID                 pgtype.UUID        `json:"id"`
+	CanonicalName      string             `json:"canonical_name"`
+	Description        string             `json:"description"`
+	Brand              string             `json:"brand"`
+	OriginCountry      string             `json:"origin_country"`
+	Status             string             `json:"status"`
+	CurrentVersionID   pgtype.UUID        `json:"current_version_id"`
+	CurrentFingerprint string             `json:"current_fingerprint"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
+}
+
 const createProductVersion = `-- name: CreateProductVersion :one
 INSERT INTO product_versions (
     id,
@@ -94,70 +237,6 @@ func (q *Queries) CreateProductVersion(ctx context.Context, arg CreateProductVer
 	return i, err
 }
 
-const createProductVersionWithRun = `-- name: CreateProductVersionWithRun :one
-INSERT INTO product_versions (
-    id,
-    product_id,
-    version_number,
-    fingerprint,
-    canonical_name,
-    description,
-    brand,
-    origin_country,
-    attributes,
-    ingestion_run_id,
-    created_at
-) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11
-)
-RETURNING id, product_id, version_number, fingerprint, canonical_name, description, brand, origin_country, attributes, created_at, ingestion_run_id
-`
-
-type CreateProductVersionWithRunParams struct {
-	ID             pgtype.UUID        `json:"id"`
-	ProductID      pgtype.UUID        `json:"product_id"`
-	VersionNumber  int32              `json:"version_number"`
-	Fingerprint    string             `json:"fingerprint"`
-	CanonicalName  string             `json:"canonical_name"`
-	Description    string             `json:"description"`
-	Brand          string             `json:"brand"`
-	OriginCountry  string             `json:"origin_country"`
-	Attributes     []byte             `json:"attributes"`
-	IngestionRunID pgtype.UUID        `json:"ingestion_run_id"`
-	CreatedAt      pgtype.Timestamptz `json:"created_at"`
-}
-
-func (q *Queries) CreateProductVersionWithRun(ctx context.Context, arg CreateProductVersionWithRunParams) (ProductVersion, error) {
-	row := q.db.QueryRow(ctx, createProductVersionWithRun,
-		arg.ID,
-		arg.ProductID,
-		arg.VersionNumber,
-		arg.Fingerprint,
-		arg.CanonicalName,
-		arg.Description,
-		arg.Brand,
-		arg.OriginCountry,
-		arg.Attributes,
-		arg.IngestionRunID,
-		arg.CreatedAt,
-	)
-	var i ProductVersion
-	err := row.Scan(
-		&i.ID,
-		&i.ProductID,
-		&i.VersionNumber,
-		&i.Fingerprint,
-		&i.CanonicalName,
-		&i.Description,
-		&i.Brand,
-		&i.OriginCountry,
-		&i.Attributes,
-		&i.CreatedAt,
-		&i.IngestionRunID,
-	)
-	return i, err
-}
-
 const deleteProduct = `-- name: DeleteProduct :exec
 DELETE FROM products
 WHERE id = $1
@@ -235,99 +314,6 @@ WHERE id = $1
 
 func (q *Queries) GetProductByID(ctx context.Context, id pgtype.UUID) (Product, error) {
 	row := q.db.QueryRow(ctx, getProductByID, id)
-	var i Product
-	err := row.Scan(
-		&i.ID,
-		&i.CanonicalName,
-		&i.Description,
-		&i.Brand,
-		&i.OriginCountry,
-		&i.Status,
-		&i.CurrentVersionID,
-		&i.CurrentFingerprint,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-	)
-	return i, err
-}
-
-const guardedUpdateProductFingerprintOnly = `-- name: GuardedUpdateProductFingerprintOnly :one
-UPDATE products
-SET current_fingerprint = $1::varchar,
-    updated_at = $2::timestamptz
-WHERE id = $3::uuid
-  AND current_version_id IS NOT DISTINCT FROM $4::uuid
-RETURNING id, canonical_name, description, brand, origin_country, status, current_version_id, current_fingerprint, created_at, updated_at
-`
-
-type GuardedUpdateProductFingerprintOnlyParams struct {
-	CurrentFingerprint string             `json:"current_fingerprint"`
-	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
-	ID                 pgtype.UUID        `json:"id"`
-	ExpectedVersionID  pgtype.UUID        `json:"expected_version_id"`
-}
-
-func (q *Queries) GuardedUpdateProductFingerprintOnly(ctx context.Context, arg GuardedUpdateProductFingerprintOnlyParams) (Product, error) {
-	row := q.db.QueryRow(ctx, guardedUpdateProductFingerprintOnly,
-		arg.CurrentFingerprint,
-		arg.UpdatedAt,
-		arg.ID,
-		arg.ExpectedVersionID,
-	)
-	var i Product
-	err := row.Scan(
-		&i.ID,
-		&i.CanonicalName,
-		&i.Description,
-		&i.Brand,
-		&i.OriginCountry,
-		&i.Status,
-		&i.CurrentVersionID,
-		&i.CurrentFingerprint,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-	)
-	return i, err
-}
-
-const guardedUpdateProductVersion = `-- name: GuardedUpdateProductVersion :one
-UPDATE products
-SET current_version_id = $1::uuid,
-    current_fingerprint = $2::varchar,
-    canonical_name = $3::varchar,
-    description = $4::text,
-    brand = $5::varchar,
-    origin_country = $6::varchar,
-    updated_at = $7::timestamptz
-WHERE id = $8::uuid
-  AND current_version_id IS NOT DISTINCT FROM $9::uuid
-RETURNING id, canonical_name, description, brand, origin_country, status, current_version_id, current_fingerprint, created_at, updated_at
-`
-
-type GuardedUpdateProductVersionParams struct {
-	ToVersionID        pgtype.UUID        `json:"to_version_id"`
-	CurrentFingerprint string             `json:"current_fingerprint"`
-	CanonicalName      string             `json:"canonical_name"`
-	Description        string             `json:"description"`
-	Brand              string             `json:"brand"`
-	OriginCountry      string             `json:"origin_country"`
-	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
-	ID                 pgtype.UUID        `json:"id"`
-	ExpectedVersionID  pgtype.UUID        `json:"expected_version_id"`
-}
-
-func (q *Queries) GuardedUpdateProductVersion(ctx context.Context, arg GuardedUpdateProductVersionParams) (Product, error) {
-	row := q.db.QueryRow(ctx, guardedUpdateProductVersion,
-		arg.ToVersionID,
-		arg.CurrentFingerprint,
-		arg.CanonicalName,
-		arg.Description,
-		arg.Brand,
-		arg.OriginCountry,
-		arg.UpdatedAt,
-		arg.ID,
-		arg.ExpectedVersionID,
-	)
 	var i Product
 	err := row.Scan(
 		&i.ID,

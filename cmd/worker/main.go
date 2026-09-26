@@ -27,6 +27,7 @@ func main() {
 	}
 }
 
+//nolint:funlen // legacy baseline 2026-09-26: fix in ENG-018
 func run() error {
 	cfg, err := config.Load()
 	if err != nil {
@@ -71,7 +72,11 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("connect to redis: %w", err)
 	}
-	defer redisPub.Close()
+	defer func() {
+		if err := redisPub.Close(); err != nil {
+			logger.Error("close redis publisher", slog.Any("error", err))
+		}
+	}()
 
 	runRepo, err := postgres.NewIngestionRepository(pool)
 	if err != nil {
@@ -134,6 +139,7 @@ func run() error {
 	return nil
 }
 
+//nolint:funlen,gocognit // legacy baseline 2026-09-26: fix in ENG-018
 func runProcessingLoop(
 	ctx context.Context,
 	processingRepo ingestion.RunProcessingRepository,
@@ -180,7 +186,7 @@ func runProcessingLoop(
 			result, err := processor.ProcessRun(ctx, claimed.RunID, appProduct.ProcessRunOptions{
 				ClaimToken:    claimToken,
 				LeaseDuration: 30 * time.Second,
-				BatchSize:     50,
+				BatchSize:     500,
 			})
 			if err != nil {
 				if ctx.Err() == nil {

@@ -103,7 +103,7 @@ func (p *Publisher) Publish(ctx context.Context, e appOutbox.Event) error {
 	return nil
 }
 
-func ClassifyRedisError(err error, callerCtxErr error) error {
+func ClassifyRedisError(err, callerCtxErr error) error {
 	if err == nil {
 		return nil
 	}

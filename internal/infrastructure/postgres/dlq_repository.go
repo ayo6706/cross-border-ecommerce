@@ -41,6 +41,7 @@ func NewDLQRepository(db generated.DBTX) (*DLQRepository, error) {
 	return &DLQRepository{queries: generated.New(db)}, nil
 }
 
+//nolint:funlen // legacy baseline 2026-09-26: fix in ENG-025
 func (r *DLQRepository) Insert(ctx context.Context, msg dlq.Message) error {
 	if err := validateDLQIdentity(msg); err != nil {
 		return err

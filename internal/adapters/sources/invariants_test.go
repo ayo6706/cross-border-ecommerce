@@ -142,7 +142,7 @@ func TestInvariant_EchoedCursorTermination(t *testing.T) {
 // Invariant 3: Identity Determinism Invariant.
 // External identity resolution is pure, deterministic, and idempotent across concurrent goroutines.
 func TestInvariant_IdentityDeterminismConcurrent(t *testing.T) {
-	strat, err := identity.NewCompositeIdentityStrategy([]string{"site", "product.sku"}, ":")
+	strategy, err := identity.NewCompositeIdentityStrategy([]string{"site", "product.sku"}, ":")
 	if err != nil {
 		t.Fatalf("unexpected init error: %v", err)
 	}
@@ -159,7 +159,7 @@ func TestInvariant_IdentityDeterminismConcurrent(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for i := 0; i < iterations; i++ {
-				resolved, resolveErr := strat.Resolve(rawPayload)
+				resolved, resolveErr := strategy.Resolve(rawPayload)
 				if resolveErr != nil {
 					t.Errorf("concurrent resolve error: %v", resolveErr)
 					return

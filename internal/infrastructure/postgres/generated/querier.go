@@ -11,18 +11,24 @@ import (
 )
 
 type Querier interface {
+	BatchGuardedUpdateProductFingerprintOnly(ctx context.Context, arg BatchGuardedUpdateProductFingerprintOnlyParams) ([]pgtype.UUID, error)
+	BatchGuardedUpdateProductVersion(ctx context.Context, arg BatchGuardedUpdateProductVersionParams) ([]pgtype.UUID, error)
+	BatchUpdateProductSourceOnChanged(ctx context.Context, arg BatchUpdateProductSourceOnChangedParams) (int64, error)
+	BatchUpdateProductSourceWatermarks(ctx context.Context, arg BatchUpdateProductSourceWatermarksParams) (int64, error)
 	ClaimIdempotencyKey(ctx context.Context, arg ClaimIdempotencyKeyParams) (IdempotencyKey, error)
 	ClaimNextRunProcessing(ctx context.Context, arg ClaimNextRunProcessingParams) (IngestionRunProcessing, error)
 	ClaimOutboxBatch(ctx context.Context, arg ClaimOutboxBatchParams) ([]ClaimOutboxBatchRow, error)
 	ClaimSpecificRunProcessing(ctx context.Context, arg ClaimSpecificRunProcessingParams) (IngestionRunProcessing, error)
 	CompleteIdempotencyKey(ctx context.Context, arg CompleteIdempotencyKeyParams) (int64, error)
 	CompleteRunProcessing(ctx context.Context, arg CompleteRunProcessingParams) (IngestionRunProcessing, error)
+	CopyOutboxEvents(ctx context.Context, arg []CopyOutboxEventsParams) (int64, error)
+	CopyProductChanges(ctx context.Context, arg []CopyProductChangesParams) (int64, error)
+	CopyProductSources(ctx context.Context, arg []CopyProductSourcesParams) (int64, error)
+	CopyProductVersions(ctx context.Context, arg []CopyProductVersionsParams) (int64, error)
+	CopyProducts(ctx context.Context, arg []CopyProductsParams) (int64, error)
 	CreateIngestionRun(ctx context.Context, arg CreateIngestionRunParams) (IngestionRun, error)
 	CreateOutboxEvent(ctx context.Context, arg CreateOutboxEventParams) error
-	CreateProductChange(ctx context.Context, arg CreateProductChangeParams) (ProductChange, error)
-	CreateProductSource(ctx context.Context, arg CreateProductSourceParams) (ProductSource, error)
 	CreateProductVersion(ctx context.Context, arg CreateProductVersionParams) (CreateProductVersionRow, error)
-	CreateProductVersionWithRun(ctx context.Context, arg CreateProductVersionWithRunParams) (ProductVersion, error)
 	CreateRawRecord(ctx context.Context, arg CreateRawRecordParams) (RawRecord, error)
 	CreateReplayOutboxEvent(ctx context.Context, arg CreateReplayOutboxEventParams) error
 	DeleteProduct(ctx context.Context, id pgtype.UUID) error
@@ -36,12 +42,10 @@ type Querier interface {
 	GetLatestProductVersion(ctx context.Context, productID pgtype.UUID) (GetLatestProductVersionRow, error)
 	GetLatestRawRecordBySourceAndExternalID(ctx context.Context, arg GetLatestRawRecordBySourceAndExternalIDParams) (RawRecord, error)
 	GetProductByID(ctx context.Context, id pgtype.UUID) (Product, error)
-	GetProductWithSourceByIdentity(ctx context.Context, arg GetProductWithSourceByIdentityParams) (GetProductWithSourceByIdentityRow, error)
+	GetProductWithSourceByIdentities(ctx context.Context, arg GetProductWithSourceByIdentitiesParams) ([]GetProductWithSourceByIdentitiesRow, error)
 	GetRawRecordByID(ctx context.Context, id pgtype.UUID) (RawRecord, error)
 	GetRunProcessingByID(ctx context.Context, runID pgtype.UUID) (IngestionRunProcessing, error)
 	GetSourceByID(ctx context.Context, id string) (Source, error)
-	GuardedUpdateProductFingerprintOnly(ctx context.Context, arg GuardedUpdateProductFingerprintOnlyParams) (Product, error)
-	GuardedUpdateProductVersion(ctx context.Context, arg GuardedUpdateProductVersionParams) (Product, error)
 	InsertDLQMessage(ctx context.Context, arg InsertDLQMessageParams) error
 	ListActiveSources(ctx context.Context) ([]Source, error)
 	ListIngestionRunsBySource(ctx context.Context, arg ListIngestionRunsBySourceParams) ([]IngestionRun, error)
@@ -64,8 +68,6 @@ type Querier interface {
 	SeedPendingRunProcessing(ctx context.Context) error
 	UpdateIngestionRunProgress(ctx context.Context, arg UpdateIngestionRunProgressParams) (IngestionRun, error)
 	UpdateIngestionRunStatus(ctx context.Context, arg UpdateIngestionRunStatusParams) (IngestionRun, error)
-	UpdateProductSourceOnChanged(ctx context.Context, arg UpdateProductSourceOnChangedParams) (ProductSource, error)
-	UpdateProductSourceWatermark(ctx context.Context, arg UpdateProductSourceWatermarkParams) (ProductSource, error)
 	UpdateRunProcessingProgress(ctx context.Context, arg UpdateRunProcessingProgressParams) (IngestionRunProcessing, error)
 	UpsertProduct(ctx context.Context, arg UpsertProductParams) (Product, error)
 	UpsertSource(ctx context.Context, arg UpsertSourceParams) (Source, error)
