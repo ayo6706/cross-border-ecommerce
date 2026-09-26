@@ -112,8 +112,8 @@ func validateDLQIdentity(msg dlq.Message) error {
 		if strings.TrimSpace(f.value) == "" {
 			return fmt.Errorf("%w: %s cannot be empty", dlq.ErrInvalidDLQInput, f.name)
 		}
-		if len(f.value) > f.max {
-			return fmt.Errorf("%w: %s must be at most %d bytes, got %d", dlq.ErrInvalidDLQInput, f.name, f.max, len(f.value))
+		if runes := utf8.RuneCountInString(f.value); runes > f.max {
+			return fmt.Errorf("%w: %s must be at most %d characters, got %d", dlq.ErrInvalidDLQInput, f.name, f.max, runes)
 		}
 	}
 	if msg.Attempts < 1 {

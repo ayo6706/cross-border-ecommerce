@@ -218,6 +218,14 @@ func TestDLQ_Live(t *testing.T) {
 		}
 	})
 
+	t.Run("Insert_Accepts_Multibyte_Identity_At_Character_Limit", func(t *testing.T) {
+		msg := replayableMessage(t, "1710000000099-0")
+		msg.ConsumerName = strings.Repeat("é", 128) // 128 characters, 256 bytes: fits VARCHAR(128)
+
+		got := readDLQ(t, pool, insertDLQ(t, pool, repo, msg))
+		assert.Equal(t, msg.ConsumerName, got.ConsumerName)
+	})
+
 	t.Run("Insert_Sanitizes_Descriptive_Fields", func(t *testing.T) {
 		msg := replayableMessage(t, "1710000000006-0")
 		msg.EventType = strings.Repeat("X", 200)
