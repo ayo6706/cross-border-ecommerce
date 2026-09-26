@@ -77,7 +77,7 @@ func (r *ProductRepository) Save(ctx context.Context, p *product.Product) error 
 
 	createdAt, updatedAt, err := requiredAuditTimestamps(p.CreatedAt, p.UpdatedAt)
 	if err != nil {
-		return fmt.Errorf("product %w", err)
+		return fmt.Errorf("%w: product %w", product.ErrInvalidProductState, err)
 	}
 
 	saved, err := r.queries.UpsertProduct(ctx, generated.UpsertProductParams{
@@ -148,8 +148,8 @@ func (r *ProductRepository) FindSnapshotsByIdentities(ctx context.Context, ident
 	sourceIDs := make([]string, len(identities))
 	externalIDs := make([]string, len(identities))
 	for i, id := range identities {
-		sourceIDs[i] = strings.TrimSpace(id.SourceID)
-		externalIDs[i] = strings.TrimSpace(id.ExternalProductID)
+		sourceIDs[i] = id.SourceID
+		externalIDs[i] = id.ExternalProductID
 	}
 
 	rows, err := r.queries.GetProductWithSourceByIdentities(ctx, generated.GetProductWithSourceByIdentitiesParams{

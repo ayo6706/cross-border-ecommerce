@@ -16,6 +16,7 @@ const (
 
 var (
 	ErrLeaseLost             = errors.New("run processing lease lost")
+	ErrProgressNotReturned   = errors.New("run processing progress update returned no state")
 	ErrRunProcessingNotFound = errors.New("run processing state not found")
 	ErrLeaseHeld             = errors.New("active run processing lease held by another worker")
 )
@@ -26,14 +27,10 @@ type RunProcessing struct {
 	ClaimToken        *string
 	LeaseExpiresAt    *time.Time
 	CursorRawRecordID *string
-	RecordsSeen       int
-	RecordsNew        int
-	RecordsChanged    int
-	RecordsUnchanged  int
-	RecordsFailed     int
-	ErrorSummary      string
-	StartedAt         *time.Time
-	CompletedAt       *time.Time
-	CreatedAt         time.Time
-	UpdatedAt         time.Time
+	BatchMetrics
+	ErrorSummary string
+	StartedAt    *time.Time
+	CompletedAt  *time.Time
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
 }

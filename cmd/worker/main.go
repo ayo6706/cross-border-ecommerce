@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -117,9 +116,9 @@ func run() error {
 		return fmt.Errorf("initialize outbox relay: %w", err)
 	}
 
-	errorBudget, err := ingestion.NewErrorBudget(cfg.Ingestion.ErrorBudgetMaxRate, cfg.Ingestion.ErrorBudgetMinRows)
+	errorBudget, err := cfg.Ingestion.ErrorBudget()
 	if err != nil {
-		return fmt.Errorf("invalid ingestion error budget: %w", err)
+		return err
 	}
 
 	g, gCtx := errgroup.WithContext(ctx)
@@ -133,7 +132,7 @@ func run() error {
 		return relay.Run(gCtx)
 	})
 
-	if err := g.Wait(); err != nil && !isOnlyContextCanceled(err) {
+	if err := g.Wait(); err != nil {
 		return fmt.Errorf("worker group execution error: %w", err)
 	}
 
@@ -202,28 +201,13 @@ func runProcessingLoop(
 			} else {
 				logger.Info("completed run processing job",
 					slog.String("run_id", result.RunID),
-					slog.Int("seen", result.RecordsSeen),
-					slog.Int("new", result.RecordsNew),
-					slog.Int("changed", result.RecordsChanged),
-					slog.Int("unchanged", result.RecordsUnchanged),
-					slog.Int("failed", result.RecordsFailed),
+					slog.Int("seen", result.Seen),
+					slog.Int("new", result.New),
+					slog.Int("changed", result.Changed),
+					slog.Int("unchanged", result.Unchanged),
+					slog.Int("failed", result.Failed),
 				)
 			}
 		}
 	}
-}
-
-func isOnlyContextCanceled(err error) bool {
-	if err == nil {
-		return false
-	}
-	if u, ok := err.(interface{ Unwrap() []error }); ok {
-		for _, e := range u.Unwrap() {
-			if !isOnlyContextCanceled(e) {
-				return false
-			}
-		}
-		return true
-	}
-	return errors.Is(err, context.Canceled)
 }

@@ -56,7 +56,7 @@ Stream Consumer & Worker Pool Tuning Variables (with defaults):
 - `STREAM_CLAIM_MIN_IDLE`: Minimum idle duration before reclaiming pending messages with XAUTOCLAIM (default: `30s`, must be > `STREAM_HANDLER_TIMEOUT`).
 - `STREAM_CLAIM_INTERVAL`: Periodic interval between XAUTOCLAIM sweeps (default: `10s`).
 - `STREAM_HANDLER_TIMEOUT`: Maximum execution time allowed per message handler (default: `5s`).
-- `WORKER_CONCURRENCY`: Fixed number of concurrent worker goroutines in the pool (default: `10`, must be <= 80% of `DB_MAX_CONNS`).
+- `WORKER_CONCURRENCY`: Fixed number of concurrent worker goroutines in the pool (default: `10`). Used by the stream consumer, which no binary starts yet (ENG-025).
 - `WORKER_QUEUE_SIZE`: Buffer capacity of the worker task queue (default: `10`).
 - `WORKER_DRAIN_TIMEOUT`: Graceful shutdown drain timeout before cancelling in-flight tasks (default: `10s`).
 

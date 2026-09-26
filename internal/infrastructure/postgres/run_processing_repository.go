@@ -85,13 +85,7 @@ func (r *RunProcessingRepository) ClaimSpecific(ctx context.Context, runID, clai
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			if _, getErr := r.queries.GetRunProcessingByID(ctx, rUUID); getErr != nil {
-				if errors.Is(getErr, pgx.ErrNoRows) {
-					return nil, ingestion.ErrRunProcessingNotFound
-				}
-				return nil, fmt.Errorf("probe run processing %s: %w", runID, getErr)
-			}
-			return nil, ingestion.ErrLeaseHeld
+			return nil, r.guardFailure(ctx, rUUID, ingestion.ErrLeaseHeld)
 		}
 		return nil, fmt.Errorf("claim specific run processing: %w", err)
 	}
@@ -134,11 +128,11 @@ func (r *RunProcessingRepository) UpdateProgress(
 	ctx context.Context,
 	runID string,
 	claimToken string,
-	seen, newRecs, changed, unchanged, failed int,
+	metrics ingestion.BatchMetrics,
 	cursorID *string,
 	leaseDuration time.Duration,
 ) (*ingestion.RunProcessing, error) {
-	params, err := parseUpdateProgressParams(runID, claimToken, seen, newRecs, changed, unchanged, failed, cursorID, leaseDuration)
+	params, err := parseUpdateProgressParams(runID, claimToken, metrics, cursorID, leaseDuration)
 	if err != nil {
 		return nil, err
 	}
@@ -156,7 +150,7 @@ func (r *RunProcessingRepository) UpdateProgress(
 
 func parseUpdateProgressParams(
 	runID, claimToken string,
-	seen, newRecs, changed, unchanged, failed int,
+	metrics ingestion.BatchMetrics,
 	cursorID *string,
 	leaseDuration time.Duration,
 ) (generated.UpdateRunProcessingProgressParams, error) {
@@ -177,7 +171,7 @@ func parseUpdateProgressParams(
 		}
 	}
 
-	counters, err := toRunCounters(seen, newRecs, changed, unchanged, failed)
+	counters, err := toRunCounters(metrics)
 	if err != nil {
 		return generated.UpdateRunProcessingProgressParams{}, err
 	}
@@ -220,27 +214,27 @@ func (r *RunProcessingRepository) Release(ctx context.Context, runID, claimToken
 	return nil
 }
 
-func (r *RunProcessingRepository) Complete(ctx context.Context, runID, claimToken string) error {
+func (r *RunProcessingRepository) Complete(ctx context.Context, runID, claimToken string) (*ingestion.RunProcessing, error) {
 	rUUID, err := parseUUID(runID)
 	if err != nil {
-		return fmt.Errorf("%w: invalid run id: %w", ingestion.ErrInvalidRunID, err)
+		return nil, fmt.Errorf("%w: invalid run id: %w", ingestion.ErrInvalidRunID, err)
 	}
 	tokenUUID, err := parseUUID(claimToken)
 	if err != nil {
-		return fmt.Errorf("invalid claim token uuid: %w", err)
+		return nil, fmt.Errorf("invalid claim token uuid: %w", err)
 	}
 
-	_, err = r.queries.CompleteRunProcessing(ctx, generated.CompleteRunProcessingParams{
+	row, err := r.queries.CompleteRunProcessing(ctx, generated.CompleteRunProcessingParams{
 		RunID:      rUUID,
 		ClaimToken: tokenUUID,
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return ingestion.ErrLeaseLost
+			return nil, ingestion.ErrLeaseLost
 		}
-		return fmt.Errorf("complete run processing: %w", err)
+		return nil, fmt.Errorf("complete run processing: %w", err)
 	}
-	return nil
+	return toDomainRunProcessing(&row), nil
 }
 
 func (r *RunProcessingRepository) Fail(ctx context.Context, runID, claimToken, errSummary string) error {
@@ -265,13 +259,7 @@ func (r *RunProcessingRepository) Fail(ctx context.Context, runID, claimToken, e
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			if _, getErr := r.queries.GetRunProcessingByID(ctx, rUUID); getErr != nil {
-				if errors.Is(getErr, pgx.ErrNoRows) {
-					return ingestion.ErrRunProcessingNotFound
-				}
-				return fmt.Errorf("probe run processing %s: %w", runID, getErr)
-			}
-			return ingestion.ErrLeaseLost
+			return r.guardFailure(ctx, rUUID, ingestion.ErrLeaseLost)
 		}
 		return fmt.Errorf("fail run processing: %w", err)
 	}
@@ -287,18 +275,26 @@ func (r *RunProcessingRepository) ResetFromStart(ctx context.Context, runID stri
 	row, err := r.queries.ResetRunProcessingFromStart(ctx, rUUID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			if _, getErr := r.queries.GetRunProcessingByID(ctx, rUUID); getErr != nil {
-				if errors.Is(getErr, pgx.ErrNoRows) {
-					return nil, ingestion.ErrRunProcessingNotFound
-				}
-				return nil, fmt.Errorf("probe run processing %s: %w", runID, getErr)
-			}
-			return nil, ingestion.ErrLeaseHeld
+			return nil, r.guardFailure(ctx, rUUID, ingestion.ErrLeaseHeld)
 		}
 		return nil, fmt.Errorf("reset run processing: %w", err)
 	}
 
 	return toDomainRunProcessing(&row), nil
+}
+
+// guardFailure explains a guarded write that matched no row: either the run has no processing
+// state, or it exists and the guard (claim token, lease) refused the write.
+func (r *RunProcessingRepository) guardFailure(ctx context.Context, rUUID pgtype.UUID, whenExists error) error {
+	_, err := r.queries.GetRunProcessingByID(ctx, rUUID)
+	switch {
+	case err == nil:
+		return whenExists
+	case errors.Is(err, pgx.ErrNoRows):
+		return ingestion.ErrRunProcessingNotFound
+	default:
+		return fmt.Errorf("probe run processing %s: %w", uuidToString(rUUID), err)
+	}
 }
 
 func toDomainRunProcessing(row *generated.IngestionRunProcessing) *ingestion.RunProcessing {
@@ -320,15 +316,17 @@ func toDomainRunProcessing(row *generated.IngestionRunProcessing) *ingestion.Run
 		ClaimToken:        claimToken,
 		LeaseExpiresAt:    fromTimestamptz(row.LeaseExpiresAt),
 		CursorRawRecordID: cursorID,
-		RecordsSeen:       int(row.RecordsSeen),
-		RecordsNew:        int(row.RecordsNew),
-		RecordsChanged:    int(row.RecordsChanged),
-		RecordsUnchanged:  int(row.RecordsUnchanged),
-		RecordsFailed:     int(row.RecordsFailed),
-		ErrorSummary:      row.ErrorSummary,
-		StartedAt:         fromTimestamptz(row.StartedAt),
-		CompletedAt:       fromTimestamptz(row.CompletedAt),
-		CreatedAt:         row.CreatedAt.Time.UTC(),
-		UpdatedAt:         row.UpdatedAt.Time.UTC(),
+		BatchMetrics: ingestion.BatchMetrics{
+			Seen:      int(row.RecordsSeen),
+			New:       int(row.RecordsNew),
+			Changed:   int(row.RecordsChanged),
+			Unchanged: int(row.RecordsUnchanged),
+			Failed:    int(row.RecordsFailed),
+		},
+		ErrorSummary: row.ErrorSummary,
+		StartedAt:    fromTimestamptz(row.StartedAt),
+		CompletedAt:  fromTimestamptz(row.CompletedAt),
+		CreatedAt:    row.CreatedAt.Time.UTC(),
+		UpdatedAt:    row.UpdatedAt.Time.UTC(),
 	}
 }

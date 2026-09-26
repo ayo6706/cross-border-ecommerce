@@ -45,14 +45,14 @@ func (r *IngestionRepository) CreateRun(ctx context.Context, run *ingestion.Inge
 		return fmt.Errorf("%w: %w", ingestion.ErrInvalidRunID, err)
 	}
 
-	counters, err := toRunCounters(run.RecordsSeen, run.RecordsNew, run.RecordsChanged, run.RecordsUnchanged, run.RecordsFailed)
+	counters, err := toRunCounters(run.BatchMetrics)
 	if err != nil {
 		return fmt.Errorf("%w: %w", ingestion.ErrInvalidRunState, err)
 	}
 
 	createdAt, updatedAt, err := requiredAuditTimestamps(run.CreatedAt, run.UpdatedAt)
 	if err != nil {
-		return fmt.Errorf("run %w", err)
+		return fmt.Errorf("%w: run %w", ingestion.ErrInvalidRunState, err)
 	}
 
 	row, err := r.queries.CreateIngestionRun(ctx, generated.CreateIngestionRunParams{
@@ -110,10 +110,10 @@ func (r *IngestionRepository) UpdateProgress(ctx context.Context, id string, met
 
 	updatedAtTz, err := requiredTimestamptz(updatedAt)
 	if err != nil {
-		return fmt.Errorf("run updated_at: %w", err)
+		return fmt.Errorf("%w: run updated_at: %w", ingestion.ErrInvalidRunState, err)
 	}
 
-	counters, err := toRunCounters(metrics.Seen, metrics.New, metrics.Changed, metrics.Unchanged, metrics.Failed)
+	counters, err := toRunCounters(metrics)
 	if err != nil {
 		return fmt.Errorf("convert run progress counters: %w", err)
 	}
@@ -154,7 +154,7 @@ func (r *IngestionRepository) UpdateStatus(ctx context.Context, run *ingestion.I
 
 	updatedAt, err := requiredTimestamptz(run.UpdatedAt)
 	if err != nil {
-		return fmt.Errorf("run updated_at: %w", err)
+		return fmt.Errorf("%w: run updated_at: %w", ingestion.ErrInvalidRunState, err)
 	}
 
 	_, err = r.queries.UpdateIngestionRunStatus(ctx, generated.UpdateIngestionRunStatusParams{
@@ -219,19 +219,21 @@ func (r *IngestionRepository) FindLatestRunBySource(ctx context.Context, sourceI
 
 func toDomainIngestionRun(row *generated.IngestionRun) *ingestion.IngestionRun {
 	return &ingestion.IngestionRun{
-		ID:               uuidToString(row.ID),
-		SourceID:         source.ID(row.SourceID),
-		Status:           ingestion.RunStatus(row.Status),
-		Checkpoint:       row.Checkpoint,
-		RecordsSeen:      int(row.RecordsSeen),
-		RecordsNew:       int(row.RecordsNew),
-		RecordsChanged:   int(row.RecordsChanged),
-		RecordsUnchanged: int(row.RecordsUnchanged),
-		RecordsFailed:    int(row.RecordsFailed),
-		ErrorSummary:     row.ErrorSummary,
-		StartedAt:        fromTimestamptz(row.StartedAt),
-		CompletedAt:      fromTimestamptz(row.CompletedAt),
-		CreatedAt:        row.CreatedAt.Time.UTC(),
-		UpdatedAt:        row.UpdatedAt.Time.UTC(),
+		ID:         uuidToString(row.ID),
+		SourceID:   source.ID(row.SourceID),
+		Status:     ingestion.RunStatus(row.Status),
+		Checkpoint: row.Checkpoint,
+		BatchMetrics: ingestion.BatchMetrics{
+			Seen:      int(row.RecordsSeen),
+			New:       int(row.RecordsNew),
+			Changed:   int(row.RecordsChanged),
+			Unchanged: int(row.RecordsUnchanged),
+			Failed:    int(row.RecordsFailed),
+		},
+		ErrorSummary: row.ErrorSummary,
+		StartedAt:    fromTimestamptz(row.StartedAt),
+		CompletedAt:  fromTimestamptz(row.CompletedAt),
+		CreatedAt:    row.CreatedAt.Time.UTC(),
+		UpdatedAt:    row.UpdatedAt.Time.UTC(),
 	}
 }

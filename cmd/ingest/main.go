@@ -15,6 +15,7 @@ import (
 	"github.com/ayo6706/cross-border-ecommerce/internal/infrastructure/postgres"
 	"github.com/ayo6706/cross-border-ecommerce/internal/platform/config"
 	"github.com/ayo6706/cross-border-ecommerce/internal/platform/logging"
+	"github.com/ayo6706/cross-border-ecommerce/internal/platform/uuid"
 )
 
 func main() {
@@ -119,23 +120,43 @@ func runProcess(args []string) error {
 		slog.Bool("from_start", *fromStart),
 	)
 
-	result, err := processor.ProcessRun(ctx, *runID, appProduct.ProcessRunOptions{
-		LeaseDuration: time.Duration(*leaseSec) * time.Second,
-		BatchSize:     *batchSize,
-		FromStart:     *fromStart,
-	})
+	opts, err := processRunOptions(cfg.Ingestion, time.Duration(*leaseSec)*time.Second, *batchSize, *fromStart)
+	if err != nil {
+		return err
+	}
+	result, err := processor.ProcessRun(ctx, *runID, opts)
 	if err != nil {
 		return fmt.Errorf("process run %s: %w", *runID, err)
 	}
 
 	logger.Info("run processing completed successfully",
 		slog.String("run_id", result.RunID),
-		slog.Int("records_seen", result.RecordsSeen),
-		slog.Int("records_new", result.RecordsNew),
-		slog.Int("records_changed", result.RecordsChanged),
-		slog.Int("records_unchanged", result.RecordsUnchanged),
-		slog.Int("records_failed", result.RecordsFailed),
+		slog.Int("records_seen", result.Seen),
+		slog.Int("records_new", result.New),
+		slog.Int("records_changed", result.Changed),
+		slog.Int("records_unchanged", result.Unchanged),
+		slog.Int("records_failed", result.Failed),
 	)
 
 	return nil
+}
+
+// processRunOptions builds the options ProcessRun requires: a fresh claim token for this
+// invocation and the error budget from configuration.
+func processRunOptions(cfg config.IngestionConfig, lease time.Duration, batchSize int, fromStart bool) (appProduct.ProcessRunOptions, error) {
+	budget, err := cfg.ErrorBudget()
+	if err != nil {
+		return appProduct.ProcessRunOptions{}, err
+	}
+	claimToken, err := uuid.NewString()
+	if err != nil {
+		return appProduct.ProcessRunOptions{}, fmt.Errorf("generate claim token: %w", err)
+	}
+	return appProduct.ProcessRunOptions{
+		ClaimToken:    claimToken,
+		LeaseDuration: lease,
+		BatchSize:     batchSize,
+		FromStart:     fromStart,
+		ErrorBudget:   budget,
+	}, nil
 }

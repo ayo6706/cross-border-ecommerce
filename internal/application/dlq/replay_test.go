@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/ayo6706/cross-border-ecommerce/internal/application/dlq"
-	"github.com/ayo6706/cross-border-ecommerce/internal/platform/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -43,8 +43,15 @@ type memTxView struct {
 	outbox   []dlq.ReplayEvent
 }
 
+// parseUUIDLikeRepository accepts exactly what the PostgreSQL repository's pgtype.UUID parsing
+// accepts, so the fake is neither stricter nor more permissive than the real adapter.
+func parseUUIDLikeRepository(s string) error {
+	var u pgtype.UUID
+	return u.Scan(s)
+}
+
 func (v *memTxView) GetReplaySource(_ context.Context, id string) (dlq.ReplaySource, error) {
-	if err := uuid.Validate(id); err != nil {
+	if err := parseUUIDLikeRepository(id); err != nil {
 		return dlq.ReplaySource{}, fmt.Errorf("%w: invalid uuid %q: %w", dlq.ErrInvalidDLQID, id, err)
 	}
 	src, ok := v.parent.sources[id]
@@ -55,10 +62,10 @@ func (v *memTxView) GetReplaySource(_ context.Context, id string) (dlq.ReplaySou
 }
 
 func (v *memTxView) MarkReplayed(_ context.Context, id, outboxID string) (bool, error) {
-	if err := uuid.Validate(id); err != nil {
+	if err := parseUUIDLikeRepository(id); err != nil {
 		return false, fmt.Errorf("%w: invalid uuid %q: %w", dlq.ErrInvalidDLQID, id, err)
 	}
-	if err := uuid.Validate(outboxID); err != nil {
+	if err := parseUUIDLikeRepository(outboxID); err != nil {
 		return false, fmt.Errorf("%w: invalid outbox uuid %q: %w", dlq.ErrInvalidDLQID, outboxID, err)
 	}
 	if _, done := v.parent.replayed[id]; done {

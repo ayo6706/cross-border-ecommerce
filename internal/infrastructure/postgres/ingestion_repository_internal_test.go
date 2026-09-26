@@ -3,6 +3,8 @@ package postgres
 import (
 	"math"
 	"testing"
+
+	"github.com/ayo6706/cross-border-ecommerce/internal/domain/ingestion"
 )
 
 func TestToInt32(t *testing.T) {
@@ -45,10 +47,10 @@ func TestListLimit(t *testing.T) {
 func TestToRunCounters_RejectsOverflow(t *testing.T) {
 	t.Parallel()
 
-	if _, err := toRunCounters(1, 2, 3, 4, math.MaxInt32+1); err == nil {
+	if _, err := toRunCounters(ingestion.BatchMetrics{Seen: 1, New: 2, Changed: 3, Unchanged: 4, Failed: math.MaxInt32 + 1}); err == nil {
 		t.Fatal("expected overflow error for failed counter")
 	}
-	c, err := toRunCounters(1, 2, 3, 4, 5)
+	c, err := toRunCounters(ingestion.BatchMetrics{Seen: 1, New: 2, Changed: 3, Unchanged: 4, Failed: 5})
 	if err != nil || c.seen != 1 || c.failed != 5 {
 		t.Fatalf("unexpected counters %+v, err %v", c, err)
 	}

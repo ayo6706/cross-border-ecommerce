@@ -12,7 +12,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -55,11 +54,15 @@ type Migration struct {
 	Direction     MigrationDirection
 	Path          string
 	NoTransaction bool
+
+	script string
 }
 
-// Migrator applies embedded SQL migrations. Each migration runs in its own
-// transaction together with its schema_migrations bookkeeping, so a failed
-// migration leaves no partial state behind and there is no "dirty" version.
+// Migrator applies embedded SQL migrations. A migration normally runs in its own transaction
+// together with its schema_migrations bookkeeping, so a failure leaves no partial state and no
+// "dirty" version. A no-transaction migration (see noTransactionDirective) is one idempotent
+// statement recorded only after it succeeds and left no invalid index, so a failure is retried
+// by running it again.
 type Migrator struct {
 	pool *pgxpool.Pool
 	fsys fs.FS
@@ -158,7 +161,8 @@ func (m *Migrator) Version(ctx context.Context) (int64, error) {
 func (m *Migrator) parseMigration(name string) (Migration, error) {
 	matches := migrationFilePattern.FindStringSubmatch(name)
 	if len(matches) != 4 {
-		return Migration{}, fmt.Errorf("%w: %s (want <version>_<name>.up.sql or .down.sql)", ErrMalformedMigrationName, name)
+		return Migration{}, fmt.Errorf("%w: %s (want <version>_<name>.up.sql or .down.sql)",
+			ErrMalformedMigrationName, name)
 	}
 	v, err := strconv.ParseInt(matches[1], 10, 64)
 	if err != nil {
@@ -172,11 +176,18 @@ func (m *Migrator) parseMigration(name string) (Migration, error) {
 	if err != nil {
 		return Migration{}, fmt.Errorf("migration %s: %w", name, err)
 	}
-	return Migration{Version: v, Name: matches[2], Direction: MigrationDirection(matches[3]), Path: name, NoTransaction: noTx}, nil
+	return Migration{
+		Version:       v,
+		Name:          matches[2],
+		Direction:     MigrationDirection(matches[3]),
+		Path:          name,
+		NoTransaction: noTx,
+		script:        string(script),
+	}, nil
 }
 
 func parseNoTransaction(script string) (bool, error) {
-	firstLine, body, _ := strings.Cut(script, "\n")
+	firstLine, body, _ := strings.Cut(strings.TrimPrefix(script, "\ufeff"), "\n")
 	if strings.TrimSpace(firstLine) != noTransactionDirective {
 		return false, nil
 	}
@@ -200,7 +211,7 @@ func countStatements(sql string) (int, error) {
 		case strings.HasPrefix(sql[i:], "--"):
 			i = indexPast(sql, "\n", i) - 1
 		case strings.HasPrefix(sql[i:], "/*"):
-			i = indexPast(sql, "*/", i+2) - 1
+			i = blockCommentEnd(sql, i) - 1
 		case c == '\'' || c == '"':
 			i = closingQuote(sql, i)
 			pending = true
@@ -211,7 +222,7 @@ func countStatements(sql string) (int, error) {
 				count++
 			}
 			pending = false
-		case !unicode.IsSpace(rune(c)):
+		case !isSQLSpace(c):
 			pending = true
 		}
 	}
@@ -228,6 +239,30 @@ func indexPast(s, terminator string, from int) int {
 		return len(s)
 	}
 	return from + j + len(terminator)
+}
+
+// blockCommentEnd returns the index just after the block comment opened at s[open]. PostgreSQL
+// block comments nest.
+func blockCommentEnd(s string, open int) int {
+	depth := 0
+	for i := open; i < len(s)-1; i++ {
+		switch s[i : i+2] {
+		case "/*":
+			depth++
+			i++
+		case "*/":
+			depth--
+			i++
+			if depth == 0 {
+				return i + 1
+			}
+		}
+	}
+	return len(s)
+}
+
+func isSQLSpace(c byte) bool {
+	return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' || c == '\v'
 }
 
 // closingQuote returns the index of the quote closing the one at s[open]; a doubled quote is an
@@ -271,13 +306,8 @@ func (m *Migrator) Up(ctx context.Context) error {
 				continue
 			}
 
-			script, err := fs.ReadFile(m.fsys, path.Clean(mig.Path))
-			if err != nil {
-				return fmt.Errorf("read migration file %s: %w", mig.Path, err)
-			}
-
 			const record = `INSERT INTO schema_migrations (version) VALUES ($1)`
-			if err := runMigration(ctx, conn, mig, string(script), record); err != nil {
+			if err := runMigration(ctx, conn, mig, record); err != nil {
 				return fmt.Errorf("apply migration %d (%s): %w", mig.Version, mig.Name, err)
 			}
 		}
@@ -315,13 +345,8 @@ func (m *Migrator) Down(ctx context.Context, steps int) error {
 				return fmt.Errorf("down migration file not found for version %d", version)
 			}
 
-			script, err := fs.ReadFile(m.fsys, path.Clean(mig.Path))
-			if err != nil {
-				return fmt.Errorf("read down migration file %s: %w", mig.Path, err)
-			}
-
 			const unrecord = `DELETE FROM schema_migrations WHERE version = $1`
-			if err := runMigration(ctx, conn, mig, string(script), unrecord); err != nil {
+			if err := runMigration(ctx, conn, mig, unrecord); err != nil {
 				return fmt.Errorf("rollback migration %d (%s): %w", version, mig.Name, err)
 			}
 		}
@@ -345,11 +370,11 @@ func (m *Migrator) migrationsByDirection(dir MigrationDirection) ([]Migration, e
 	return filtered, nil
 }
 
-func runMigration(ctx context.Context, conn *pgxpool.Conn, mig Migration, script, bookkeeping string) error {
+func runMigration(ctx context.Context, conn *pgxpool.Conn, mig Migration, bookkeeping string) error {
 	if mig.NoTransaction {
-		return runWithoutTx(ctx, conn, script, bookkeeping, mig.Version)
+		return runWithoutTx(ctx, conn, mig.script, bookkeeping, mig.Version)
 	}
-	return runInTx(ctx, conn, script, bookkeeping, mig.Version)
+	return runInTx(ctx, conn, mig.script, bookkeeping, mig.Version)
 }
 
 // runWithoutTx executes a single-statement no-transaction migration, then refuses to record it if

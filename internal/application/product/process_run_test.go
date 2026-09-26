@@ -165,8 +165,10 @@ func defaultFieldMapping() *domainProduct.FieldMapping {
 	}
 }
 
-func testProcessRunOptions(mods ...func(*appProduct.ProcessRunOptions)) appProduct.ProcessRunOptions {
-	token, _ := uuid.NewString()
+func testProcessRunOptions(tb testing.TB, mods ...func(*appProduct.ProcessRunOptions)) appProduct.ProcessRunOptions {
+	tb.Helper()
+	token, err := uuid.NewString()
+	require.NoError(tb, err)
 	opts := appProduct.ProcessRunOptions{
 		ClaimToken:    token,
 		BatchSize:     50,
@@ -259,14 +261,14 @@ func TestProcessRunRecords_NewProduct(t *testing.T) {
 	require.NoError(t, env.rawRepo.Save(ctx, record))
 
 	// Execute ProcessRun
-	result, err := env.processor.ProcessRun(ctx, run.ID, testProcessRunOptions())
+	result, err := env.processor.ProcessRun(ctx, run.ID, testProcessRunOptions(t))
 	require.NoError(t, err)
 
-	assert.Equal(t, 1, result.RecordsSeen)
-	assert.Equal(t, 1, result.RecordsNew)
-	assert.Equal(t, 0, result.RecordsChanged)
-	assert.Equal(t, 0, result.RecordsUnchanged)
-	assert.Equal(t, 0, result.RecordsFailed)
+	assert.Equal(t, 1, result.Seen)
+	assert.Equal(t, 1, result.New)
+	assert.Equal(t, 0, result.Changed)
+	assert.Equal(t, 0, result.Unchanged)
+	assert.Equal(t, 0, result.Failed)
 
 	// Verify Snapshot / Identity
 	snap := findTestSnapshot(t, ctx, env, sourceID, "ext-prod-101")
@@ -305,7 +307,7 @@ func TestProcessRunRecords_RejectsNonTerminalRun(t *testing.T) {
 	require.NoError(t, run.Start(time.Now().UTC()))
 	require.NoError(t, env.runRepo.UpdateStatus(ctx, run, domainIngestion.StatusPending))
 
-	_, err = env.processor.ProcessRun(ctx, run.ID, testProcessRunOptions())
+	_, err = env.processor.ProcessRun(ctx, run.ID, testProcessRunOptions(t))
 	require.ErrorIs(t, err, domainIngestion.ErrInvalidRunState)
 
 	var processingRows int
@@ -341,7 +343,7 @@ func TestProcessRunRecords_ChangedProduct(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, env.rawRepo.Save(ctx, rec1))
 
-	_, err = env.processor.ProcessRun(ctx, run1.ID, testProcessRunOptions())
+	_, err = env.processor.ProcessRun(ctx, run1.ID, testProcessRunOptions(t))
 	require.NoError(t, err)
 
 	// Run 2: Changed description and color
@@ -365,13 +367,13 @@ func TestProcessRunRecords_ChangedProduct(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, env.rawRepo.Save(ctx, rec2))
 
-	res2, err := env.processor.ProcessRun(ctx, run2.ID, testProcessRunOptions())
+	res2, err := env.processor.ProcessRun(ctx, run2.ID, testProcessRunOptions(t))
 	require.NoError(t, err)
 
-	assert.Equal(t, 1, res2.RecordsSeen)
-	assert.Equal(t, 0, res2.RecordsNew)
-	assert.Equal(t, 1, res2.RecordsChanged)
-	assert.Equal(t, 0, res2.RecordsUnchanged)
+	assert.Equal(t, 1, res2.Seen)
+	assert.Equal(t, 0, res2.New)
+	assert.Equal(t, 1, res2.Changed)
+	assert.Equal(t, 0, res2.Unchanged)
 
 	// Check Snapshot version is now 2
 	snap := findTestSnapshot(t, ctx, env, sourceID, "ext-headphones-1")
@@ -420,7 +422,7 @@ func TestProcessRunRecords_Unchanged(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, env.rawRepo.Save(ctx, rec1))
 
-	_, err = env.processor.ProcessRun(ctx, run1.ID, testProcessRunOptions())
+	_, err = env.processor.ProcessRun(ctx, run1.ID, testProcessRunOptions(t))
 	require.NoError(t, err)
 
 	// Capture row counts
@@ -444,13 +446,13 @@ func TestProcessRunRecords_Unchanged(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, env.rawRepo.Save(ctx, rec2))
 
-	res2, err := env.processor.ProcessRun(ctx, run2.ID, testProcessRunOptions())
+	res2, err := env.processor.ProcessRun(ctx, run2.ID, testProcessRunOptions(t))
 	require.NoError(t, err)
 
-	assert.Equal(t, 1, res2.RecordsSeen)
-	assert.Equal(t, 0, res2.RecordsNew)
-	assert.Equal(t, 0, res2.RecordsChanged)
-	assert.Equal(t, 1, res2.RecordsUnchanged)
+	assert.Equal(t, 1, res2.Seen)
+	assert.Equal(t, 0, res2.New)
+	assert.Equal(t, 0, res2.Changed)
+	assert.Equal(t, 1, res2.Unchanged)
 
 	// Assert zero writes to products, versions, changes, outbox
 	var prodCount2, verCount2, changeCount2, outboxCount2 int
@@ -493,25 +495,25 @@ func TestProcessRunRecords_ReplayIsIdempotent(t *testing.T) {
 	require.NoError(t, env.rawRepo.Save(ctx, rec))
 
 	// Initial execution
-	res1, err := env.processor.ProcessRun(ctx, run.ID, testProcessRunOptions())
+	res1, err := env.processor.ProcessRun(ctx, run.ID, testProcessRunOptions(t))
 	require.NoError(t, err)
-	assert.Equal(t, 1, res1.RecordsNew)
+	assert.Equal(t, 1, res1.New)
 
 	// Replay 1 without --from-start: cursor is at end, no additional work
-	resReplay1, err := env.processor.ProcessRun(ctx, run.ID, testProcessRunOptions(func(o *appProduct.ProcessRunOptions) {
+	resReplay1, err := env.processor.ProcessRun(ctx, run.ID, testProcessRunOptions(t, func(o *appProduct.ProcessRunOptions) {
 		o.FromStart = false
 	}))
 	require.NoError(t, err)
-	assert.Equal(t, 1, resReplay1.RecordsNew)
+	assert.Equal(t, 1, resReplay1.New)
 
 	// Replay 2 with --from-start: resets counters and walks from start, resolves as unchanged
-	resReplay2, err := env.processor.ProcessRun(ctx, run.ID, testProcessRunOptions(func(o *appProduct.ProcessRunOptions) {
+	resReplay2, err := env.processor.ProcessRun(ctx, run.ID, testProcessRunOptions(t, func(o *appProduct.ProcessRunOptions) {
 		o.FromStart = true
 	}))
 	require.NoError(t, err)
-	assert.Equal(t, 1, resReplay2.RecordsSeen)
-	assert.Equal(t, 0, resReplay2.RecordsNew)
-	assert.Equal(t, 1, resReplay2.RecordsUnchanged)
+	assert.Equal(t, 1, resReplay2.Seen)
+	assert.Equal(t, 0, resReplay2.New)
+	assert.Equal(t, 1, resReplay2.Unchanged)
 
 	// Ensure no duplicate versions
 	var verCount int
@@ -561,11 +563,11 @@ func TestProcessRunRecords_ConcurrentSameIdentity(t *testing.T) {
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		_, errs[0] = env.processor.ProcessRun(ctx, run1.ID, testProcessRunOptions())
+		_, errs[0] = env.processor.ProcessRun(ctx, run1.ID, testProcessRunOptions(t))
 	}()
 	go func() {
 		defer wg.Done()
-		_, errs[1] = env.processor.ProcessRun(ctx, run2.ID, testProcessRunOptions())
+		_, errs[1] = env.processor.ProcessRun(ctx, run2.ID, testProcessRunOptions(t))
 	}()
 	wg.Wait()
 
@@ -600,7 +602,7 @@ func TestProcessRunRecords_OutOfOrder(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.NoError(t, env.rawRepo.Save(ctx, rec1))
-	_, err = env.processor.ProcessRun(ctx, run1.ID, testProcessRunOptions())
+	_, err = env.processor.ProcessRun(ctx, run1.ID, testProcessRunOptions(t))
 	require.NoError(t, err)
 
 	// Run 2 processes an older record T1 (where T1 < T2)
@@ -617,11 +619,11 @@ func TestProcessRunRecords_OutOfOrder(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, env.rawRepo.Save(ctx, rec2))
 
-	res2, err := env.processor.ProcessRun(ctx, run2.ID, testProcessRunOptions())
+	res2, err := env.processor.ProcessRun(ctx, run2.ID, testProcessRunOptions(t))
 	require.NoError(t, err)
 
-	assert.Equal(t, 1, res2.RecordsUnchanged, "stale record must be counted as unchanged")
-	assert.Equal(t, 0, res2.RecordsChanged)
+	assert.Equal(t, 1, res2.Unchanged, "stale record must be counted as unchanged")
+	assert.Equal(t, 0, res2.Changed)
 
 	// Verify catalog did not regress
 	snap := findTestSnapshot(t, ctx, env, sourceID, "ext-order-1")
@@ -665,14 +667,14 @@ func TestProcessRunRecords_BadRecordCounted(t *testing.T) {
 	require.NoError(t, env.rawRepo.SaveBatch(ctx, []*domainIngestion.RawRecord{r1, r2, r3}))
 
 	budget := domainIngestion.ErrorBudget{MaxErrorRate: 0.50, MinSampleRows: 2}
-	result, err := env.processor.ProcessRun(ctx, run.ID, testProcessRunOptions(func(o *appProduct.ProcessRunOptions) {
+	result, err := env.processor.ProcessRun(ctx, run.ID, testProcessRunOptions(t, func(o *appProduct.ProcessRunOptions) {
 		o.ErrorBudget = budget
 	}))
 	require.NoError(t, err)
 
-	assert.Equal(t, 3, result.RecordsSeen)
-	assert.Equal(t, 2, result.RecordsNew)
-	assert.Equal(t, 1, result.RecordsFailed)
+	assert.Equal(t, 3, result.Seen)
+	assert.Equal(t, 2, result.New)
+	assert.Equal(t, 1, result.Failed)
 }
 
 func TestProcessRunRecords_ErrorBudgetExceeded_FailsLoudly(t *testing.T) {
@@ -698,7 +700,7 @@ func TestProcessRunRecords_ErrorBudgetExceeded_FailsLoudly(t *testing.T) {
 	require.NoError(t, env.rawRepo.SaveBatch(ctx, records))
 
 	budget := domainIngestion.ErrorBudget{MaxErrorRate: 0.05, MinSampleRows: 100}
-	_, err := env.processor.ProcessRun(ctx, run.ID, testProcessRunOptions(func(o *appProduct.ProcessRunOptions) {
+	_, err := env.processor.ProcessRun(ctx, run.ID, testProcessRunOptions(t, func(o *appProduct.ProcessRunOptions) {
 		o.ErrorBudget = budget
 	}))
 	require.Error(t, err)
@@ -708,8 +710,8 @@ func TestProcessRunRecords_ErrorBudgetExceeded_FailsLoudly(t *testing.T) {
 	rp, err := env.processingRepo.GetByID(ctx, run.ID)
 	require.NoError(t, err)
 	assert.Equal(t, domainIngestion.ProcessingFailed, rp.Status)
-	assert.Equal(t, 100, rp.RecordsSeen)
-	assert.Equal(t, 100, rp.RecordsFailed)
+	assert.Equal(t, 100, rp.Seen)
+	assert.Equal(t, 100, rp.Failed)
 }
 
 func TestProcessRunRecords_PriceOnlyChange(t *testing.T) {
@@ -736,7 +738,7 @@ func TestProcessRunRecords_PriceOnlyChange(t *testing.T) {
 		ReceivedAt:        t1,
 	})
 	require.NoError(t, env.rawRepo.Save(ctx, rec1))
-	_, err := env.processor.ProcessRun(ctx, run1.ID, testProcessRunOptions())
+	_, err := env.processor.ProcessRun(ctx, run1.ID, testProcessRunOptions(t))
 	require.NoError(t, err)
 
 	// Run 2: Price changes from 129.99 to 99.99 (gotcha #1: price is not in canonical fingerprint)
@@ -758,11 +760,11 @@ func TestProcessRunRecords_PriceOnlyChange(t *testing.T) {
 	})
 	require.NoError(t, env.rawRepo.Save(ctx, rec2))
 
-	res2, err := env.processor.ProcessRun(ctx, run2.ID, testProcessRunOptions())
+	res2, err := env.processor.ProcessRun(ctx, run2.ID, testProcessRunOptions(t))
 	require.NoError(t, err)
 
-	assert.Equal(t, 1, res2.RecordsUnchanged, "price change must not create new version")
-	assert.Equal(t, 0, res2.RecordsChanged)
+	assert.Equal(t, 1, res2.Unchanged, "price change must not create new version")
+	assert.Equal(t, 0, res2.Changed)
 
 	var verCount int
 	require.NoError(t, env.pool.QueryRow(ctx, "SELECT count(*) FROM product_versions").Scan(&verCount))
@@ -803,7 +805,7 @@ func TestProcessRunRecords_CancelAndResume(t *testing.T) {
 	cancellingProcessor, err := appProduct.NewRunProcessor(env.runRepo, env.sourceRepo, env.rawRepo, env.processingRepo, cancellingRunner)
 	require.NoError(t, err)
 
-	_, err = cancellingProcessor.ProcessRun(cancelCtx, run.ID, testProcessRunOptions(func(o *appProduct.ProcessRunOptions) {
+	_, err = cancellingProcessor.ProcessRun(cancelCtx, run.ID, testProcessRunOptions(t, func(o *appProduct.ProcessRunOptions) {
 		o.BatchSize = 1
 	}))
 	require.Error(t, err)
@@ -812,7 +814,7 @@ func TestProcessRunRecords_CancelAndResume(t *testing.T) {
 	rp, err := env.processingRepo.GetByID(ctx, run.ID)
 	require.NoError(t, err)
 	assert.Equal(t, domainIngestion.ProcessingPending, rp.Status)
-	assert.Equal(t, 3, rp.RecordsSeen)
+	assert.Equal(t, 3, rp.Seen)
 
 	// Check committed products exist in database
 	var prodCountMid int
@@ -820,12 +822,12 @@ func TestProcessRunRecords_CancelAndResume(t *testing.T) {
 	assert.Equal(t, 3, prodCountMid)
 
 	// Resume on live context using the standard processor
-	res, err := env.processor.ProcessRun(ctx, run.ID, testProcessRunOptions(func(o *appProduct.ProcessRunOptions) {
+	res, err := env.processor.ProcessRun(ctx, run.ID, testProcessRunOptions(t, func(o *appProduct.ProcessRunOptions) {
 		o.BatchSize = 2
 	}))
 	require.NoError(t, err)
-	assert.Equal(t, 10, res.RecordsSeen)
-	assert.Equal(t, 10, res.RecordsNew)
+	assert.Equal(t, 10, res.Seen)
+	assert.Equal(t, 10, res.New)
 
 	// Verify exactly 10 products and 10 versions in DB without duplicates
 	var totalProds, totalVers int
@@ -870,12 +872,12 @@ func TestWorker_ClaimNext_Then_ProcessRun(t *testing.T) {
 	assert.Equal(t, domainIngestion.ProcessingRunning, claimed.Status)
 
 	// Worker step 2: ProcessRun using the claimed token
-	res, err := env.processor.ProcessRun(ctx, claimed.RunID, testProcessRunOptions(func(o *appProduct.ProcessRunOptions) {
+	res, err := env.processor.ProcessRun(ctx, claimed.RunID, testProcessRunOptions(t, func(o *appProduct.ProcessRunOptions) {
 		o.ClaimToken = claimToken
 	}))
 	require.NoError(t, err)
-	assert.Equal(t, 5, res.RecordsSeen)
-	assert.Equal(t, 5, res.RecordsNew)
+	assert.Equal(t, 5, res.Seen)
+	assert.Equal(t, 5, res.New)
 
 	// Verify run state is now COMPLETED
 	finalRp, err := env.processingRepo.GetByID(ctx, run.ID)
@@ -901,7 +903,7 @@ func TestProcessRunRecords_FingerprintVersionMismatch(t *testing.T) {
 		ReceivedAt:        now,
 	})
 	require.NoError(t, env.rawRepo.Save(ctx, rec1))
-	_, err := env.processor.ProcessRun(ctx, run1.ID, testProcessRunOptions())
+	_, err := env.processor.ProcessRun(ctx, run1.ID, testProcessRunOptions(t))
 	require.NoError(t, err)
 
 	// Manually corrupt the current_fingerprint to a legacy "v0:..." format
@@ -921,11 +923,11 @@ func TestProcessRunRecords_FingerprintVersionMismatch(t *testing.T) {
 	})
 	require.NoError(t, env.rawRepo.Save(ctx, rec2))
 
-	res2, err := env.processor.ProcessRun(ctx, run2.ID, testProcessRunOptions())
+	res2, err := env.processor.ProcessRun(ctx, run2.ID, testProcessRunOptions(t))
 	require.NoError(t, err)
 
-	assert.Equal(t, 1, res2.RecordsUnchanged)
-	assert.Equal(t, 0, res2.RecordsChanged)
+	assert.Equal(t, 1, res2.Unchanged)
+	assert.Equal(t, 0, res2.Changed)
 
 	// Verify fingerprint was upgraded to v1 without creating a new version or change record
 	updatedSnap := findTestSnapshot(t, ctx, env, sourceID, "ext-legacy-1")
@@ -986,11 +988,11 @@ func TestE2E_IngestTwice_OnlyChangedVersioned(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, domainIngestion.StatusCompleted, run1.Status)
 
-	res1, err := env.processor.ProcessRun(ctx, run1.ID, testProcessRunOptions(func(o *appProduct.ProcessRunOptions) {
+	res1, err := env.processor.ProcessRun(ctx, run1.ID, testProcessRunOptions(t, func(o *appProduct.ProcessRunOptions) {
 		o.BatchSize = 25
 	}))
 	require.NoError(t, err)
-	assert.Equal(t, 100, res1.RecordsNew)
+	assert.Equal(t, 100, res1.New)
 
 	// Feed 2: 100 products where 95 are identical and 5 (indices 0..4) have changed title/color
 	t2 := time.Date(2026, 9, 24, 12, 0, 0, 0, time.UTC)
@@ -1028,15 +1030,15 @@ func TestE2E_IngestTwice_OnlyChangedVersioned(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, domainIngestion.StatusCompleted, run2.Status)
 
-	res2, err := env.processor.ProcessRun(ctx, run2.ID, testProcessRunOptions(func(o *appProduct.ProcessRunOptions) {
+	res2, err := env.processor.ProcessRun(ctx, run2.ID, testProcessRunOptions(t, func(o *appProduct.ProcessRunOptions) {
 		o.BatchSize = 25
 	}))
 	require.NoError(t, err)
 
-	assert.Equal(t, 100, res2.RecordsSeen)
-	assert.Equal(t, 0, res2.RecordsNew)
-	assert.Equal(t, 5, res2.RecordsChanged)
-	assert.Equal(t, 95, res2.RecordsUnchanged)
+	assert.Equal(t, 100, res2.Seen)
+	assert.Equal(t, 0, res2.New)
+	assert.Equal(t, 5, res2.Changed)
+	assert.Equal(t, 95, res2.Unchanged)
 
 	// Verify exactly 105 total versions exist in database (100 from run1 + 5 from run2)
 	var totalVersions int
@@ -1049,59 +1051,52 @@ func TestE2E_IngestTwice_OnlyChangedVersioned(t *testing.T) {
 	assert.Equal(t, 105, totalOutbox)
 }
 
+// Option validation runs before any repository call, so it needs no database.
 func TestProcessRun_ValidationRejectsInvalidOptions(t *testing.T) {
-	env := setupLiveTestEnv(t)
-	ctx := context.Background()
+	t.Parallel()
+	proc, err := appProduct.NewRunProcessor(unusedRunRepo{}, unusedSourceRepo{}, unusedRawRepo{}, unusedProcessingRepo{}, unusedTxRunner{})
+	require.NoError(t, err)
 
-	sourceID := "src-val-opts"
-	createTestSource(t, ctx, env, sourceID)
-	run := createTestRun(t, ctx, env, sourceID)
-
-	validBudget := domainIngestion.ErrorBudget{MaxErrorRate: 0.10, MinSampleRows: 10}
-
-	// 1. Empty Run ID
-	_, err := env.processor.ProcessRun(ctx, "", appProduct.ProcessRunOptions{
-		ClaimToken:    "token-1",
-		LeaseDuration: 30 * time.Second,
-		BatchSize:     50,
-		ErrorBudget:   validBudget,
-	})
-	require.ErrorIs(t, err, domainIngestion.ErrInvalidRunID)
-
-	// 2. Empty Claim Token
-	_, err = env.processor.ProcessRun(ctx, run.ID, appProduct.ProcessRunOptions{
-		ClaimToken:    "",
-		LeaseDuration: 30 * time.Second,
-		BatchSize:     50,
-		ErrorBudget:   validBudget,
-	})
-	require.ErrorIs(t, err, domainIngestion.ErrInvalidClaimToken)
-
-	// 3. Zero Lease Duration
-	_, err = env.processor.ProcessRun(ctx, run.ID, appProduct.ProcessRunOptions{
-		ClaimToken:    "token-1",
-		LeaseDuration: 0,
-		BatchSize:     50,
-		ErrorBudget:   validBudget,
-	})
-	require.ErrorIs(t, err, domainIngestion.ErrInvalidLeaseDuration)
-
-	// 4. Zero Batch Size
-	_, err = env.processor.ProcessRun(ctx, run.ID, appProduct.ProcessRunOptions{
-		ClaimToken:    "token-1",
-		LeaseDuration: 30 * time.Second,
-		BatchSize:     0,
-		ErrorBudget:   validBudget,
-	})
-	require.ErrorIs(t, err, domainIngestion.ErrInvalidBatchSize)
-
-	// 5. Invalid Error Budget
-	_, err = env.processor.ProcessRun(ctx, run.ID, appProduct.ProcessRunOptions{
-		ClaimToken:    "token-1",
-		LeaseDuration: 30 * time.Second,
-		BatchSize:     50,
-		ErrorBudget:   domainIngestion.ErrorBudget{},
-	})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "invalid error budget")
+	valid := func() appProduct.ProcessRunOptions {
+		return appProduct.ProcessRunOptions{
+			ClaimToken:    "token-1",
+			LeaseDuration: 30 * time.Second,
+			BatchSize:     50,
+			ErrorBudget:   domainIngestion.ErrorBudget{MaxErrorRate: 0.10, MinSampleRows: 10},
+		}
+	}
+	cases := []struct {
+		name  string
+		runID string
+		alter func(*appProduct.ProcessRunOptions)
+		want  error
+	}{
+		{"empty run id", "", func(*appProduct.ProcessRunOptions) {}, domainIngestion.ErrInvalidRunID},
+		{"empty claim token", "run-1", func(o *appProduct.ProcessRunOptions) { o.ClaimToken = "" }, domainIngestion.ErrInvalidClaimToken},
+		{"zero lease", "run-1", func(o *appProduct.ProcessRunOptions) { o.LeaseDuration = 0 }, domainIngestion.ErrInvalidLeaseDuration},
+		{"zero batch size", "run-1", func(o *appProduct.ProcessRunOptions) { o.BatchSize = 0 }, domainIngestion.ErrInvalidBatchSize},
+		{"zero error budget", "run-1", func(o *appProduct.ProcessRunOptions) { o.ErrorBudget = domainIngestion.ErrorBudget{} }, domainIngestion.ErrInvalidErrorBudget},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			opts := valid()
+			tc.alter(&opts)
+			_, err := proc.ProcessRun(context.Background(), tc.runID, opts)
+			require.ErrorIs(t, err, tc.want)
+		})
+	}
 }
+
+// The unused* stubs satisfy NewRunProcessor; any call on them panics, proving validation
+// returned before touching a dependency.
+type (
+	unusedRunRepo    struct{ domainIngestion.Repository }
+	unusedSourceRepo struct{ domainSource.Repository }
+	unusedRawRepo    struct {
+		domainIngestion.RawRecordRepository
+	}
+	unusedProcessingRepo struct {
+		domainIngestion.RunProcessingRepository
+	}
+	unusedTxRunner struct{ appProduct.TxRunner }
+)

@@ -2,7 +2,6 @@ package uuid
 
 import (
 	"crypto/rand"
-	"errors"
 	"fmt"
 )
 
@@ -29,24 +28,4 @@ func NewString() (string, error) {
 // Format converts a 16-byte UUID array into standard hyphenated string representation.
 func Format(b [16]byte) string {
 	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
-}
-
-// Validate checks whether s is a valid 36-character hyphenated UUID string.
-func Validate(s string) error {
-	if len(s) != 36 {
-		return errors.New("uuid string must be exactly 36 characters")
-	}
-	if s[8] != '-' || s[13] != '-' || s[18] != '-' || s[23] != '-' {
-		return errors.New("invalid uuid format: missing hyphen")
-	}
-	for i := 0; i < 36; i++ {
-		if i == 8 || i == 13 || i == 18 || i == 23 {
-			continue
-		}
-		c := s[i]
-		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
-			return fmt.Errorf("invalid uuid character %c at position %d", c, i)
-		}
-	}
-	return nil
 }

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ayo6706/cross-border-ecommerce/internal/domain/ingestion"
 	"github.com/ayo6706/cross-border-ecommerce/internal/platform/backoff"
 )
 
@@ -112,21 +113,6 @@ func (w WorkerConfig) Validate() error {
 	return nil
 }
 
-func (w WorkerConfig) ValidateAgainstDBPool(dbMaxConns int32) error {
-	if err := w.Validate(); err != nil {
-		return err
-	}
-	if dbMaxConns <= 0 {
-		return fmt.Errorf("%w: database max connections must be strictly positive, got %d", ErrInvalidWorkerConfig, dbMaxConns)
-	}
-	maxAllowed := int(float64(dbMaxConns) * 0.8)
-	if w.Concurrency > maxAllowed {
-		return fmt.Errorf("%w: WORKER_CONCURRENCY (%d) exceeds 80%% of DB_MAX_CONNS (%d, max %d)",
-			ErrInvalidWorkerConfig, w.Concurrency, dbMaxConns, maxAllowed)
-	}
-	return nil
-}
-
 type OutboxConfig struct {
 	BatchSize    int
 	PollInterval time.Duration
@@ -163,14 +149,13 @@ type IngestionConfig struct {
 	ErrorBudgetMinRows int
 }
 
-func (i IngestionConfig) Validate() error {
-	if i.ErrorBudgetMaxRate <= 0 || i.ErrorBudgetMaxRate >= 1.0 {
-		return fmt.Errorf("ingestion error budget max rate must be between 0 and 1, got %f", i.ErrorBudgetMaxRate)
+// ErrorBudget builds the run error budget. Its bounds are owned by ingestion.ErrorBudget.
+func (i IngestionConfig) ErrorBudget() (ingestion.ErrorBudget, error) {
+	budget, err := ingestion.NewErrorBudget(i.ErrorBudgetMaxRate, i.ErrorBudgetMinRows)
+	if err != nil {
+		return ingestion.ErrorBudget{}, fmt.Errorf("INGESTION_ERROR_BUDGET_*: %w", err)
 	}
-	if i.ErrorBudgetMinRows <= 0 {
-		return fmt.Errorf("ingestion error budget min rows must be positive, got %d", i.ErrorBudgetMinRows)
-	}
-	return nil
+	return budget, nil
 }
 
 type Config struct {
@@ -471,7 +456,7 @@ func (c *Config) Validate() error {
 		return err
 	}
 
-	if err := c.Ingestion.Validate(); err != nil {
+	if _, err := c.Ingestion.ErrorBudget(); err != nil {
 		return err
 	}
 

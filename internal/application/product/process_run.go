@@ -21,12 +21,8 @@ type ProcessRunOptions struct {
 }
 
 type ProcessRunResult struct {
-	RunID            string
-	RecordsSeen      int
-	RecordsNew       int
-	RecordsChanged   int
-	RecordsUnchanged int
-	RecordsFailed    int
+	RunID string
+	domainIngestion.BatchMetrics
 }
 
 type RunProcessor struct {
@@ -214,23 +210,12 @@ func (p *RunProcessor) ProcessRun(ctx context.Context, runID string, opts Proces
 		cursorID = &lastRecordID
 	}
 
-	if err := p.completeRun(ctx, trimmedRunID, claimToken); err != nil {
+	finalState, err := p.completeRun(ctx, trimmedRunID, claimToken)
+	if err != nil {
 		return nil, fmt.Errorf("complete run processing: %w", err)
 	}
 
-	finalState, err := p.getFinalState(ctx, trimmedRunID)
-	if err != nil {
-		return nil, fmt.Errorf("get final processing state: %w", err)
-	}
-
-	return &ProcessRunResult{
-		RunID:            trimmedRunID,
-		RecordsSeen:      finalState.RecordsSeen,
-		RecordsNew:       finalState.RecordsNew,
-		RecordsChanged:   finalState.RecordsChanged,
-		RecordsUnchanged: finalState.RecordsUnchanged,
-		RecordsFailed:    finalState.RecordsFailed,
-	}, nil
+	return &ProcessRunResult{RunID: trimmedRunID, BatchMetrics: finalState.BatchMetrics}, nil
 }
 
 // finalWriteTimeout bounds the writes that finalize a run's state; they run even after the
@@ -253,16 +238,10 @@ func (p *RunProcessor) failRun(ctx context.Context, runID, claimToken, reason st
 	return p.processingRepo.Fail(cleanupCtx, runID, claimToken, reason)
 }
 
-func (p *RunProcessor) completeRun(ctx context.Context, runID, claimToken string) error {
+func (p *RunProcessor) completeRun(ctx context.Context, runID, claimToken string) (*domainIngestion.RunProcessing, error) {
 	cleanupCtx, cancel := finalWriteContext(ctx)
 	defer cancel()
 	return p.processingRepo.Complete(cleanupCtx, runID, claimToken)
-}
-
-func (p *RunProcessor) getFinalState(ctx context.Context, runID string) (*domainIngestion.RunProcessing, error) {
-	cleanupCtx, cancel := finalWriteContext(ctx)
-	defer cancel()
-	return p.processingRepo.GetByID(cleanupCtx, runID)
 }
 
 //nolint:funlen,gocognit // legacy baseline 2026-09-26: fix in ENG-044
@@ -317,27 +296,12 @@ func (p *RunProcessor) processPageWithRetry(
 				}
 			}
 
-			newCount := 0
-			changedCount := 0
-			unchangedCount := 0
+			page := domainIngestion.BatchMetrics{Seen: totalSeenInPage, Failed: failedInPage}
 			if plan != nil {
-				newCount = plan.New
-				changedCount = plan.Changed
-				unchangedCount = plan.Unchanged
+				page.New, page.Changed, page.Unchanged = plan.New, plan.Changed, plan.Unchanged
 			}
 
-			rp, err := repos.RunProcessing.UpdateProgress(
-				ctx,
-				runID,
-				claimToken,
-				totalSeenInPage,
-				newCount,
-				changedCount,
-				unchangedCount,
-				failedInPage,
-				&lastRecordID,
-				leaseDuration,
-			)
+			rp, err := repos.RunProcessing.UpdateProgress(ctx, runID, claimToken, page, &lastRecordID, leaseDuration)
 			if err != nil {
 				return err
 			}
@@ -347,9 +311,9 @@ func (p *RunProcessor) processPageWithRetry(
 
 		if err == nil {
 			if updatedRp == nil {
-				return nil, errors.New("transaction committed but updated progress was nil")
+				return nil, domainIngestion.ErrProgressNotReturned
 			}
-			if budgetErr := errorBudget.Check(updatedRp.RecordsSeen, updatedRp.RecordsFailed); budgetErr != nil {
+			if budgetErr := errorBudget.Check(updatedRp.Seen, updatedRp.Failed); budgetErr != nil {
 				return nil, budgetErr
 			}
 			return updatedRp, nil

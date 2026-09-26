@@ -451,37 +451,6 @@ func TestConfig_ValidationFailures(t *testing.T) {
 	}
 }
 
-func TestWorkerConfig_ValidateWithDBMaxConns(t *testing.T) {
-	t.Parallel()
-
-	w := config.WorkerConfig{
-		Concurrency:  25,
-		QueueSize:    10,
-		DrainTimeout: 5 * time.Second,
-	}
-
-	if err := w.Validate(); err != nil {
-		t.Fatalf("expected valid WorkerConfig, got %v", err)
-	}
-
-	// dbMaxConns <= 0 must fail loudly
-	if err := w.ValidateAgainstDBPool(0); !errors.Is(err, config.ErrInvalidWorkerConfig) {
-		t.Fatalf("expected ErrInvalidWorkerConfig for maxConns=0, got %v", err)
-	}
-
-	// 25 exceeds 80% of 25 (20)
-	err := w.ValidateAgainstDBPool(25)
-	if !errors.Is(err, config.ErrInvalidWorkerConfig) {
-		t.Fatalf("expected ErrInvalidWorkerConfig, got %v", err)
-	}
-
-	// 25 is within 80% of 50 (40)
-	err = w.ValidateAgainstDBPool(50)
-	if err != nil {
-		t.Fatalf("expected nil error when concurrency <= 80%% of db max conns, got %v", err)
-	}
-}
-
 func TestLoad_InvalidEnvironmentValues(t *testing.T) {
 	t.Parallel()
 

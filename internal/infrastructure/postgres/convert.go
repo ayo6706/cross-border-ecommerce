@@ -6,6 +6,7 @@ import (
 	"math"
 	"time"
 
+	"github.com/ayo6706/cross-border-ecommerce/internal/domain/ingestion"
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
@@ -33,18 +34,18 @@ type runCounters struct {
 	seen, newRecords, changed, unchanged, failed int32
 }
 
-func toRunCounters(seen, newRecords, changed, unchanged, failed int) (runCounters, error) {
+func toRunCounters(m ingestion.BatchMetrics) (runCounters, error) {
 	var c runCounters
 	fields := []struct {
 		dst  *int32
 		val  int
 		name string
 	}{
-		{&c.seen, seen, "seen"},
-		{&c.newRecords, newRecords, "new"},
-		{&c.changed, changed, "changed"},
-		{&c.unchanged, unchanged, "unchanged"},
-		{&c.failed, failed, "failed"},
+		{&c.seen, m.Seen, "seen"},
+		{&c.newRecords, m.New, "new"},
+		{&c.changed, m.Changed, "changed"},
+		{&c.unchanged, m.Unchanged, "unchanged"},
+		{&c.failed, m.Failed, "failed"},
 	}
 	for _, f := range fields {
 		v, err := toInt32(f.val)

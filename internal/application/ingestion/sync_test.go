@@ -114,8 +114,8 @@ func TestSyncCoordinator_SyncSource(t *testing.T) {
 		if run.Status != ingestion.StatusCompleted {
 			t.Errorf("expected status COMPLETED, got %s", run.Status)
 		}
-		if run.RecordsSeen != 3 {
-			t.Errorf("expected 3 records seen, got %d", run.RecordsSeen)
+		if run.Seen != 3 {
+			t.Errorf("expected 3 records seen, got %d", run.Seen)
 		}
 		if run.Checkpoint != "cp-page-final" {
 			t.Errorf("expected final checkpoint cp-page-final, got %s", run.Checkpoint)
@@ -177,8 +177,8 @@ func TestSyncCoordinator_SyncSource(t *testing.T) {
 		if dbRun.Checkpoint != "cp-batch-1-ok" {
 			t.Errorf("expected checkpoint to be cp-batch-1-ok, got %s", dbRun.Checkpoint)
 		}
-		if dbRun.RecordsSeen != 1 {
-			t.Errorf("expected 1 record seen from batch 1, got %d", dbRun.RecordsSeen)
+		if dbRun.Seen != 1 {
+			t.Errorf("expected 1 record seen from batch 1, got %d", dbRun.Seen)
 		}
 
 		// Exactly 1 record saved
@@ -262,8 +262,8 @@ func TestSyncCoordinator_SyncSource(t *testing.T) {
 		if run.Status != ingestion.StatusPartial {
 			t.Errorf("expected status PARTIAL, got %s", run.Status)
 		}
-		if run.RecordsSeen != 100 || run.RecordsFailed != 1 {
-			t.Errorf("expected 100 seen and 1 failed, got %d seen and %d failed", run.RecordsSeen, run.RecordsFailed)
+		if run.Seen != 100 || run.Failed != 1 {
+			t.Errorf("expected 100 seen and 1 failed, got %d seen and %d failed", run.Seen, run.Failed)
 		}
 		if len(rawRepo.records) != 99 {
 			t.Errorf("expected 99 raw records saved, got %d", len(rawRepo.records))
@@ -299,9 +299,9 @@ func TestSyncCoordinator_SyncSource(t *testing.T) {
 		if dbRun.Status != ingestion.StatusFailed {
 			t.Errorf("expected status FAILED, got %s", dbRun.Status)
 		}
-		if dbRun.RecordsSeen != 15 || dbRun.RecordsFailed != 7 {
+		if dbRun.Seen != 15 || dbRun.Failed != 7 {
 			t.Errorf("expected progress of the failing batch to be recorded (15 seen, 7 failed), got %d seen, %d failed",
-				dbRun.RecordsSeen, dbRun.RecordsFailed)
+				dbRun.Seen, dbRun.Failed)
 		}
 	})
 

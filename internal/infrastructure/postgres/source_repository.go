@@ -125,7 +125,7 @@ func (r *SourceRepository) Save(ctx context.Context, s *source.Source) error {
 
 	createdAt, updatedAt, err := requiredAuditTimestamps(s.CreatedAt, s.UpdatedAt)
 	if err != nil {
-		return fmt.Errorf("source %w", err)
+		return fmt.Errorf("%w: source %w", source.ErrInvalidSourceState, err)
 	}
 
 	saved, err := r.queries.UpsertSource(ctx, generated.UpsertSourceParams{

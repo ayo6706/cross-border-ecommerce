@@ -195,7 +195,7 @@ func TestOutboxRelay_Live(t *testing.T) {
 			ErrorBudget:   domainIngestion.ErrorBudget{MaxErrorRate: 0.10, MinSampleRows: 10},
 		})
 		require.NoError(t, err)
-		assert.Equal(t, 1, result.RecordsNew)
+		assert.Equal(t, 1, result.New)
 
 		// Check outbox row created in DB
 		var eventID, status string
@@ -484,7 +484,7 @@ func TestOutboxRelay_Live(t *testing.T) {
 			ErrorBudget:   domainIngestion.ErrorBudget{MaxErrorRate: 0.10, MinSampleRows: 10},
 		})
 		require.NoError(t, err)
-		assert.Equal(t, totalProducts, result.RecordsNew)
+		assert.Equal(t, totalProducts, result.New)
 
 		// 2. Run Outbox Relay -> Publishes batch to Redis Stream 'product.changed' and marks outbox rows PROCESSED
 		relayCfg := appOutbox.RelayConfig{

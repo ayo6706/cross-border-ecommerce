@@ -93,7 +93,7 @@ func TestIngestionRun_LifecycleSuccess(t *testing.T) {
 	if err := run.RecordBatch(batch1, "chk-100", now.Add(time.Second)); err != nil {
 		t.Fatalf("unexpected error recording batch 1: %v", err)
 	}
-	if run.RecordsSeen != 100 || run.RecordsNew != 20 || run.RecordsChanged != 10 || run.RecordsUnchanged != 70 {
+	if run.Seen != 100 || run.New != 20 || run.Changed != 10 || run.Unchanged != 70 {
 		t.Fatalf("unexpected metrics after batch 1: %+v", run)
 	}
 	if run.Checkpoint != "chk-100" {
@@ -111,7 +111,7 @@ func TestIngestionRun_LifecycleSuccess(t *testing.T) {
 	if err := run.RecordBatch(batch2, "chk-150", now.Add(2*time.Second)); err != nil {
 		t.Fatalf("unexpected error recording batch 2: %v", err)
 	}
-	if run.RecordsSeen != 150 || run.RecordsNew != 30 || run.RecordsChanged != 15 || run.RecordsUnchanged != 105 {
+	if run.Seen != 150 || run.New != 30 || run.Changed != 15 || run.Unchanged != 105 {
 		t.Fatalf("unexpected metrics after batch 2: %+v", run)
 	}
 

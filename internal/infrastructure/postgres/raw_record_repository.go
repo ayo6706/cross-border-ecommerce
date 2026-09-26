@@ -153,7 +153,7 @@ func toCreateParams(record *ingestion.RawRecord) (generated.CreateRawRecordParam
 
 	receivedAt, err := requiredTimestamptz(record.ReceivedAt)
 	if err != nil {
-		return generated.CreateRawRecordParams{}, fmt.Errorf("received_at: %w", err)
+		return generated.CreateRawRecordParams{}, fmt.Errorf("%w: received_at: %w", ingestion.ErrInvalidRecordState, err)
 	}
 
 	return generated.CreateRawRecordParams{

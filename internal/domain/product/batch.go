@@ -10,7 +10,7 @@ import (
 )
 
 func IdentityKey(sourceID, externalProductID string) string {
-	return strings.TrimSpace(sourceID) + "\x00" + strings.TrimSpace(externalProductID)
+	return sourceID + "\x00" + externalProductID
 }
 
 type IdentityRef struct {
@@ -29,6 +29,8 @@ type BatchIncomingRecord struct {
 	IngestionRunID    string
 }
 
+// BatchMetrics counts records by change-detection outcome. It is the one declaration of the
+// run counters: ingestion runs, run processing and the batch plan all use it.
 type BatchMetrics struct {
 	Seen      int
 	New       int
@@ -96,7 +98,7 @@ type BatchPlan struct {
 // alone; the rows to write are then derived once, from the identity's state before and after.
 func DecideBatch(snapshots map[string]*Snapshot, incoming []BatchIncomingRecord, now time.Time) (*BatchPlan, error) {
 	if now.IsZero() {
-		return nil, ErrZeroTimestamp
+		return nil, fmt.Errorf("%w: now cannot be zero", ErrInvalidProductState)
 	}
 	plan := &BatchPlan{
 		BatchMetrics: BatchMetrics{
@@ -128,9 +130,7 @@ func groupByIdentity(records []BatchIncomingRecord) []identityGroup {
 	index := make(map[string]int)
 	var groups []identityGroup
 	for i := range records {
-		rec := records[i] // a copy: trimming must not mutate the caller's page
-		rec.SourceID = strings.TrimSpace(rec.SourceID)
-		rec.ExternalProductID = strings.TrimSpace(rec.ExternalProductID)
+		rec := &records[i]
 		key := IdentityKey(rec.SourceID, rec.ExternalProductID)
 		i, ok := index[key]
 		if !ok {
@@ -138,7 +138,7 @@ func groupByIdentity(records []BatchIncomingRecord) []identityGroup {
 			index[key] = i
 			groups = append(groups, identityGroup{key: key, sourceID: rec.SourceID, externalProductID: rec.ExternalProductID})
 		}
-		groups[i].records = append(groups[i].records, rec)
+		groups[i].records = append(groups[i].records, *rec)
 	}
 	for _, g := range groups {
 		slices.SortStableFunc(g.records, compareProcessingOrder)

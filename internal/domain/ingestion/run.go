@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ayo6706/cross-border-ecommerce/internal/domain/product"
 	"github.com/ayo6706/cross-border-ecommerce/internal/domain/source"
 	"github.com/ayo6706/cross-border-ecommerce/internal/platform/uuid"
 )
@@ -20,36 +21,20 @@ const (
 	StatusCancelled RunStatus = "CANCELLED"
 )
 
-type BatchMetrics struct {
-	Seen      int
-	New       int
-	Changed   int
-	Unchanged int
-	Failed    int
-}
-
-func (m BatchMetrics) Validate() error {
-	if m.Seen < 0 || m.New < 0 || m.Changed < 0 || m.Unchanged < 0 || m.Failed < 0 {
-		return ErrNegativeMetric
-	}
-	return nil
-}
+// BatchMetrics is declared once, in the product domain, which owns the outcome categories.
+type BatchMetrics = product.BatchMetrics
 
 type IngestionRun struct {
-	ID               string
-	SourceID         source.ID
-	Status           RunStatus
-	Checkpoint       string
-	RecordsSeen      int
-	RecordsNew       int
-	RecordsChanged   int
-	RecordsUnchanged int
-	RecordsFailed    int
-	ErrorSummary     string
-	StartedAt        *time.Time
-	CompletedAt      *time.Time
-	CreatedAt        time.Time
-	UpdatedAt        time.Time
+	ID         string
+	SourceID   source.ID
+	Status     RunStatus
+	Checkpoint string
+	BatchMetrics
+	ErrorSummary string
+	StartedAt    *time.Time
+	CompletedAt  *time.Time
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
 }
 
 func NewRun(id string, sourceID source.ID, initialCheckpoint string) (*IngestionRun, error) {
@@ -116,11 +101,11 @@ func (r *IngestionRun) RecordBatch(metrics BatchMetrics, nextCheckpoint string, 
 		return err
 	}
 
-	r.RecordsSeen += metrics.Seen
-	r.RecordsNew += metrics.New
-	r.RecordsChanged += metrics.Changed
-	r.RecordsUnchanged += metrics.Unchanged
-	r.RecordsFailed += metrics.Failed
+	r.Seen += metrics.Seen
+	r.New += metrics.New
+	r.Changed += metrics.Changed
+	r.Unchanged += metrics.Unchanged
+	r.Failed += metrics.Failed
 
 	if trimmed := strings.TrimSpace(nextCheckpoint); trimmed != "" {
 		r.Checkpoint = trimmed
@@ -147,7 +132,7 @@ func (r *IngestionRun) Complete(finalCheckpoint string, now time.Time) error {
 		return ErrInvalidTransition
 	}
 
-	if r.RecordsFailed > 0 {
+	if r.Failed > 0 {
 		r.Status = StatusPartial
 	} else {
 		r.Status = StatusCompleted

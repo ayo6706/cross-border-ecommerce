@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	appOutbox "github.com/ayo6706/cross-border-ecommerce/internal/application/outbox"
 	domainProduct "github.com/ayo6706/cross-border-ecommerce/internal/domain/product"
 	"github.com/ayo6706/cross-border-ecommerce/internal/infrastructure/postgres"
 	"github.com/ayo6706/cross-border-ecommerce/internal/platform/uuid"
@@ -230,6 +231,34 @@ func TestOutboxStore_Live(t *testing.T) {
 		affected, err = repo.MarkPublished(ctx, tokenB, []string{eventsB[0].ID})
 		require.NoError(t, err)
 		assert.Equal(t, int64(1), affected)
+	})
+
+	// Regression (P11): a relay whose claim was taken over must not record a failure on the
+	// new owner's row, and must not report success either.
+	t.Run("record_failure_with_lost_claim", func(t *testing.T) {
+		_, err := pool.Exec(ctx, "TRUNCATE outbox_events CASCADE")
+		require.NoError(t, err)
+		createTestOutboxEvent(t, ctx, repo, "prod-lost-claim")
+
+		staleToken, err := uuid.NewString()
+		require.NoError(t, err)
+		events, err := repo.ClaimBatch(ctx, staleToken, 10, time.Millisecond)
+		require.NoError(t, err)
+		require.Len(t, events, 1)
+		time.Sleep(5 * time.Millisecond) // let the 1 ms lease expire so another relay can claim
+
+		owner, err := uuid.NewString()
+		require.NoError(t, err)
+		reclaimed, err := repo.ClaimBatch(ctx, owner, 10, time.Minute)
+		require.NoError(t, err)
+		require.Len(t, reclaimed, 1)
+
+		err = repo.RecordFailure(ctx, staleToken, events[0].ID, "late failure", 5, time.Second)
+		require.ErrorIs(t, err, appOutbox.ErrClaimLost)
+
+		var retries int
+		require.NoError(t, pool.QueryRow(ctx, "SELECT retry_count FROM outbox_events WHERE id = $1", events[0].ID).Scan(&retries))
+		assert.Equal(t, 0, retries, "the stale relay must not bump the new owner's retry count")
 	})
 
 	// I4: Max attempts reached: FAILED and never claimed again; bad status is rejected by CHECK (SQLSTATE 23514)

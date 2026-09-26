@@ -19,7 +19,7 @@ func TestDecideBatch_Empty(t *testing.T) {
 
 func TestDecideBatch_ZeroNowReturnsError(t *testing.T) {
 	_, err := domainProduct.DecideBatch(nil, nil, time.Time{})
-	require.ErrorIs(t, err, domainProduct.ErrZeroTimestamp)
+	require.ErrorIs(t, err, domainProduct.ErrInvalidProductState)
 }
 
 func TestDecideBatch_AllNew(t *testing.T) {

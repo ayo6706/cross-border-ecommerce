@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/ayo6706/cross-border-ecommerce/internal/infrastructure/postgres"
 	"github.com/ayo6706/cross-border-ecommerce/migrations"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -150,6 +152,8 @@ func TestMigrator_LiveLifecycle(t *testing.T) {
 	}
 	assertMigrationVersion(ctx, t, migrator, latestVersion)
 
+	indexesAfterUp := indexDefinitions(ctx, t, pool)
+
 	// Step 2: Verify required tables exist
 	requiredTables := []string{"sources", "products", "product_versions", "outbox_events", "ingestion_runs", "raw_records", "schema_migrations", "idempotency_keys", "dlq_messages"}
 	for _, table := range requiredTables {
@@ -192,6 +196,32 @@ func TestMigrator_LiveLifecycle(t *testing.T) {
 		t.Fatalf("re-applying all migrations failed: %v", err)
 	}
 	assertMigrationVersion(ctx, t, migrator, latestVersion)
+	if got := indexDefinitions(ctx, t, pool); !slices.Equal(got, indexesAfterUp) {
+		t.Fatalf("index set after up -> down -> up differs:\nfirst: %v\nagain: %v", indexesAfterUp, got)
+	}
+}
+
+// indexDefinitions returns every index definition in the public schema, sorted, and fails the
+// test if any index is invalid (a half-built concurrent index).
+func indexDefinitions(ctx context.Context, t *testing.T, pool *pgxpool.Pool) []string {
+	t.Helper()
+	var invalid int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
+		JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND NOT i.indisvalid`).Scan(&invalid); err != nil {
+		t.Fatalf("count invalid indexes: %v", err)
+	}
+	if invalid != 0 {
+		t.Fatalf("%d invalid index(es) in public schema", invalid)
+	}
+	rows, err := pool.Query(ctx, "SELECT indexdef FROM pg_indexes WHERE schemaname = 'public' ORDER BY indexdef")
+	if err != nil {
+		t.Fatalf("list indexes: %v", err)
+	}
+	defs, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		t.Fatalf("scan indexes: %v", err)
+	}
+	return defs
 }
 
 func assertMigrationVersion(ctx context.Context, t *testing.T, migrator *postgres.Migrator, want int64) {
@@ -267,6 +297,26 @@ func TestMigrator_DiscoverMigrations_NoTransactionDirective(t *testing.T) {
 			script:  "-- migrate:no-transaction\nDO $$ BEGIN PERFORM 1; END $$;",
 			wantErr: postgres.ErrInvalidNoTxMigration,
 		},
+		"CRLF line endings": {
+			script:   "-- migrate:no-transaction\r\nDROP INDEX CONCURRENTLY IF EXISTS idx_a;\r\n",
+			wantNoTx: true,
+		},
+		"leading byte order mark": {
+			script:   "\ufeff-- migrate:no-transaction\nDROP INDEX CONCURRENTLY IF EXISTS idx_a;",
+			wantNoTx: true,
+		},
+		"doubled quotes and quoted identifiers": {
+			script:   "-- migrate:no-transaction\nCOMMENT ON COLUMN \"we;ird\".c IS 'it''s; fine';",
+			wantNoTx: true,
+		},
+		"semicolons in nested block comments": {
+			script:   "-- migrate:no-transaction\n/* a; /* b; */ c; */ DROP INDEX CONCURRENTLY IF EXISTS idx_a;",
+			wantNoTx: true,
+		},
+		"a second statement after a block comment": {
+			script:  "-- migrate:no-transaction\nDROP INDEX idx_a; /* ; */ DROP INDEX idx_b;",
+			wantErr: postgres.ErrInvalidNoTxMigration,
+		},
 		"directive not on the first line is a normal migration": {
 			script: "SELECT 1;\n-- migrate:no-transaction\nSELECT 2;",
 		},
@@ -324,7 +374,10 @@ func TestMigrator_NoTransaction_Live(t *testing.T) {
 		return migrator.Up(ctx)
 	}
 	version := func() int64 {
-		migrator, _ := postgres.NewMigrator(pool, fstest.MapFS{})
+		migrator, err := postgres.NewMigrator(pool, fstest.MapFS{})
+		if err != nil {
+			t.Fatalf("new migrator: %v", err)
+		}
 		v, err := migrator.Version(ctx)
 		if err != nil {
 			t.Fatalf("version: %v", err)
@@ -334,7 +387,8 @@ func TestMigrator_NoTransaction_Live(t *testing.T) {
 
 	// A failing statement (duplicate keys) is not recorded, so it can be retried after a fix.
 	// PostgreSQL leaves the half-built index behind as INVALID.
-	if err := up("CREATE UNIQUE INDEX CONCURRENTLY uq_t_a ON t (a);"); !errors.Is(err, postgres.ErrMigrationFailed) {
+	err := up("CREATE UNIQUE INDEX CONCURRENTLY uq_t_a ON t (a);")
+	if !errors.Is(err, postgres.ErrMigrationFailed) {
 		t.Fatalf("want ErrMigrationFailed, got %v", err)
 	}
 	if v := version(); v != 0 {
@@ -364,7 +418,8 @@ func TestMigrator_NoTransaction_Live(t *testing.T) {
 
 func openLivePool(ctx context.Context, t *testing.T, connStr string) *pgxpool.Pool {
 	t.Helper()
-	pool, err := postgres.NewPool(ctx, connStr, postgres.WithConnectTimeout(3*time.Second), postgres.WithMaxConns(2), postgres.WithMinConns(1))
+	pool, err := postgres.NewPool(ctx, connStr,
+		postgres.WithConnectTimeout(3*time.Second), postgres.WithMaxConns(2), postgres.WithMinConns(1))
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
