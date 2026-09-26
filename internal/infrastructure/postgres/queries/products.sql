@@ -147,7 +147,23 @@ FROM product_versions
 WHERE product_id = $1
 ORDER BY version_number DESC;
 
--- name: CreateProductVersionWithRun :one
+-- name: CopyProducts :copyfrom
+INSERT INTO products (
+    id,
+    canonical_name,
+    description,
+    brand,
+    origin_country,
+    status,
+    current_version_id,
+    current_fingerprint,
+    created_at,
+    updated_at
+) VALUES (
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
+);
+
+-- name: CopyProductVersions :copyfrom
 INSERT INTO product_versions (
     id,
     product_id,
@@ -162,27 +178,44 @@ INSERT INTO product_versions (
     created_at
 ) VALUES (
     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11
-)
-RETURNING *;
+);
 
--- name: GuardedUpdateProductVersion :one
-UPDATE products
-SET current_version_id = @to_version_id::uuid,
-    current_fingerprint = @current_fingerprint::varchar,
-    canonical_name = @canonical_name::varchar,
-    description = @description::text,
-    brand = @brand::varchar,
-    origin_country = @origin_country::varchar,
-    updated_at = @updated_at::timestamptz
-WHERE id = @id::uuid
-  AND current_version_id IS NOT DISTINCT FROM @expected_version_id::uuid
-RETURNING *;
+-- name: BatchGuardedUpdateProductVersion :many
+UPDATE products p
+SET current_version_id = u.to_version_id,
+    current_fingerprint = u.current_fingerprint,
+    canonical_name = u.canonical_name,
+    description = u.description,
+    brand = u.brand,
+    origin_country = u.origin_country,
+    updated_at = u.updated_at
+FROM (
+    SELECT
+        unnest(@ids::uuid[]) AS id,
+        unnest(@to_version_ids::uuid[]) AS to_version_id,
+        unnest(@current_fingerprints::varchar[]) AS current_fingerprint,
+        unnest(@canonical_names::varchar[]) AS canonical_name,
+        unnest(@descriptions::text[]) AS description,
+        unnest(@brands::varchar[]) AS brand,
+        unnest(@origin_countries::varchar[]) AS origin_country,
+        unnest(@updated_ats::timestamptz[]) AS updated_at,
+        unnest(@expected_version_ids::uuid[]) AS expected_version_id
+) u
+WHERE p.id = u.id
+  AND p.current_version_id IS NOT DISTINCT FROM u.expected_version_id
+RETURNING p.id;
 
--- name: GuardedUpdateProductFingerprintOnly :one
-UPDATE products
-SET current_fingerprint = @current_fingerprint::varchar,
-    updated_at = @updated_at::timestamptz
-WHERE id = @id::uuid
-  AND current_version_id IS NOT DISTINCT FROM @expected_version_id::uuid
-RETURNING *;
-
+-- name: BatchGuardedUpdateProductFingerprintOnly :many
+UPDATE products p
+SET current_fingerprint = u.current_fingerprint,
+    updated_at = u.updated_at
+FROM (
+    SELECT
+        unnest(@ids::uuid[]) AS id,
+        unnest(@current_fingerprints::varchar[]) AS current_fingerprint,
+        unnest(@updated_ats::timestamptz[]) AS updated_at,
+        unnest(@expected_version_ids::uuid[]) AS expected_version_id
+) u
+WHERE p.id = u.id
+  AND p.current_version_id IS NOT DISTINCT FROM u.expected_version_id
+RETURNING p.id;

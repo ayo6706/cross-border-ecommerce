@@ -11,22 +11,71 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const createProductSource = `-- name: CreateProductSource :one
-INSERT INTO product_sources (
-    id,
-    product_id,
-    source_id,
-    external_product_id,
-    first_seen_at,
-    last_changed_at,
-    last_source_updated_at,
-    last_received_at
-) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8
-) RETURNING id, product_id, source_id, external_product_id, first_seen_at, last_changed_at, last_source_updated_at, last_received_at
+const batchUpdateProductSourceOnChanged = `-- name: BatchUpdateProductSourceOnChanged :execrows
+UPDATE product_sources ps
+SET last_changed_at        = u.last_changed_at,
+    last_source_updated_at = GREATEST(ps.last_source_updated_at, u.source_updated_at),
+    last_received_at       = GREATEST(ps.last_received_at, u.received_at)
+FROM (
+    SELECT
+        unnest($1::uuid[]) AS id,
+        unnest($2::timestamptz[]) AS last_changed_at,
+        unnest($3::timestamptz[]) AS source_updated_at,
+        unnest($4::timestamptz[]) AS received_at
+) u
+WHERE ps.id = u.id
 `
 
-type CreateProductSourceParams struct {
+type BatchUpdateProductSourceOnChangedParams struct {
+	Ids              []pgtype.UUID        `json:"ids"`
+	LastChangedAts   []pgtype.Timestamptz `json:"last_changed_ats"`
+	SourceUpdatedAts []pgtype.Timestamptz `json:"source_updated_ats"`
+	ReceivedAts      []pgtype.Timestamptz `json:"received_ats"`
+}
+
+func (q *Queries) BatchUpdateProductSourceOnChanged(ctx context.Context, arg BatchUpdateProductSourceOnChangedParams) (int64, error) {
+	result, err := q.db.Exec(ctx, batchUpdateProductSourceOnChanged,
+		arg.Ids,
+		arg.LastChangedAts,
+		arg.SourceUpdatedAts,
+		arg.ReceivedAts,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const batchUpdateProductSourceWatermarks = `-- name: BatchUpdateProductSourceWatermarks :execrows
+UPDATE product_sources ps
+SET last_source_updated_at = GREATEST(ps.last_source_updated_at, u.source_updated_at),
+    last_received_at       = GREATEST(ps.last_received_at, u.received_at)
+FROM (
+    SELECT
+        unnest($1::uuid[]) AS id,
+        unnest($2::timestamptz[]) AS source_updated_at,
+        unnest($3::timestamptz[]) AS received_at
+) u
+WHERE ps.id = u.id
+  AND (ps.last_source_updated_at IS DISTINCT FROM GREATEST(ps.last_source_updated_at, u.source_updated_at)
+       OR ps.last_received_at < u.received_at)
+`
+
+type BatchUpdateProductSourceWatermarksParams struct {
+	Ids              []pgtype.UUID        `json:"ids"`
+	SourceUpdatedAts []pgtype.Timestamptz `json:"source_updated_ats"`
+	ReceivedAts      []pgtype.Timestamptz `json:"received_ats"`
+}
+
+func (q *Queries) BatchUpdateProductSourceWatermarks(ctx context.Context, arg BatchUpdateProductSourceWatermarksParams) (int64, error) {
+	result, err := q.db.Exec(ctx, batchUpdateProductSourceWatermarks, arg.Ids, arg.SourceUpdatedAts, arg.ReceivedAts)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+type CopyProductSourcesParams struct {
 	ID                  pgtype.UUID        `json:"id"`
 	ProductID           pgtype.UUID        `json:"product_id"`
 	SourceID            string             `json:"source_id"`
@@ -37,32 +86,7 @@ type CreateProductSourceParams struct {
 	LastReceivedAt      pgtype.Timestamptz `json:"last_received_at"`
 }
 
-func (q *Queries) CreateProductSource(ctx context.Context, arg CreateProductSourceParams) (ProductSource, error) {
-	row := q.db.QueryRow(ctx, createProductSource,
-		arg.ID,
-		arg.ProductID,
-		arg.SourceID,
-		arg.ExternalProductID,
-		arg.FirstSeenAt,
-		arg.LastChangedAt,
-		arg.LastSourceUpdatedAt,
-		arg.LastReceivedAt,
-	)
-	var i ProductSource
-	err := row.Scan(
-		&i.ID,
-		&i.ProductID,
-		&i.SourceID,
-		&i.ExternalProductID,
-		&i.FirstSeenAt,
-		&i.LastChangedAt,
-		&i.LastSourceUpdatedAt,
-		&i.LastReceivedAt,
-	)
-	return i, err
-}
-
-const getProductWithSourceByIdentity = `-- name: GetProductWithSourceByIdentity :one
+const getProductWithSourceByIdentities = `-- name: GetProductWithSourceByIdentities :many
 SELECT 
     ps.id AS product_source_id,
     ps.product_id,
@@ -94,15 +118,19 @@ SELECT
 FROM product_sources ps
 JOIN products p ON ps.product_id = p.id
 LEFT JOIN product_versions pv ON p.current_version_id = pv.id
-WHERE ps.source_id = $1 AND ps.external_product_id = $2
+WHERE (ps.source_id, ps.external_product_id) IN (
+    SELECT 
+        unnest($1::varchar[]) AS source_id,
+        unnest($2::varchar[]) AS external_product_id
+)
 `
 
-type GetProductWithSourceByIdentityParams struct {
-	SourceID          string `json:"source_id"`
-	ExternalProductID string `json:"external_product_id"`
+type GetProductWithSourceByIdentitiesParams struct {
+	SourceIds          []string `json:"source_ids"`
+	ExternalProductIds []string `json:"external_product_ids"`
 }
 
-type GetProductWithSourceByIdentityRow struct {
+type GetProductWithSourceByIdentitiesRow struct {
 	ProductSourceID       pgtype.UUID        `json:"product_source_id"`
 	ProductID             pgtype.UUID        `json:"product_id"`
 	SourceID              string             `json:"source_id"`
@@ -132,106 +160,50 @@ type GetProductWithSourceByIdentityRow struct {
 	VersionCreatedAt      pgtype.Timestamptz `json:"version_created_at"`
 }
 
-func (q *Queries) GetProductWithSourceByIdentity(ctx context.Context, arg GetProductWithSourceByIdentityParams) (GetProductWithSourceByIdentityRow, error) {
-	row := q.db.QueryRow(ctx, getProductWithSourceByIdentity, arg.SourceID, arg.ExternalProductID)
-	var i GetProductWithSourceByIdentityRow
-	err := row.Scan(
-		&i.ProductSourceID,
-		&i.ProductID,
-		&i.SourceID,
-		&i.ExternalProductID,
-		&i.FirstSeenAt,
-		&i.LastChangedAt,
-		&i.LastSourceUpdatedAt,
-		&i.LastReceivedAt,
-		&i.CanonicalName,
-		&i.Description,
-		&i.Brand,
-		&i.OriginCountry,
-		&i.ProductStatus,
-		&i.CurrentVersionID,
-		&i.CurrentFingerprint,
-		&i.ProductCreatedAt,
-		&i.ProductUpdatedAt,
-		&i.VersionID,
-		&i.VersionNumber,
-		&i.VersionFingerprint,
-		&i.VersionCanonicalName,
-		&i.VersionDescription,
-		&i.VersionBrand,
-		&i.VersionOriginCountry,
-		&i.VersionAttributes,
-		&i.VersionIngestionRunID,
-		&i.VersionCreatedAt,
-	)
-	return i, err
-}
-
-const updateProductSourceOnChanged = `-- name: UpdateProductSourceOnChanged :one
-UPDATE product_sources
-SET last_changed_at        = $1::timestamptz,
-    last_source_updated_at = GREATEST(last_source_updated_at, $2::timestamptz),
-    last_received_at       = GREATEST(last_received_at, $3::timestamptz)
-WHERE id = $4::uuid
-RETURNING id, product_id, source_id, external_product_id, first_seen_at, last_changed_at, last_source_updated_at, last_received_at
-`
-
-type UpdateProductSourceOnChangedParams struct {
-	LastChangedAt   pgtype.Timestamptz `json:"last_changed_at"`
-	SourceUpdatedAt pgtype.Timestamptz `json:"source_updated_at"`
-	ReceivedAt      pgtype.Timestamptz `json:"received_at"`
-	ID              pgtype.UUID        `json:"id"`
-}
-
-func (q *Queries) UpdateProductSourceOnChanged(ctx context.Context, arg UpdateProductSourceOnChangedParams) (ProductSource, error) {
-	row := q.db.QueryRow(ctx, updateProductSourceOnChanged,
-		arg.LastChangedAt,
-		arg.SourceUpdatedAt,
-		arg.ReceivedAt,
-		arg.ID,
-	)
-	var i ProductSource
-	err := row.Scan(
-		&i.ID,
-		&i.ProductID,
-		&i.SourceID,
-		&i.ExternalProductID,
-		&i.FirstSeenAt,
-		&i.LastChangedAt,
-		&i.LastSourceUpdatedAt,
-		&i.LastReceivedAt,
-	)
-	return i, err
-}
-
-const updateProductSourceWatermark = `-- name: UpdateProductSourceWatermark :one
-UPDATE product_sources
-SET last_source_updated_at = GREATEST(last_source_updated_at, $1::timestamptz),
-    last_received_at       = GREATEST(last_received_at, $2::timestamptz)
-WHERE id = $3::uuid
-  AND (last_source_updated_at IS DISTINCT FROM GREATEST(last_source_updated_at, $1::timestamptz)
-       OR last_received_at < $2::timestamptz)
-RETURNING id, product_id, source_id, external_product_id, first_seen_at, last_changed_at, last_source_updated_at, last_received_at
-`
-
-type UpdateProductSourceWatermarkParams struct {
-	SourceUpdatedAt pgtype.Timestamptz `json:"source_updated_at"`
-	ReceivedAt      pgtype.Timestamptz `json:"received_at"`
-	ID              pgtype.UUID        `json:"id"`
-}
-
-func (q *Queries) UpdateProductSourceWatermark(ctx context.Context, arg UpdateProductSourceWatermarkParams) (ProductSource, error) {
-	row := q.db.QueryRow(ctx, updateProductSourceWatermark, arg.SourceUpdatedAt, arg.ReceivedAt, arg.ID)
-	var i ProductSource
-	err := row.Scan(
-		&i.ID,
-		&i.ProductID,
-		&i.SourceID,
-		&i.ExternalProductID,
-		&i.FirstSeenAt,
-		&i.LastChangedAt,
-		&i.LastSourceUpdatedAt,
-		&i.LastReceivedAt,
-	)
-	return i, err
+func (q *Queries) GetProductWithSourceByIdentities(ctx context.Context, arg GetProductWithSourceByIdentitiesParams) ([]GetProductWithSourceByIdentitiesRow, error) {
+	rows, err := q.db.Query(ctx, getProductWithSourceByIdentities, arg.SourceIds, arg.ExternalProductIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []GetProductWithSourceByIdentitiesRow{}
+	for rows.Next() {
+		var i GetProductWithSourceByIdentitiesRow
+		if err := rows.Scan(
+			&i.ProductSourceID,
+			&i.ProductID,
+			&i.SourceID,
+			&i.ExternalProductID,
+			&i.FirstSeenAt,
+			&i.LastChangedAt,
+			&i.LastSourceUpdatedAt,
+			&i.LastReceivedAt,
+			&i.CanonicalName,
+			&i.Description,
+			&i.Brand,
+			&i.OriginCountry,
+			&i.ProductStatus,
+			&i.CurrentVersionID,
+			&i.CurrentFingerprint,
+			&i.ProductCreatedAt,
+			&i.ProductUpdatedAt,
+			&i.VersionID,
+			&i.VersionNumber,
+			&i.VersionFingerprint,
+			&i.VersionCanonicalName,
+			&i.VersionDescription,
+			&i.VersionBrand,
+			&i.VersionOriginCountry,
+			&i.VersionAttributes,
+			&i.VersionIngestionRunID,
+			&i.VersionCreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }

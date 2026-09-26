@@ -70,3 +70,15 @@ SET claim_token = NULL,
     available_at = NOW()
 WHERE id = ANY(@ids::uuid[])
   AND claim_token = @claim_token::uuid;
+
+-- name: CopyOutboxEvents :copyfrom
+INSERT INTO outbox_events (
+    id,
+    aggregate_type,
+    aggregate_id,
+    event_type,
+    payload
+) VALUES (
+    $1, $2, $3, $4, $5
+);
+

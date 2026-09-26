@@ -11,23 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const createProductChange = `-- name: CreateProductChange :one
-INSERT INTO product_changes (
-    id,
-    product_id,
-    from_version_id,
-    to_version_id,
-    change_type,
-    changed_fields,
-    ingestion_run_id,
-    raw_record_id,
-    detected_at
-) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9
-) RETURNING id, product_id, from_version_id, to_version_id, change_type, changed_fields, ingestion_run_id, raw_record_id, detected_at
-`
-
-type CreateProductChangeParams struct {
+type CopyProductChangesParams struct {
 	ID             pgtype.UUID        `json:"id"`
 	ProductID      pgtype.UUID        `json:"product_id"`
 	FromVersionID  pgtype.UUID        `json:"from_version_id"`
@@ -37,33 +21,6 @@ type CreateProductChangeParams struct {
 	IngestionRunID pgtype.UUID        `json:"ingestion_run_id"`
 	RawRecordID    pgtype.UUID        `json:"raw_record_id"`
 	DetectedAt     pgtype.Timestamptz `json:"detected_at"`
-}
-
-func (q *Queries) CreateProductChange(ctx context.Context, arg CreateProductChangeParams) (ProductChange, error) {
-	row := q.db.QueryRow(ctx, createProductChange,
-		arg.ID,
-		arg.ProductID,
-		arg.FromVersionID,
-		arg.ToVersionID,
-		arg.ChangeType,
-		arg.ChangedFields,
-		arg.IngestionRunID,
-		arg.RawRecordID,
-		arg.DetectedAt,
-	)
-	var i ProductChange
-	err := row.Scan(
-		&i.ID,
-		&i.ProductID,
-		&i.FromVersionID,
-		&i.ToVersionID,
-		&i.ChangeType,
-		&i.ChangedFields,
-		&i.IngestionRunID,
-		&i.RawRecordID,
-		&i.DetectedAt,
-	)
-	return i, err
 }
 
 const listProductChangesByProductID = `-- name: ListProductChangesByProductID :many
