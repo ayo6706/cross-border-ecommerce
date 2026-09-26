@@ -48,7 +48,6 @@ func DecideTransition(current *Snapshot, in IncomingRecord) TransitionResult {
 		}
 	}
 
-	// 1. Out-of-order check (Stale protection)
 	if in.SourceUpdatedAt != nil && current.LastSourceUpdatedAt != nil {
 		if in.SourceUpdatedAt.Before(*current.LastSourceUpdatedAt) {
 			return TransitionResult{Type: TransitionStale}
@@ -59,14 +58,11 @@ func DecideTransition(current *Snapshot, in IncomingRecord) TransitionResult {
 			}
 		}
 	} else {
-		// Mixed nulls or both missing source_updated_at: fall back to received_at
 		if in.ReceivedAt.Before(current.LastReceivedAt) {
 			return TransitionResult{Type: TransitionStale}
 		}
 	}
 
-	// 2. Decision 4: Fingerprint algorithm version mismatch check
-	// Active version format is FingerprintV1Prefix
 	if !strings.HasPrefix(current.CurrentFingerprint, FingerprintV1Prefix) && current.StoredCurrentVersion != nil {
 		recomputed := FingerprintFromVersion(*current.StoredCurrentVersion)
 		if recomputed == in.Fingerprint {
@@ -77,7 +73,6 @@ func DecideTransition(current *Snapshot, in IncomingRecord) TransitionResult {
 		}
 	}
 
-	// 3. Same fingerprint -> Unchanged
 	if current.CurrentFingerprint == in.Fingerprint {
 		return TransitionResult{
 			Type:          TransitionUnchanged,
@@ -85,7 +80,6 @@ func DecideTransition(current *Snapshot, in IncomingRecord) TransitionResult {
 		}
 	}
 
-	// 4. Changed fingerprint -> Compute field diffs
 	var diffs []string
 	if current.StoredCurrentVersion != nil && in.Normalized != nil {
 		diffs = DetectFieldChanges(*current.StoredCurrentVersion, *in.Normalized)

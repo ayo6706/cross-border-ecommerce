@@ -5,7 +5,6 @@ import (
 	"errors"
 	"sync"
 	"testing"
-	"time"
 
 	productApp "github.com/ayo6706/cross-border-ecommerce/internal/application/product"
 	"github.com/ayo6706/cross-border-ecommerce/internal/domain/product"
@@ -55,35 +54,20 @@ func (m *mockProductRepository) List(ctx context.Context, params product.ListPar
 	return res, nil
 }
 
-func (m *mockProductRepository) FindSnapshotByIdentity(ctx context.Context, sourceID string, externalProductID string) (*product.Snapshot, error) {
-	return nil, nil
+func (m *mockProductRepository) FindSnapshotsByIdentities(ctx context.Context, identities []product.IdentityRef) (map[string]*product.Snapshot, error) {
+	return make(map[string]*product.Snapshot), nil
 }
 
-func (m *mockProductRepository) CreateProductWithSource(ctx context.Context, p *product.Product, ps *product.ProductSource) error {
-	return m.Save(ctx, p)
-}
-
-func (m *mockProductRepository) CreateVersion(ctx context.Context, pv *product.ProductVersion) error {
-	return nil
-}
-
-func (m *mockProductRepository) GuardedUpdateVersion(ctx context.Context, p *product.Product, expectedVersionID *string) error {
-	return m.Save(ctx, p)
-}
-
-func (m *mockProductRepository) GuardedUpdateFingerprintOnly(ctx context.Context, productID product.ID, expectedVersionID *string, newFingerprint string, updatedAt time.Time) error {
-	return nil
-}
-
-func (m *mockProductRepository) CreateChange(ctx context.Context, pc *product.ProductChange) error {
-	return nil
-}
-
-func (m *mockProductRepository) UpdateSourceWatermark(ctx context.Context, psID string, sourceUpdatedAt *time.Time, receivedAt time.Time) error {
-	return nil
-}
-
-func (m *mockProductRepository) UpdateSourceOnChanged(ctx context.Context, psID string, lastChangedAt time.Time, sourceUpdatedAt *time.Time, receivedAt time.Time) error {
+func (m *mockProductRepository) ApplyBatch(ctx context.Context, plan *product.BatchPlan) error {
+	if plan == nil {
+		return nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, p := range plan.ProductsToInsert {
+		cp := *p
+		m.products[p.ID] = &cp
+	}
 	return nil
 }
 

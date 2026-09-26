@@ -101,7 +101,6 @@ func DetectFieldChanges(current ProductVersion, next NormalizedProduct) []string
 		diffs = append(diffs, "origin_country")
 	}
 
-	// Check attributes diff
 	attrsChanged := false
 	if len(cPayload.Attributes) != len(nPayload.Attributes) {
 		attrsChanged = true

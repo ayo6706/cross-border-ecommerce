@@ -16,6 +16,7 @@ var (
 	ErrDuplicateAttributeKey = errors.New("duplicate attribute key in field mapping after case folding")
 	ErrIdentityConflict      = errors.New("concurrent product identity conflict")
 	ErrVersionConflict       = errors.New("concurrent product version conflict")
+	ErrDeadlockConflict      = errors.New("concurrent transaction conflict (deadlock or serialization)")
 	ErrVersionNotFound       = errors.New("product version not found")
 	ErrInvalidTransition     = errors.New("invalid product transition state")
 )
