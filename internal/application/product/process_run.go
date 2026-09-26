@@ -2,7 +2,6 @@ package product
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -88,20 +87,18 @@ func (p *RunProcessor) ProcessRun(ctx context.Context, runID string, opts Proces
 
 	leaseDuration := opts.LeaseDuration
 	if leaseDuration <= 0 {
-		leaseDuration = 30 * time.Second
+		return nil, errors.New("lease duration must be greater than zero")
 	}
 
 	batchSize := opts.BatchSize
 	if batchSize <= 0 {
-		batchSize = 50
+		return nil, errors.New("batch size must be greater than zero")
 	}
 
 	budget := opts.ErrorBudget.OrDefault()
 
-	// Cleanup context ensuring status release/completion happens even if parent context cancels
 	cleanupCtx := context.WithoutCancel(ctx)
 
-	// 1. Verify ingestion run exists
 	run, err := p.runRepo.FindRunByID(cleanupCtx, trimmedRunID)
 	if err != nil {
 		return nil, fmt.Errorf("find ingestion run: %w", err)
@@ -111,13 +108,11 @@ func (p *RunProcessor) ProcessRun(ctx context.Context, runID string, opts Proces
 			trimmedRunID, run.Status, domainIngestion.StatusCompleted, domainIngestion.StatusPartial)
 	}
 
-	// 2. Ensure run processing state exists
 	_, err = p.processingRepo.EnsureExists(cleanupCtx, trimmedRunID)
 	if err != nil {
 		return nil, fmt.Errorf("ensure run processing exists: %w", err)
 	}
 
-	// 3. Handle FromStart option
 	if opts.FromStart {
 		_, err = p.processingRepo.ResetFromStart(cleanupCtx, trimmedRunID)
 		if err != nil {
@@ -125,13 +120,11 @@ func (p *RunProcessor) ProcessRun(ctx context.Context, runID string, opts Proces
 		}
 	}
 
-	// 4. Claim the run processing lease
 	rp, err := p.processingRepo.ClaimSpecific(cleanupCtx, trimmedRunID, claimToken, leaseDuration)
 	if err != nil {
 		return nil, fmt.Errorf("claim run processing: %w", err)
 	}
 
-	// 5. Load source configuration
 	src, err := p.sourceRepo.FindByID(cleanupCtx, run.SourceID)
 	if err != nil {
 		if ctx.Err() != nil {
@@ -142,7 +135,6 @@ func (p *RunProcessor) ProcessRun(ctx context.Context, runID string, opts Proces
 		return nil, errors.Join(fmt.Errorf("find source for run: %w", err), failErr)
 	}
 
-	// Rule 8: Fail loudly if FieldMapping is missing or invalid
 	fieldMapping, err := src.GetFieldMapping()
 	if err != nil {
 		failErr := p.processingRepo.Fail(cleanupCtx, trimmedRunID, claimToken, fmt.Sprintf("invalid field mapping: %v", err))
@@ -155,7 +147,6 @@ func (p *RunProcessor) ProcessRun(ctx context.Context, runID string, opts Proces
 
 	cursorID := rp.CursorRawRecordID
 
-	// 6. Iterate through raw records using keyset pagination
 	for {
 		if err := ctx.Err(); err != nil {
 			releaseErr := p.processingRepo.Release(cleanupCtx, trimmedRunID, claimToken)
@@ -173,35 +164,59 @@ func (p *RunProcessor) ProcessRun(ctx context.Context, runID string, opts Proces
 		}
 
 		if len(records) == 0 {
-			// All records processed!
 			break
 		}
 
+		validRecords := make([]domainProduct.BatchIncomingRecord, 0, len(records))
+		failedCount := 0
+
 		for _, record := range records {
-			if err := ctx.Err(); err != nil {
-				releaseErr := p.processingRepo.Release(cleanupCtx, trimmedRunID, claimToken)
-				return nil, errors.Join(err, releaseErr)
+			normalized, normErr := domainProduct.Normalize(record.Payload, *fieldMapping)
+			if normErr != nil {
+				failedCount++
+				continue
 			}
 
-			err := p.processRecordWithRetry(ctx, record, fieldMapping, trimmedRunID, claimToken, leaseDuration, budget)
-			if err != nil {
-				if ctx.Err() != nil {
-					releaseErr := p.processingRepo.Release(cleanupCtx, trimmedRunID, claimToken)
-					return nil, errors.Join(ctx.Err(), releaseErr)
-				}
-				if errors.Is(err, domainIngestion.ErrLeaseLost) {
-					return nil, err
-				}
-				failErr := p.processingRepo.Fail(cleanupCtx, trimmedRunID, claimToken, err.Error())
-				return nil, errors.Join(err, failErr)
-			}
-
-			recordID := record.ID
-			cursorID = &recordID
+			fingerprint := domainProduct.Fingerprint(normalized)
+			validRecords = append(validRecords, domainProduct.BatchIncomingRecord{
+				RawRecordID:       record.ID,
+				SourceID:          string(record.SourceID),
+				ExternalProductID: record.ExternalProductID,
+				Normalized:        &normalized,
+				Fingerprint:       fingerprint,
+				SourceUpdatedAt:   record.SourceUpdatedAt,
+				ReceivedAt:        record.ReceivedAt,
+				IngestionRunID:    trimmedRunID,
+			})
 		}
+
+		lastRecordID := records[len(records)-1].ID
+		_, err = p.processPageWithRetry(
+			ctx,
+			validRecords,
+			len(records),
+			failedCount,
+			lastRecordID,
+			trimmedRunID,
+			claimToken,
+			leaseDuration,
+			budget,
+		)
+		if err != nil {
+			if ctx.Err() != nil {
+				releaseErr := p.processingRepo.Release(cleanupCtx, trimmedRunID, claimToken)
+				return nil, errors.Join(ctx.Err(), releaseErr)
+			}
+			if errors.Is(err, domainIngestion.ErrLeaseLost) {
+				return nil, err
+			}
+			failErr := p.processingRepo.Fail(cleanupCtx, trimmedRunID, claimToken, err.Error())
+			return nil, errors.Join(err, failErr)
+		}
+
+		cursorID = &lastRecordID
 	}
 
-	// 7. Complete run processing
 	if err := p.processingRepo.Complete(cleanupCtx, trimmedRunID, claimToken); err != nil {
 		return nil, fmt.Errorf("complete run processing: %w", err)
 	}
@@ -221,343 +236,103 @@ func (p *RunProcessor) ProcessRun(ctx context.Context, runID string, opts Proces
 	}, nil
 }
 
-func (p *RunProcessor) processRecordWithRetry(
+func (p *RunProcessor) processPageWithRetry(
 	ctx context.Context,
-	record *domainIngestion.RawRecord,
-	fieldMapping *domainProduct.FieldMapping,
+	validRecords []domainProduct.BatchIncomingRecord,
+	totalSeenInPage int,
+	failedInPage int,
+	lastRecordID string,
 	runID string,
 	claimToken string,
 	leaseDuration time.Duration,
 	errorBudget domainIngestion.ErrorBudget,
-) error {
+) (*domainIngestion.RunProcessing, error) {
 	var lastErr error
 	for attempt := 0; attempt < 2; attempt++ {
 		var updatedRp *domainIngestion.RunProcessing
 		err := p.txRunner.WithinTx(ctx, func(repos TxRepos) error {
-			rp, txErr := p.processSingleRecord(ctx, repos, record, fieldMapping, runID, claimToken, leaseDuration)
-			if txErr != nil {
-				return txErr
+			var plan *domainProduct.BatchPlan
+			if len(validRecords) > 0 {
+				seenIdentities := make(map[string]struct{})
+				identities := make([]domainProduct.IdentityRef, 0, len(validRecords))
+				for _, r := range validRecords {
+					key := domainProduct.IdentityKey(r.SourceID, r.ExternalProductID)
+					if _, ok := seenIdentities[key]; !ok {
+						seenIdentities[key] = struct{}{}
+						identities = append(identities, domainProduct.IdentityRef{
+							SourceID:          r.SourceID,
+							ExternalProductID: r.ExternalProductID,
+						})
+					}
+				}
+
+				snapshots, err := repos.Products.FindSnapshotsByIdentities(ctx, identities)
+				if err != nil {
+					return fmt.Errorf("find snapshots by identities: %w", err)
+				}
+
+				computedPlan, err := domainProduct.DecideBatch(snapshots, validRecords, time.Now().UTC())
+				if err != nil {
+					return fmt.Errorf("decide batch plan: %w", err)
+				}
+				plan = computedPlan
+
+				if err := repos.Products.ApplyBatch(ctx, plan); err != nil {
+					return err
+				}
+
+				if err := repos.Outbox.CreateProductChangedEvents(ctx, plan.Events); err != nil {
+					return fmt.Errorf("create product changed events: %w", err)
+				}
+			}
+
+			newCount := 0
+			changedCount := 0
+			unchangedCount := 0
+			if plan != nil {
+				newCount = plan.RecordsNew
+				changedCount = plan.RecordsChanged
+				unchangedCount = plan.RecordsUnchanged
+			}
+
+			rp, err := repos.RunProcessing.UpdateProgress(
+				ctx,
+				runID,
+				claimToken,
+				totalSeenInPage,
+				newCount,
+				changedCount,
+				unchangedCount,
+				failedInPage,
+				&lastRecordID,
+				leaseDuration,
+			)
+			if err != nil {
+				return err
 			}
 			updatedRp = rp
 			return nil
 		})
+
 		if err == nil {
 			if updatedRp != nil {
 				if budgetErr := errorBudget.Check(updatedRp.RecordsSeen, updatedRp.RecordsFailed); budgetErr != nil {
-					return budgetErr
+					return nil, budgetErr
 				}
 			}
-			return nil
+			return updatedRp, nil
 		}
+
 		if errors.Is(err, domainIngestion.ErrLeaseLost) {
-			return err
+			return nil, err
 		}
-		if errors.Is(err, domainProduct.ErrIdentityConflict) || errors.Is(err, domainProduct.ErrVersionConflict) {
+		if errors.Is(err, domainProduct.ErrIdentityConflict) ||
+			errors.Is(err, domainProduct.ErrVersionConflict) ||
+			errors.Is(err, domainProduct.ErrDeadlockConflict) {
 			lastErr = err
-			continue // Retry once on concurrent race conflict
+			continue
 		}
-		return err
+		return nil, err
 	}
-	return fmt.Errorf("record processing retry exhausted: %w", lastErr)
-}
-
-func (p *RunProcessor) processSingleRecord(
-	ctx context.Context,
-	repos TxRepos,
-	record *domainIngestion.RawRecord,
-	fieldMapping *domainProduct.FieldMapping,
-	runID string,
-	claimToken string,
-	leaseDuration time.Duration,
-) (*domainIngestion.RunProcessing, error) {
-	// 1. Normalization
-	normalized, normErr := domainProduct.Normalize(record.Payload, *fieldMapping)
-	if normErr != nil {
-		// F4: Normalization failure
-		rp, err := repos.RunProcessing.UpdateProgress(ctx, runID, claimToken, 1, 0, 0, 0, 1, &record.ID, leaseDuration)
-		if err != nil {
-			return nil, err
-		}
-		return rp, nil
-	}
-
-	fingerprint := domainProduct.Fingerprint(normalized)
-
-	// 2. Identity lookup snapshot
-	snapshot, err := repos.Products.FindSnapshotByIdentity(ctx, string(record.SourceID), record.ExternalProductID)
-	if err != nil {
-		return nil, fmt.Errorf("find snapshot by identity: %w", err)
-	}
-
-	incoming := domainProduct.IncomingRecord{
-		Normalized:      &normalized,
-		Fingerprint:     fingerprint,
-		SourceUpdatedAt: record.SourceUpdatedAt,
-		ReceivedAt:      record.ReceivedAt,
-		RawRecordID:     record.ID,
-	}
-
-	// 3. Domain transition decision
-	transition := domainProduct.DecideTransition(snapshot, incoming)
-
-	switch transition.Type {
-	case domainProduct.TransitionNew:
-		if err := p.handleNewTransition(ctx, repos, record, &normalized, fingerprint, runID); err != nil {
-			return nil, err
-		}
-		rp, err := repos.RunProcessing.UpdateProgress(ctx, runID, claimToken, 1, 1, 0, 0, 0, &record.ID, leaseDuration)
-		return rp, err
-
-	case domainProduct.TransitionChanged:
-		if err := p.handleChangedTransition(ctx, repos, snapshot, record, &normalized, fingerprint, transition.ChangedFields, runID); err != nil {
-			return nil, err
-		}
-		rp, err := repos.RunProcessing.UpdateProgress(ctx, runID, claimToken, 1, 0, 1, 0, 0, &record.ID, leaseDuration)
-		return rp, err
-
-	case domainProduct.TransitionUnchanged:
-		if snapshot != nil {
-			if err := repos.Products.UpdateSourceWatermark(ctx, snapshot.ProductSourceID, record.SourceUpdatedAt, record.ReceivedAt); err != nil {
-				return nil, fmt.Errorf("update product source watermark: %w", err)
-			}
-		}
-		rp, err := repos.RunProcessing.UpdateProgress(ctx, runID, claimToken, 1, 0, 0, 1, 0, &record.ID, leaseDuration)
-		return rp, err
-
-	case domainProduct.TransitionStale:
-		// Older record received: no state mutations, count as unchanged
-		rp, err := repos.RunProcessing.UpdateProgress(ctx, runID, claimToken, 1, 0, 0, 1, 0, &record.ID, leaseDuration)
-		return rp, err
-
-	case domainProduct.TransitionVersionMismatch:
-		// Decision 4: Upgrade fingerprint only
-		if snapshot != nil {
-			if err := repos.Products.GuardedUpdateFingerprintOnly(ctx, snapshot.ProductID, snapshot.CurrentVersionID, fingerprint, time.Now().UTC()); err != nil {
-				return nil, err
-			}
-			if err := repos.Products.UpdateSourceWatermark(ctx, snapshot.ProductSourceID, record.SourceUpdatedAt, record.ReceivedAt); err != nil {
-				return nil, fmt.Errorf("update product source watermark: %w", err)
-			}
-		}
-		rp, err := repos.RunProcessing.UpdateProgress(ctx, runID, claimToken, 1, 0, 0, 1, 0, &record.ID, leaseDuration)
-		return rp, err
-
-	default:
-		return nil, fmt.Errorf("%w: unknown transition type %s", domainProduct.ErrInvalidTransition, transition.Type)
-	}
-}
-
-func (p *RunProcessor) handleNewTransition(
-	ctx context.Context,
-	repos TxRepos,
-	record *domainIngestion.RawRecord,
-	normalized *domainProduct.NormalizedProduct,
-	fingerprint string,
-	runID string,
-) error {
-	prodID, err := uuid.NewString()
-	if err != nil {
-		return err
-	}
-	versionID, err := uuid.NewString()
-	if err != nil {
-		return err
-	}
-	changeID, err := uuid.NewString()
-	if err != nil {
-		return err
-	}
-	sourceID, err := uuid.NewString()
-	if err != nil {
-		return err
-	}
-
-	now := time.Now().UTC()
-
-	// 1. Create Product
-	prod := &domainProduct.Product{
-		ID:                 domainProduct.ID(prodID),
-		CanonicalName:      normalized.CanonicalName,
-		Description:        normalized.Description,
-		Brand:              normalized.Brand,
-		OriginCountry:      normalized.OriginCountry,
-		Status:             domainProduct.StatusDraft,
-		CurrentVersionID:   &versionID,
-		CurrentFingerprint: fingerprint,
-		CreatedAt:          now,
-		UpdatedAt:          now,
-	}
-
-	// 2. Create ProductSource
-	ps := &domainProduct.ProductSource{
-		ID:                  sourceID,
-		ProductID:           prod.ID,
-		SourceID:            string(record.SourceID),
-		ExternalProductID:   record.ExternalProductID,
-		FirstSeenAt:         now,
-		LastChangedAt:       now,
-		LastSourceUpdatedAt: record.SourceUpdatedAt,
-		LastReceivedAt:      record.ReceivedAt,
-	}
-
-	if err := repos.Products.CreateProductWithSource(ctx, prod, ps); err != nil {
-		return err
-	}
-
-	// 3. Create ProductVersion (v1)
-	pv := &domainProduct.ProductVersion{
-		ID:             versionID,
-		ProductID:      prod.ID,
-		VersionNumber:  1,
-		Fingerprint:    fingerprint,
-		CanonicalName:  normalized.CanonicalName,
-		Description:    normalized.Description,
-		Brand:          normalized.Brand,
-		OriginCountry:  normalized.OriginCountry,
-		Attributes:     normalized.Attributes,
-		IngestionRunID: &runID,
-		CreatedAt:      now,
-	}
-	if err := repos.Products.CreateVersion(ctx, pv); err != nil {
-		return err
-	}
-
-	// 4. Create ProductChange (NEW)
-	pc := &domainProduct.ProductChange{
-		ID:             changeID,
-		ProductID:      prod.ID,
-		FromVersionID:  nil,
-		ToVersionID:    versionID,
-		ChangeType:     domainProduct.ChangeTypeNew,
-		ChangedFields:  []string{},
-		IngestionRunID: &runID,
-		RawRecordID:    &record.ID,
-		DetectedAt:     now,
-	}
-	if err := repos.Products.CreateChange(ctx, pc); err != nil {
-		return err
-	}
-
-	// 5. Create Outbox Event
-	eventPayload, err := json.Marshal(map[string]any{
-		"product_id":     prodID,
-		"version_id":     versionID,
-		"version_number": 1,
-		"fingerprint":    fingerprint,
-		"change_type":    "NEW",
-		"changed_fields": []string{},
-	})
-	if err != nil {
-		return fmt.Errorf("marshal outbox event payload: %w", err)
-	}
-
-	if err := repos.Outbox.CreateEvent(ctx, domainProduct.AggregateTypeProduct, prodID, domainProduct.EventTypeProductChanged, eventPayload); err != nil {
-		return fmt.Errorf("create outbox event: %w", err)
-	}
-
-	return nil
-}
-
-func (p *RunProcessor) handleChangedTransition(
-	ctx context.Context,
-	repos TxRepos,
-	snapshot *domainProduct.Snapshot,
-	record *domainIngestion.RawRecord,
-	normalized *domainProduct.NormalizedProduct,
-	fingerprint string,
-	changedFields []string,
-	runID string,
-) error {
-	if snapshot == nil {
-		return domainProduct.ErrInvalidProductState
-	}
-
-	versionID, err := uuid.NewString()
-	if err != nil {
-		return err
-	}
-	changeID, err := uuid.NewString()
-	if err != nil {
-		return err
-	}
-
-	nextVersionNum := 1
-	if snapshot.StoredCurrentVersion != nil {
-		nextVersionNum = snapshot.StoredCurrentVersion.VersionNumber + 1
-	}
-
-	now := time.Now().UTC()
-
-	// 1. Create ProductVersion (vN+1)
-	pv := &domainProduct.ProductVersion{
-		ID:             versionID,
-		ProductID:      snapshot.ProductID,
-		VersionNumber:  nextVersionNum,
-		Fingerprint:    fingerprint,
-		CanonicalName:  normalized.CanonicalName,
-		Description:    normalized.Description,
-		Brand:          normalized.Brand,
-		OriginCountry:  normalized.OriginCountry,
-		Attributes:     normalized.Attributes,
-		IngestionRunID: &runID,
-		CreatedAt:      now,
-	}
-	if err := repos.Products.CreateVersion(ctx, pv); err != nil {
-		return err
-	}
-
-	// 2. Guarded CAS Update on Product
-	updatedProduct := &domainProduct.Product{
-		ID:                 snapshot.ProductID,
-		CanonicalName:      normalized.CanonicalName,
-		Description:        normalized.Description,
-		Brand:              normalized.Brand,
-		OriginCountry:      normalized.OriginCountry,
-		CurrentVersionID:   &versionID,
-		CurrentFingerprint: fingerprint,
-		UpdatedAt:          now,
-	}
-	if err := repos.Products.GuardedUpdateVersion(ctx, updatedProduct, snapshot.CurrentVersionID); err != nil {
-		return err
-	}
-
-	// 3. Update ProductSource timestamps and last_changed_at
-	if err := repos.Products.UpdateSourceOnChanged(ctx, snapshot.ProductSourceID, now, record.SourceUpdatedAt, record.ReceivedAt); err != nil {
-		return err
-	}
-
-	// 4. Create ProductChange (CHANGED)
-	pc := &domainProduct.ProductChange{
-		ID:             changeID,
-		ProductID:      snapshot.ProductID,
-		FromVersionID:  snapshot.CurrentVersionID,
-		ToVersionID:    versionID,
-		ChangeType:     domainProduct.ChangeTypeChanged,
-		ChangedFields:  changedFields,
-		IngestionRunID: &runID,
-		RawRecordID:    &record.ID,
-		DetectedAt:     now,
-	}
-	if err := repos.Products.CreateChange(ctx, pc); err != nil {
-		return err
-	}
-
-	// 5. Create Outbox Event
-	eventPayload, err := json.Marshal(map[string]any{
-		"product_id":     string(snapshot.ProductID),
-		"version_id":     versionID,
-		"version_number": nextVersionNum,
-		"fingerprint":    fingerprint,
-		"change_type":    "CHANGED",
-		"changed_fields": changedFields,
-	})
-	if err != nil {
-		return fmt.Errorf("marshal outbox event payload: %w", err)
-	}
-
-	if err := repos.Outbox.CreateEvent(ctx, domainProduct.AggregateTypeProduct, string(snapshot.ProductID), domainProduct.EventTypeProductChanged, eventPayload); err != nil {
-		return fmt.Errorf("create outbox event: %w", err)
-	}
-
-	return nil
+	return nil, fmt.Errorf("page processing retry exhausted: %w", lastErr)
 }

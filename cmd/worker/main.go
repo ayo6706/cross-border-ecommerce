@@ -180,7 +180,7 @@ func runProcessingLoop(
 			result, err := processor.ProcessRun(ctx, claimed.RunID, appProduct.ProcessRunOptions{
 				ClaimToken:    claimToken,
 				LeaseDuration: 30 * time.Second,
-				BatchSize:     50,
+				BatchSize:     500,
 			})
 			if err != nil {
 				if ctx.Err() == nil {

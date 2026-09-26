@@ -42,7 +42,7 @@ func runProcess(args []string) error {
 	fs := flag.NewFlagSet("process", flag.ExitOnError)
 	runID := fs.String("run", "", "Ingestion run UUID to process")
 	fromStart := fs.Bool("from-start", false, "Reset processing cursor and counters to re-process from start")
-	batchSize := fs.Int("batch-size", 50, "Batch size for keyset pagination")
+	batchSize := fs.Int("batch-size", 500, "Batch size for keyset pagination")
 	leaseSec := fs.Int("lease", 30, "Lease duration in seconds")
 
 	if err := fs.Parse(args); err != nil {

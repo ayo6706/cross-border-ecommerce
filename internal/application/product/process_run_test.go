@@ -74,7 +74,7 @@ const truncateLiveTables = "TRUNCATE sources, ingestion_runs, raw_records, produ
 
 // setupLiveTestEnv shares TEST_DATABASE_URL with internal/infrastructure/postgres, whose
 // cleanup truncates the same tables; integration runs must use `go test -p 1`.
-func setupLiveTestEnv(t *testing.T) *testEnv {
+func setupLiveTestEnv(t testing.TB) *testEnv {
 	t.Helper()
 
 	connStr := os.Getenv("TEST_DATABASE_URL")
@@ -165,7 +165,7 @@ func defaultFieldMapping() *domainProduct.FieldMapping {
 	}
 }
 
-func createTestSource(t *testing.T, ctx context.Context, env *testEnv, sourceID string) *domainSource.Source {
+func createTestSource(t testing.TB, ctx context.Context, env *testEnv, sourceID string) *domainSource.Source {
 	t.Helper()
 	fm := defaultFieldMapping()
 	src, err := domainSource.NewSource(
@@ -192,7 +192,7 @@ func createTestSource(t *testing.T, ctx context.Context, env *testEnv, sourceID 
 	return src
 }
 
-func createTestRun(t *testing.T, ctx context.Context, env *testEnv, sourceID string) *domainIngestion.IngestionRun {
+func createTestRun(t testing.TB, ctx context.Context, env *testEnv, sourceID string) *domainIngestion.IngestionRun {
 	t.Helper()
 	run, err := domainIngestion.NewRun("", domainSource.ID(sourceID), "")
 	require.NoError(t, err)
@@ -202,6 +202,15 @@ func createTestRun(t *testing.T, ctx context.Context, env *testEnv, sourceID str
 	require.NoError(t, run.Complete("", time.Now().UTC()))
 	require.NoError(t, env.runRepo.UpdateStatus(ctx, run, domainIngestion.StatusRunning))
 	return run
+}
+
+func findTestSnapshot(t *testing.T, ctx context.Context, env *testEnv, sourceID, extID string) *domainProduct.Snapshot {
+	t.Helper()
+	snaps, err := env.productRepo.FindSnapshotsByIdentities(ctx, []domainProduct.IdentityRef{
+		{SourceID: sourceID, ExternalProductID: extID},
+	})
+	require.NoError(t, err)
+	return snaps[domainProduct.IdentityKey(sourceID, extID)]
 }
 
 func TestProcessRunRecords_NewProduct(t *testing.T) {
@@ -236,7 +245,10 @@ func TestProcessRunRecords_NewProduct(t *testing.T) {
 	require.NoError(t, env.rawRepo.Save(ctx, record))
 
 	// Execute ProcessRun
-	result, err := env.processor.ProcessRun(ctx, run.ID, appProduct.ProcessRunOptions{})
+	result, err := env.processor.ProcessRun(ctx, run.ID, appProduct.ProcessRunOptions{
+		BatchSize:     50,
+		LeaseDuration: 30 * time.Second,
+	})
 	require.NoError(t, err)
 
 	assert.Equal(t, 1, result.RecordsSeen)
@@ -246,8 +258,7 @@ func TestProcessRunRecords_NewProduct(t *testing.T) {
 	assert.Equal(t, 0, result.RecordsFailed)
 
 	// Verify Snapshot / Identity
-	snap, err := env.productRepo.FindSnapshotByIdentity(ctx, sourceID, "ext-prod-101")
-	require.NoError(t, err)
+	snap := findTestSnapshot(t, ctx, env, sourceID, "ext-prod-101")
 	require.NotNil(t, snap)
 	assert.NotEmpty(t, snap.ProductID)
 	require.NotNil(t, snap.CurrentVersionID)
@@ -283,7 +294,10 @@ func TestProcessRunRecords_RejectsNonTerminalRun(t *testing.T) {
 	require.NoError(t, run.Start(time.Now().UTC()))
 	require.NoError(t, env.runRepo.UpdateStatus(ctx, run, domainIngestion.StatusPending))
 
-	_, err = env.processor.ProcessRun(ctx, run.ID, appProduct.ProcessRunOptions{})
+	_, err = env.processor.ProcessRun(ctx, run.ID, appProduct.ProcessRunOptions{
+		BatchSize:     50,
+		LeaseDuration: 30 * time.Second,
+	})
 	require.ErrorIs(t, err, domainIngestion.ErrInvalidRunState)
 
 	var processingRows int
@@ -319,7 +333,10 @@ func TestProcessRunRecords_ChangedProduct(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, env.rawRepo.Save(ctx, rec1))
 
-	_, err = env.processor.ProcessRun(ctx, run1.ID, appProduct.ProcessRunOptions{})
+	_, err = env.processor.ProcessRun(ctx, run1.ID, appProduct.ProcessRunOptions{
+		BatchSize:     50,
+		LeaseDuration: 30 * time.Second,
+	})
 	require.NoError(t, err)
 
 	// Run 2: Changed description and color
@@ -343,7 +360,10 @@ func TestProcessRunRecords_ChangedProduct(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, env.rawRepo.Save(ctx, rec2))
 
-	res2, err := env.processor.ProcessRun(ctx, run2.ID, appProduct.ProcessRunOptions{})
+	res2, err := env.processor.ProcessRun(ctx, run2.ID, appProduct.ProcessRunOptions{
+		BatchSize:     50,
+		LeaseDuration: 30 * time.Second,
+	})
 	require.NoError(t, err)
 
 	assert.Equal(t, 1, res2.RecordsSeen)
@@ -352,8 +372,8 @@ func TestProcessRunRecords_ChangedProduct(t *testing.T) {
 	assert.Equal(t, 0, res2.RecordsUnchanged)
 
 	// Check Snapshot version is now 2
-	snap, err := env.productRepo.FindSnapshotByIdentity(ctx, sourceID, "ext-headphones-1")
-	require.NoError(t, err)
+	snap := findTestSnapshot(t, ctx, env, sourceID, "ext-headphones-1")
+	require.NotNil(t, snap)
 	require.NotNil(t, snap.StoredCurrentVersion)
 	assert.Equal(t, 2, snap.StoredCurrentVersion.VersionNumber)
 
@@ -398,7 +418,10 @@ func TestProcessRunRecords_Unchanged(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, env.rawRepo.Save(ctx, rec1))
 
-	_, err = env.processor.ProcessRun(ctx, run1.ID, appProduct.ProcessRunOptions{})
+	_, err = env.processor.ProcessRun(ctx, run1.ID, appProduct.ProcessRunOptions{
+		BatchSize:     50,
+		LeaseDuration: 30 * time.Second,
+	})
 	require.NoError(t, err)
 
 	// Capture row counts
@@ -422,7 +445,10 @@ func TestProcessRunRecords_Unchanged(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, env.rawRepo.Save(ctx, rec2))
 
-	res2, err := env.processor.ProcessRun(ctx, run2.ID, appProduct.ProcessRunOptions{})
+	res2, err := env.processor.ProcessRun(ctx, run2.ID, appProduct.ProcessRunOptions{
+		BatchSize:     50,
+		LeaseDuration: 30 * time.Second,
+	})
 	require.NoError(t, err)
 
 	assert.Equal(t, 1, res2.RecordsSeen)
@@ -443,8 +469,8 @@ func TestProcessRunRecords_Unchanged(t *testing.T) {
 	assert.Equal(t, outboxCount1, outboxCount2, "outbox count must not change")
 
 	// Watermark should advance
-	snap, err := env.productRepo.FindSnapshotByIdentity(ctx, sourceID, "ext-bose-1")
-	require.NoError(t, err)
+	snap := findTestSnapshot(t, ctx, env, sourceID, "ext-bose-1")
+	require.NotNil(t, snap)
 	require.NotNil(t, snap.LastSourceUpdatedAt)
 	assert.Equal(t, t2.Unix(), snap.LastSourceUpdatedAt.Unix())
 }
@@ -471,17 +497,28 @@ func TestProcessRunRecords_ReplayIsIdempotent(t *testing.T) {
 	require.NoError(t, env.rawRepo.Save(ctx, rec))
 
 	// Initial execution
-	res1, err := env.processor.ProcessRun(ctx, run.ID, appProduct.ProcessRunOptions{})
+	res1, err := env.processor.ProcessRun(ctx, run.ID, appProduct.ProcessRunOptions{
+		BatchSize:     50,
+		LeaseDuration: 30 * time.Second,
+	})
 	require.NoError(t, err)
 	assert.Equal(t, 1, res1.RecordsNew)
 
 	// Replay 1 without --from-start: cursor is at end, no additional work
-	resReplay1, err := env.processor.ProcessRun(ctx, run.ID, appProduct.ProcessRunOptions{FromStart: false})
+	resReplay1, err := env.processor.ProcessRun(ctx, run.ID, appProduct.ProcessRunOptions{
+		BatchSize:     50,
+		LeaseDuration: 30 * time.Second,
+		FromStart:     false,
+	})
 	require.NoError(t, err)
 	assert.Equal(t, 1, resReplay1.RecordsNew)
 
 	// Replay 2 with --from-start: resets counters and walks from start, resolves as unchanged
-	resReplay2, err := env.processor.ProcessRun(ctx, run.ID, appProduct.ProcessRunOptions{FromStart: true})
+	resReplay2, err := env.processor.ProcessRun(ctx, run.ID, appProduct.ProcessRunOptions{
+		BatchSize:     50,
+		LeaseDuration: 30 * time.Second,
+		FromStart:     true,
+	})
 	require.NoError(t, err)
 	assert.Equal(t, 1, resReplay2.RecordsSeen)
 	assert.Equal(t, 0, resReplay2.RecordsNew)
@@ -535,11 +572,17 @@ func TestProcessRunRecords_ConcurrentSameIdentity(t *testing.T) {
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		_, errs[0] = env.processor.ProcessRun(ctx, run1.ID, appProduct.ProcessRunOptions{})
+		_, errs[0] = env.processor.ProcessRun(ctx, run1.ID, appProduct.ProcessRunOptions{
+			BatchSize:     50,
+			LeaseDuration: 30 * time.Second,
+		})
 	}()
 	go func() {
 		defer wg.Done()
-		_, errs[1] = env.processor.ProcessRun(ctx, run2.ID, appProduct.ProcessRunOptions{})
+		_, errs[1] = env.processor.ProcessRun(ctx, run2.ID, appProduct.ProcessRunOptions{
+			BatchSize:     50,
+			LeaseDuration: 30 * time.Second,
+		})
 	}()
 	wg.Wait()
 
@@ -574,7 +617,10 @@ func TestProcessRunRecords_OutOfOrder(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.NoError(t, env.rawRepo.Save(ctx, rec1))
-	_, err = env.processor.ProcessRun(ctx, run1.ID, appProduct.ProcessRunOptions{})
+	_, err = env.processor.ProcessRun(ctx, run1.ID, appProduct.ProcessRunOptions{
+		BatchSize:     50,
+		LeaseDuration: 30 * time.Second,
+	})
 	require.NoError(t, err)
 
 	// Run 2 processes an older record T1 (where T1 < T2)
@@ -591,15 +637,18 @@ func TestProcessRunRecords_OutOfOrder(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, env.rawRepo.Save(ctx, rec2))
 
-	res2, err := env.processor.ProcessRun(ctx, run2.ID, appProduct.ProcessRunOptions{})
+	res2, err := env.processor.ProcessRun(ctx, run2.ID, appProduct.ProcessRunOptions{
+		BatchSize:     50,
+		LeaseDuration: 30 * time.Second,
+	})
 	require.NoError(t, err)
 
 	assert.Equal(t, 1, res2.RecordsUnchanged, "stale record must be counted as unchanged")
 	assert.Equal(t, 0, res2.RecordsChanged)
 
 	// Verify catalog did not regress
-	snap, err := env.productRepo.FindSnapshotByIdentity(ctx, sourceID, "ext-order-1")
-	require.NoError(t, err)
+	snap := findTestSnapshot(t, ctx, env, sourceID, "ext-order-1")
+	require.NotNil(t, snap)
 	assert.Equal(t, "Newer Title T2", snap.StoredCurrentVersion.CanonicalName)
 }
 
@@ -640,7 +689,9 @@ func TestProcessRunRecords_BadRecordCounted(t *testing.T) {
 
 	budget := domainIngestion.ErrorBudget{MaxErrorRate: 0.50, MinSampleRows: 2}
 	result, err := env.processor.ProcessRun(ctx, run.ID, appProduct.ProcessRunOptions{
-		ErrorBudget: budget,
+		BatchSize:     50,
+		LeaseDuration: 30 * time.Second,
+		ErrorBudget:   budget,
 	})
 	require.NoError(t, err)
 
@@ -673,7 +724,8 @@ func TestProcessRunRecords_ErrorBudgetExceeded_FailsLoudly(t *testing.T) {
 
 	// Neither caller passes an error budget -> DefaultErrorBudget (5% after 100) applies
 	_, err := env.processor.ProcessRun(ctx, run.ID, appProduct.ProcessRunOptions{
-		BatchSize: 50,
+		BatchSize:     50,
+		LeaseDuration: 30 * time.Second,
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "error budget exceeded")
@@ -710,7 +762,10 @@ func TestProcessRunRecords_PriceOnlyChange(t *testing.T) {
 		ReceivedAt:        t1,
 	})
 	require.NoError(t, env.rawRepo.Save(ctx, rec1))
-	_, err := env.processor.ProcessRun(ctx, run1.ID, appProduct.ProcessRunOptions{})
+	_, err := env.processor.ProcessRun(ctx, run1.ID, appProduct.ProcessRunOptions{
+		BatchSize:     50,
+		LeaseDuration: 30 * time.Second,
+	})
 	require.NoError(t, err)
 
 	// Run 2: Price changes from 129.99 to 99.99 (gotcha #1: price is not in canonical fingerprint)
@@ -732,7 +787,10 @@ func TestProcessRunRecords_PriceOnlyChange(t *testing.T) {
 	})
 	require.NoError(t, env.rawRepo.Save(ctx, rec2))
 
-	res2, err := env.processor.ProcessRun(ctx, run2.ID, appProduct.ProcessRunOptions{})
+	res2, err := env.processor.ProcessRun(ctx, run2.ID, appProduct.ProcessRunOptions{
+		BatchSize:     50,
+		LeaseDuration: 30 * time.Second,
+	})
 	require.NoError(t, err)
 
 	assert.Equal(t, 1, res2.RecordsUnchanged, "price change must not create new version")
@@ -777,7 +835,10 @@ func TestProcessRunRecords_CancelAndResume(t *testing.T) {
 	cancellingProcessor, err := appProduct.NewRunProcessor(env.runRepo, env.sourceRepo, env.rawRepo, env.processingRepo, cancellingRunner)
 	require.NoError(t, err)
 
-	_, err = cancellingProcessor.ProcessRun(cancelCtx, run.ID, appProduct.ProcessRunOptions{BatchSize: 1})
+	_, err = cancellingProcessor.ProcessRun(cancelCtx, run.ID, appProduct.ProcessRunOptions{
+		BatchSize:     1,
+		LeaseDuration: 30 * time.Second,
+	})
 	require.Error(t, err)
 
 	// Processing status should be released to PENDING
@@ -792,7 +853,10 @@ func TestProcessRunRecords_CancelAndResume(t *testing.T) {
 	assert.Equal(t, 3, prodCountMid)
 
 	// Resume on live context using the standard processor
-	res, err := env.processor.ProcessRun(ctx, run.ID, appProduct.ProcessRunOptions{BatchSize: 2})
+	res, err := env.processor.ProcessRun(ctx, run.ID, appProduct.ProcessRunOptions{
+		BatchSize:     2,
+		LeaseDuration: 30 * time.Second,
+	})
 	require.NoError(t, err)
 	assert.Equal(t, 10, res.RecordsSeen)
 	assert.Equal(t, 10, res.RecordsNew)
@@ -873,12 +937,15 @@ func TestProcessRunRecords_FingerprintVersionMismatch(t *testing.T) {
 		ReceivedAt:        now,
 	})
 	require.NoError(t, env.rawRepo.Save(ctx, rec1))
-	_, err := env.processor.ProcessRun(ctx, run1.ID, appProduct.ProcessRunOptions{})
+	_, err := env.processor.ProcessRun(ctx, run1.ID, appProduct.ProcessRunOptions{
+		BatchSize:     50,
+		LeaseDuration: 30 * time.Second,
+	})
 	require.NoError(t, err)
 
 	// Manually corrupt the current_fingerprint to a legacy "v0:..." format
-	snap, err := env.productRepo.FindSnapshotByIdentity(ctx, sourceID, "ext-legacy-1")
-	require.NoError(t, err)
+	snap := findTestSnapshot(t, ctx, env, sourceID, "ext-legacy-1")
+	require.NotNil(t, snap)
 	_, err = env.pool.Exec(ctx, "UPDATE products SET current_fingerprint = 'v0:legacy_hash_format_12345' WHERE id = $1", string(snap.ProductID))
 	require.NoError(t, err)
 
@@ -893,15 +960,18 @@ func TestProcessRunRecords_FingerprintVersionMismatch(t *testing.T) {
 	})
 	require.NoError(t, env.rawRepo.Save(ctx, rec2))
 
-	res2, err := env.processor.ProcessRun(ctx, run2.ID, appProduct.ProcessRunOptions{})
+	res2, err := env.processor.ProcessRun(ctx, run2.ID, appProduct.ProcessRunOptions{
+		BatchSize:     50,
+		LeaseDuration: 30 * time.Second,
+	})
 	require.NoError(t, err)
 
 	assert.Equal(t, 1, res2.RecordsUnchanged)
 	assert.Equal(t, 0, res2.RecordsChanged)
 
 	// Verify fingerprint was upgraded to v1 without creating a new version or change record
-	updatedSnap, err := env.productRepo.FindSnapshotByIdentity(ctx, sourceID, "ext-legacy-1")
-	require.NoError(t, err)
+	updatedSnap := findTestSnapshot(t, ctx, env, sourceID, "ext-legacy-1")
+	require.NotNil(t, updatedSnap)
 	assert.True(t, updatedSnap.CurrentFingerprint != "v0:legacy_hash_format_12345")
 	assert.Equal(t, 1, updatedSnap.StoredCurrentVersion.VersionNumber)
 
@@ -957,7 +1027,10 @@ func TestE2E_IngestTwice_OnlyChangedVersioned(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, domainIngestion.StatusCompleted, run1.Status)
 
-	res1, err := env.processor.ProcessRun(ctx, run1.ID, appProduct.ProcessRunOptions{BatchSize: 25})
+	res1, err := env.processor.ProcessRun(ctx, run1.ID, appProduct.ProcessRunOptions{
+		BatchSize:     25,
+		LeaseDuration: 30 * time.Second,
+	})
 	require.NoError(t, err)
 	assert.Equal(t, 100, res1.RecordsNew)
 
@@ -996,7 +1069,10 @@ func TestE2E_IngestTwice_OnlyChangedVersioned(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, domainIngestion.StatusCompleted, run2.Status)
 
-	res2, err := env.processor.ProcessRun(ctx, run2.ID, appProduct.ProcessRunOptions{BatchSize: 25})
+	res2, err := env.processor.ProcessRun(ctx, run2.ID, appProduct.ProcessRunOptions{
+		BatchSize:     25,
+		LeaseDuration: 30 * time.Second,
+	})
 	require.NoError(t, err)
 
 	assert.Equal(t, 100, res2.RecordsSeen)
