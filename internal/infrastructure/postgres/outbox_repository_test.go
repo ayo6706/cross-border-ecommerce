@@ -242,10 +242,12 @@ func TestOutboxStore_Live(t *testing.T) {
 
 		staleToken, err := uuid.NewString()
 		require.NoError(t, err)
-		events, err := repo.ClaimBatch(ctx, staleToken, 10, time.Millisecond)
+		events, err := repo.ClaimBatch(ctx, staleToken, 10, time.Minute)
 		require.NoError(t, err)
 		require.Len(t, events, 1)
-		time.Sleep(5 * time.Millisecond) // let the 1 ms lease expire so another relay can claim
+		// Expire the stale relay's lease so another relay can claim the row.
+		_, err = pool.Exec(ctx, "UPDATE outbox_events SET available_at = NOW() - interval '1 second' WHERE id = $1", events[0].ID)
+		require.NoError(t, err)
 
 		owner, err := uuid.NewString()
 		require.NoError(t, err)
