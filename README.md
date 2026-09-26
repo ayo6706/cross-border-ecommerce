@@ -60,6 +60,10 @@ Stream Consumer & Worker Pool Tuning Variables (with defaults):
 - `WORKER_QUEUE_SIZE`: Buffer capacity of the worker task queue (default: `10`).
 - `WORKER_DRAIN_TIMEOUT`: Graceful shutdown drain timeout before cancelling in-flight tasks (default: `10s`).
 
+Ingestion Tuning Variables (with defaults):
+- `INGESTION_ERROR_BUDGET_MAX_RATE`: Share of rows a run may fail to normalize before the run is failed (default: `0.05`, must be > 0 and < 1).
+- `INGESTION_ERROR_BUDGET_MIN_ROWS`: Rows seen before the budget is enforced (default: `100`, must be > 0). An explicit value outside these bounds fails startup; it is never clamped.
+
 Idempotency Tuning Variables (with defaults):
 - `IDEMPOTENCY_LEASE_TTL`: Execution lease TTL for in-flight stream handlers (default: `30s`, must be strictly > `STREAM_HANDLER_TIMEOUT`).
 
