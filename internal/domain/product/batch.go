@@ -230,11 +230,11 @@ func (f *identityFold) addVersion(rec BatchIncomingRecord, transition Transition
 		}
 		f.cur = &Snapshot{ProductID: ID(ids[0]), ProductSourceID: ids[1], LastReceivedAt: rec.ReceivedAt}
 	}
-	ids, err := newIDs(2)
+	ids, err := newIDs(3)
 	if err != nil {
 		return err
 	}
-	versionID, changeID := ids[0], ids[1]
+	versionID, changeID, eventID := ids[0], ids[1], ids[2]
 
 	changeType, changedFields := ChangeTypeChanged, transition.ChangedFields
 	if transition.Type == TransitionNew {
@@ -275,6 +275,7 @@ func (f *identityFold) addVersion(rec BatchIncomingRecord, transition Transition
 	f.plan.ProductVersionsToInsert = append(f.plan.ProductVersionsToInsert, version)
 	f.plan.ProductChangesToInsert = append(f.plan.ProductChangesToInsert, change)
 	f.plan.Events = append(f.plan.Events, ProductChanged{
+		EventID:       eventID,
 		ProductID:     version.ProductID,
 		VersionID:     version.ID,
 		VersionNumber: version.VersionNumber,

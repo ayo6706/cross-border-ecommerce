@@ -66,9 +66,9 @@ func (r *OutboxRepository) CreateProductChangedEvents(ctx context.Context, event
 	}
 	params := make([]generated.CopyOutboxEventsParams, len(events))
 	for i, e := range events {
-		id, err := newUUID()
+		id, err := parseUUID(e.EventID)
 		if err != nil {
-			return fmt.Errorf("generate outbox event id: %w", err)
+			return fmt.Errorf("invalid product changed event id %q: %w", e.EventID, err)
 		}
 		payload, err := json.Marshal(productChangedPayload{
 			ProductID:     string(e.ProductID),

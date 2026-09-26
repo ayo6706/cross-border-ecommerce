@@ -28,7 +28,10 @@ func TestOutboxRepository_ConstructorValidation(t *testing.T) {
 
 func createTestOutboxEvent(t *testing.T, ctx context.Context, repo *postgres.OutboxRepository, prodID string) {
 	t.Helper()
-	err := repo.CreateProductChangedEvents(ctx, []domainProduct.ProductChanged{{
+	eventID, err := uuid.NewString()
+	require.NoError(t, err)
+	err = repo.CreateProductChangedEvents(ctx, []domainProduct.ProductChanged{{
+		EventID:       eventID,
 		ProductID:     domainProduct.ID(prodID),
 		VersionID:     "v-1",
 		VersionNumber: 1,
@@ -42,7 +45,10 @@ func createTestOutboxEvents(t *testing.T, ctx context.Context, repo *postgres.Ou
 	t.Helper()
 	events := make([]domainProduct.ProductChanged, count)
 	for i := 0; i < count; i++ {
+		eventID, err := uuid.NewString()
+		require.NoError(t, err)
 		events[i] = domainProduct.ProductChanged{
+			EventID:       eventID,
 			ProductID:     domainProduct.ID(fmt.Sprintf("prod-%d", i)),
 			VersionID:     "v-1",
 			VersionNumber: 1,

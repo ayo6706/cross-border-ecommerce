@@ -243,6 +243,7 @@ func TestOutboxRelay_Live(t *testing.T) {
 		require.NoError(t, err)
 
 		err = outboxRepo.CreateProductChangedEvents(ctx, []domainProduct.ProductChanged{{
+			EventID:       "a0000000-0000-4000-8000-000000000001",
 			ProductID:     domainProduct.ID("prod-bdown"),
 			VersionID:     "v-1",
 			VersionNumber: 1,
@@ -294,6 +295,7 @@ func TestOutboxRelay_Live(t *testing.T) {
 		_ = rClient.FlushDB(ctx).Err()
 
 		err = outboxRepo.CreateProductChangedEvents(ctx, []domainProduct.ProductChanged{{
+			EventID:       "a0000000-0000-4000-8000-000000000002",
 			ProductID:     domainProduct.ID("prod-crash"),
 			VersionID:     "v-1",
 			VersionNumber: 1,
