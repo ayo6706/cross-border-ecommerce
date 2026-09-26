@@ -13,7 +13,7 @@ import (
 const runCleanupTimeout = 5 * time.Second
 
 // SyncParams contains parameters required to execute an ingestion sync run.
-// A zero ErrorBudget means domainIngestion.DefaultErrorBudget.
+// ErrorBudget bounds the share of rows a run may skip before the run is failed.
 type SyncParams struct {
 	SourceID          source.ID
 	Adapter           domainIngestion.Adapter
@@ -52,8 +52,10 @@ func (c *SyncCoordinator) SyncSource(ctx context.Context, params SyncParams) (*d
 	if params.Adapter == nil {
 		return nil, errors.New("source adapter is required")
 	}
-
-	budget := params.ErrorBudget.OrDefault()
+	if err := params.ErrorBudget.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid error budget: %w", err)
+	}
+	budget := params.ErrorBudget
 
 	run, err := c.runService.StartRun(ctx, params.SourceID, params.InitialCheckpoint)
 	if err != nil {

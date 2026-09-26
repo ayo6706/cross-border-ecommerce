@@ -12,6 +12,8 @@ import (
 	"github.com/ayo6706/cross-border-ecommerce/internal/domain/source"
 )
 
+var defaultTestBudget = ingestion.ErrorBudget{MaxErrorRate: 0.10, MinSampleRows: 10}
+
 type memoryTxRunner struct {
 	runs       ingestion.Repository
 	rawRecords ingestion.RawRecordRepository
@@ -103,6 +105,7 @@ func TestSyncCoordinator_SyncSource(t *testing.T) {
 			Adapter:           adapter,
 			InitialCheckpoint: "cp-start",
 			BatchSize:         2,
+			ErrorBudget:       defaultTestBudget,
 		})
 		if err != nil {
 			t.Fatalf("unexpected sync error: %v", err)
@@ -155,9 +158,10 @@ func TestSyncCoordinator_SyncSource(t *testing.T) {
 		}
 
 		run, err := coordinator.SyncSource(ctx, appingestion.SyncParams{
-			SourceID:  srcID,
-			Adapter:   adapter,
-			BatchSize: 1,
+			SourceID:    srcID,
+			Adapter:     adapter,
+			BatchSize:   1,
+			ErrorBudget: defaultTestBudget,
 		})
 		if err == nil {
 			t.Fatal("expected error on failed second batch fetch")
@@ -191,8 +195,9 @@ func TestSyncCoordinator_SyncSource(t *testing.T) {
 
 		adapter := &fakeAdapter{}
 		run, err := coordinator.SyncSource(cancelCtx, appingestion.SyncParams{
-			SourceID: srcID,
-			Adapter:  adapter,
+			SourceID:    srcID,
+			Adapter:     adapter,
+			ErrorBudget: defaultTestBudget,
 		})
 		if err == nil {
 			t.Fatal("expected context cancellation error")
@@ -222,6 +227,7 @@ func TestSyncCoordinator_SyncSource(t *testing.T) {
 			SourceID:          srcID,
 			Adapter:           adapter,
 			InitialCheckpoint: "cp-same",
+			ErrorBudget:       defaultTestBudget,
 		})
 		if err == nil {
 			t.Fatal("expected ErrSourceContractViolation on same checkpoint with HasMore=true")
@@ -245,7 +251,11 @@ func TestSyncCoordinator_SyncSource(t *testing.T) {
 			},
 		}
 
-		run, err := coordinator.SyncSource(ctx, appingestion.SyncParams{SourceID: srcID, Adapter: adapter})
+		run, err := coordinator.SyncSource(ctx, appingestion.SyncParams{
+			SourceID:    srcID,
+			Adapter:     adapter,
+			ErrorBudget: defaultTestBudget,
+		})
 		if err != nil {
 			t.Fatalf("unexpected sync error: %v", err)
 		}
@@ -305,7 +315,11 @@ func TestSyncCoordinator_SyncSource(t *testing.T) {
 			errs: []error{nil, errors.New("upstream connection reset")},
 		}
 
-		run, err := coordinator.SyncSource(ctx, appingestion.SyncParams{SourceID: srcID, Adapter: adapter})
+		run, err := coordinator.SyncSource(ctx, appingestion.SyncParams{
+			SourceID:    srcID,
+			Adapter:     adapter,
+			ErrorBudget: defaultTestBudget,
+		})
 		if err == nil {
 			t.Fatal("expected fetch error on second batch")
 		}
@@ -313,6 +327,19 @@ func TestSyncCoordinator_SyncSource(t *testing.T) {
 		dbRun, _ := runRepo.FindRunByID(ctx, run.ID)
 		if dbRun.Checkpoint != "cp-after-empty-page" {
 			t.Errorf("expected checkpoint from empty page to be persisted, got %q", dbRun.Checkpoint)
+		}
+	})
+
+	t.Run("InvalidErrorBudgetRejected", func(t *testing.T) {
+		coordinator, _, _, _, srcID := setup(t)
+		adapter := &fakeAdapter{}
+		_, err := coordinator.SyncSource(ctx, appingestion.SyncParams{
+			SourceID:    srcID,
+			Adapter:     adapter,
+			ErrorBudget: ingestion.ErrorBudget{},
+		})
+		if !errors.Is(err, ingestion.ErrInvalidErrorBudget) {
+			t.Fatalf("expected ErrInvalidErrorBudget, got %v", err)
 		}
 	})
 }

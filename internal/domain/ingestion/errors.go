@@ -11,6 +11,9 @@ var (
 	ErrInvalidRunState           = errors.New("invalid ingestion run state")
 	ErrInvalidTransition         = errors.New("invalid ingestion run state transition")
 	ErrInvalidRunID              = errors.New("run id cannot be empty")
+	ErrInvalidClaimToken         = errors.New("claim token cannot be empty")
+	ErrInvalidLeaseDuration      = errors.New("lease duration must be greater than zero")
+	ErrInvalidBatchSize          = errors.New("batch size must be greater than zero")
 	ErrInvalidSourceID           = source.ErrInvalidSourceID
 	ErrNegativeMetric            = errors.New("metrics cannot be negative")
 	ErrRecordNotFound            = errors.New("raw record not found")

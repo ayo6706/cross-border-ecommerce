@@ -97,7 +97,7 @@ func setupLiveTestEnv(t testing.TB) *testEnv {
 	}
 
 	t.Cleanup(func() {
-		cleanCtx, cleanCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		cleanCtx, cleanCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cleanCancel()
 		if _, err := pool.Exec(cleanCtx, truncateLiveTables); err != nil {
 			t.Errorf("truncate live tables on cleanup: %v", err)
@@ -163,6 +163,20 @@ func defaultFieldMapping() *domainProduct.FieldMapping {
 			"size":  "details.size",
 		},
 	}
+}
+
+func testProcessRunOptions(mods ...func(*appProduct.ProcessRunOptions)) appProduct.ProcessRunOptions {
+	token, _ := uuid.NewString()
+	opts := appProduct.ProcessRunOptions{
+		ClaimToken:    token,
+		BatchSize:     50,
+		LeaseDuration: 30 * time.Second,
+		ErrorBudget:   domainIngestion.ErrorBudget{MaxErrorRate: 0.10, MinSampleRows: 10},
+	}
+	for _, mod := range mods {
+		mod(&opts)
+	}
+	return opts
 }
 
 func createTestSource(t testing.TB, ctx context.Context, env *testEnv, sourceID string) *domainSource.Source {
@@ -245,10 +259,7 @@ func TestProcessRunRecords_NewProduct(t *testing.T) {
 	require.NoError(t, env.rawRepo.Save(ctx, record))
 
 	// Execute ProcessRun
-	result, err := env.processor.ProcessRun(ctx, run.ID, appProduct.ProcessRunOptions{
-		BatchSize:     50,
-		LeaseDuration: 30 * time.Second,
-	})
+	result, err := env.processor.ProcessRun(ctx, run.ID, testProcessRunOptions())
 	require.NoError(t, err)
 
 	assert.Equal(t, 1, result.RecordsSeen)
@@ -294,10 +305,7 @@ func TestProcessRunRecords_RejectsNonTerminalRun(t *testing.T) {
 	require.NoError(t, run.Start(time.Now().UTC()))
 	require.NoError(t, env.runRepo.UpdateStatus(ctx, run, domainIngestion.StatusPending))
 
-	_, err = env.processor.ProcessRun(ctx, run.ID, appProduct.ProcessRunOptions{
-		BatchSize:     50,
-		LeaseDuration: 30 * time.Second,
-	})
+	_, err = env.processor.ProcessRun(ctx, run.ID, testProcessRunOptions())
 	require.ErrorIs(t, err, domainIngestion.ErrInvalidRunState)
 
 	var processingRows int
@@ -333,10 +341,7 @@ func TestProcessRunRecords_ChangedProduct(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, env.rawRepo.Save(ctx, rec1))
 
-	_, err = env.processor.ProcessRun(ctx, run1.ID, appProduct.ProcessRunOptions{
-		BatchSize:     50,
-		LeaseDuration: 30 * time.Second,
-	})
+	_, err = env.processor.ProcessRun(ctx, run1.ID, testProcessRunOptions())
 	require.NoError(t, err)
 
 	// Run 2: Changed description and color
@@ -360,10 +365,7 @@ func TestProcessRunRecords_ChangedProduct(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, env.rawRepo.Save(ctx, rec2))
 
-	res2, err := env.processor.ProcessRun(ctx, run2.ID, appProduct.ProcessRunOptions{
-		BatchSize:     50,
-		LeaseDuration: 30 * time.Second,
-	})
+	res2, err := env.processor.ProcessRun(ctx, run2.ID, testProcessRunOptions())
 	require.NoError(t, err)
 
 	assert.Equal(t, 1, res2.RecordsSeen)
@@ -418,10 +420,7 @@ func TestProcessRunRecords_Unchanged(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, env.rawRepo.Save(ctx, rec1))
 
-	_, err = env.processor.ProcessRun(ctx, run1.ID, appProduct.ProcessRunOptions{
-		BatchSize:     50,
-		LeaseDuration: 30 * time.Second,
-	})
+	_, err = env.processor.ProcessRun(ctx, run1.ID, testProcessRunOptions())
 	require.NoError(t, err)
 
 	// Capture row counts
@@ -445,10 +444,7 @@ func TestProcessRunRecords_Unchanged(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, env.rawRepo.Save(ctx, rec2))
 
-	res2, err := env.processor.ProcessRun(ctx, run2.ID, appProduct.ProcessRunOptions{
-		BatchSize:     50,
-		LeaseDuration: 30 * time.Second,
-	})
+	res2, err := env.processor.ProcessRun(ctx, run2.ID, testProcessRunOptions())
 	require.NoError(t, err)
 
 	assert.Equal(t, 1, res2.RecordsSeen)
@@ -497,28 +493,21 @@ func TestProcessRunRecords_ReplayIsIdempotent(t *testing.T) {
 	require.NoError(t, env.rawRepo.Save(ctx, rec))
 
 	// Initial execution
-	res1, err := env.processor.ProcessRun(ctx, run.ID, appProduct.ProcessRunOptions{
-		BatchSize:     50,
-		LeaseDuration: 30 * time.Second,
-	})
+	res1, err := env.processor.ProcessRun(ctx, run.ID, testProcessRunOptions())
 	require.NoError(t, err)
 	assert.Equal(t, 1, res1.RecordsNew)
 
 	// Replay 1 without --from-start: cursor is at end, no additional work
-	resReplay1, err := env.processor.ProcessRun(ctx, run.ID, appProduct.ProcessRunOptions{
-		BatchSize:     50,
-		LeaseDuration: 30 * time.Second,
-		FromStart:     false,
-	})
+	resReplay1, err := env.processor.ProcessRun(ctx, run.ID, testProcessRunOptions(func(o *appProduct.ProcessRunOptions) {
+		o.FromStart = false
+	}))
 	require.NoError(t, err)
 	assert.Equal(t, 1, resReplay1.RecordsNew)
 
 	// Replay 2 with --from-start: resets counters and walks from start, resolves as unchanged
-	resReplay2, err := env.processor.ProcessRun(ctx, run.ID, appProduct.ProcessRunOptions{
-		BatchSize:     50,
-		LeaseDuration: 30 * time.Second,
-		FromStart:     true,
-	})
+	resReplay2, err := env.processor.ProcessRun(ctx, run.ID, testProcessRunOptions(func(o *appProduct.ProcessRunOptions) {
+		o.FromStart = true
+	}))
 	require.NoError(t, err)
 	assert.Equal(t, 1, resReplay2.RecordsSeen)
 	assert.Equal(t, 0, resReplay2.RecordsNew)
@@ -572,17 +561,11 @@ func TestProcessRunRecords_ConcurrentSameIdentity(t *testing.T) {
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		_, errs[0] = env.processor.ProcessRun(ctx, run1.ID, appProduct.ProcessRunOptions{
-			BatchSize:     50,
-			LeaseDuration: 30 * time.Second,
-		})
+		_, errs[0] = env.processor.ProcessRun(ctx, run1.ID, testProcessRunOptions())
 	}()
 	go func() {
 		defer wg.Done()
-		_, errs[1] = env.processor.ProcessRun(ctx, run2.ID, appProduct.ProcessRunOptions{
-			BatchSize:     50,
-			LeaseDuration: 30 * time.Second,
-		})
+		_, errs[1] = env.processor.ProcessRun(ctx, run2.ID, testProcessRunOptions())
 	}()
 	wg.Wait()
 
@@ -617,10 +600,7 @@ func TestProcessRunRecords_OutOfOrder(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.NoError(t, env.rawRepo.Save(ctx, rec1))
-	_, err = env.processor.ProcessRun(ctx, run1.ID, appProduct.ProcessRunOptions{
-		BatchSize:     50,
-		LeaseDuration: 30 * time.Second,
-	})
+	_, err = env.processor.ProcessRun(ctx, run1.ID, testProcessRunOptions())
 	require.NoError(t, err)
 
 	// Run 2 processes an older record T1 (where T1 < T2)
@@ -637,10 +617,7 @@ func TestProcessRunRecords_OutOfOrder(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, env.rawRepo.Save(ctx, rec2))
 
-	res2, err := env.processor.ProcessRun(ctx, run2.ID, appProduct.ProcessRunOptions{
-		BatchSize:     50,
-		LeaseDuration: 30 * time.Second,
-	})
+	res2, err := env.processor.ProcessRun(ctx, run2.ID, testProcessRunOptions())
 	require.NoError(t, err)
 
 	assert.Equal(t, 1, res2.RecordsUnchanged, "stale record must be counted as unchanged")
@@ -688,11 +665,9 @@ func TestProcessRunRecords_BadRecordCounted(t *testing.T) {
 	require.NoError(t, env.rawRepo.SaveBatch(ctx, []*domainIngestion.RawRecord{r1, r2, r3}))
 
 	budget := domainIngestion.ErrorBudget{MaxErrorRate: 0.50, MinSampleRows: 2}
-	result, err := env.processor.ProcessRun(ctx, run.ID, appProduct.ProcessRunOptions{
-		BatchSize:     50,
-		LeaseDuration: 30 * time.Second,
-		ErrorBudget:   budget,
-	})
+	result, err := env.processor.ProcessRun(ctx, run.ID, testProcessRunOptions(func(o *appProduct.ProcessRunOptions) {
+		o.ErrorBudget = budget
+	}))
 	require.NoError(t, err)
 
 	assert.Equal(t, 3, result.RecordsSeen)
@@ -722,11 +697,10 @@ func TestProcessRunRecords_ErrorBudgetExceeded_FailsLoudly(t *testing.T) {
 	}
 	require.NoError(t, env.rawRepo.SaveBatch(ctx, records))
 
-	// Neither caller passes an error budget -> DefaultErrorBudget (5% after 100) applies
-	_, err := env.processor.ProcessRun(ctx, run.ID, appProduct.ProcessRunOptions{
-		BatchSize:     50,
-		LeaseDuration: 30 * time.Second,
-	})
+	budget := domainIngestion.ErrorBudget{MaxErrorRate: 0.05, MinSampleRows: 100}
+	_, err := env.processor.ProcessRun(ctx, run.ID, testProcessRunOptions(func(o *appProduct.ProcessRunOptions) {
+		o.ErrorBudget = budget
+	}))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "error budget exceeded")
 
@@ -762,10 +736,7 @@ func TestProcessRunRecords_PriceOnlyChange(t *testing.T) {
 		ReceivedAt:        t1,
 	})
 	require.NoError(t, env.rawRepo.Save(ctx, rec1))
-	_, err := env.processor.ProcessRun(ctx, run1.ID, appProduct.ProcessRunOptions{
-		BatchSize:     50,
-		LeaseDuration: 30 * time.Second,
-	})
+	_, err := env.processor.ProcessRun(ctx, run1.ID, testProcessRunOptions())
 	require.NoError(t, err)
 
 	// Run 2: Price changes from 129.99 to 99.99 (gotcha #1: price is not in canonical fingerprint)
@@ -787,10 +758,7 @@ func TestProcessRunRecords_PriceOnlyChange(t *testing.T) {
 	})
 	require.NoError(t, env.rawRepo.Save(ctx, rec2))
 
-	res2, err := env.processor.ProcessRun(ctx, run2.ID, appProduct.ProcessRunOptions{
-		BatchSize:     50,
-		LeaseDuration: 30 * time.Second,
-	})
+	res2, err := env.processor.ProcessRun(ctx, run2.ID, testProcessRunOptions())
 	require.NoError(t, err)
 
 	assert.Equal(t, 1, res2.RecordsUnchanged, "price change must not create new version")
@@ -835,10 +803,9 @@ func TestProcessRunRecords_CancelAndResume(t *testing.T) {
 	cancellingProcessor, err := appProduct.NewRunProcessor(env.runRepo, env.sourceRepo, env.rawRepo, env.processingRepo, cancellingRunner)
 	require.NoError(t, err)
 
-	_, err = cancellingProcessor.ProcessRun(cancelCtx, run.ID, appProduct.ProcessRunOptions{
-		BatchSize:     1,
-		LeaseDuration: 30 * time.Second,
-	})
+	_, err = cancellingProcessor.ProcessRun(cancelCtx, run.ID, testProcessRunOptions(func(o *appProduct.ProcessRunOptions) {
+		o.BatchSize = 1
+	}))
 	require.Error(t, err)
 
 	// Processing status should be released to PENDING
@@ -853,10 +820,9 @@ func TestProcessRunRecords_CancelAndResume(t *testing.T) {
 	assert.Equal(t, 3, prodCountMid)
 
 	// Resume on live context using the standard processor
-	res, err := env.processor.ProcessRun(ctx, run.ID, appProduct.ProcessRunOptions{
-		BatchSize:     2,
-		LeaseDuration: 30 * time.Second,
-	})
+	res, err := env.processor.ProcessRun(ctx, run.ID, testProcessRunOptions(func(o *appProduct.ProcessRunOptions) {
+		o.BatchSize = 2
+	}))
 	require.NoError(t, err)
 	assert.Equal(t, 10, res.RecordsSeen)
 	assert.Equal(t, 10, res.RecordsNew)
@@ -904,11 +870,9 @@ func TestWorker_ClaimNext_Then_ProcessRun(t *testing.T) {
 	assert.Equal(t, domainIngestion.ProcessingRunning, claimed.Status)
 
 	// Worker step 2: ProcessRun using the claimed token
-	res, err := env.processor.ProcessRun(ctx, claimed.RunID, appProduct.ProcessRunOptions{
-		ClaimToken:    claimToken,
-		LeaseDuration: 30 * time.Second,
-		BatchSize:     50,
-	})
+	res, err := env.processor.ProcessRun(ctx, claimed.RunID, testProcessRunOptions(func(o *appProduct.ProcessRunOptions) {
+		o.ClaimToken = claimToken
+	}))
 	require.NoError(t, err)
 	assert.Equal(t, 5, res.RecordsSeen)
 	assert.Equal(t, 5, res.RecordsNew)
@@ -937,10 +901,7 @@ func TestProcessRunRecords_FingerprintVersionMismatch(t *testing.T) {
 		ReceivedAt:        now,
 	})
 	require.NoError(t, env.rawRepo.Save(ctx, rec1))
-	_, err := env.processor.ProcessRun(ctx, run1.ID, appProduct.ProcessRunOptions{
-		BatchSize:     50,
-		LeaseDuration: 30 * time.Second,
-	})
+	_, err := env.processor.ProcessRun(ctx, run1.ID, testProcessRunOptions())
 	require.NoError(t, err)
 
 	// Manually corrupt the current_fingerprint to a legacy "v0:..." format
@@ -960,10 +921,7 @@ func TestProcessRunRecords_FingerprintVersionMismatch(t *testing.T) {
 	})
 	require.NoError(t, env.rawRepo.Save(ctx, rec2))
 
-	res2, err := env.processor.ProcessRun(ctx, run2.ID, appProduct.ProcessRunOptions{
-		BatchSize:     50,
-		LeaseDuration: 30 * time.Second,
-	})
+	res2, err := env.processor.ProcessRun(ctx, run2.ID, testProcessRunOptions())
 	require.NoError(t, err)
 
 	assert.Equal(t, 1, res2.RecordsUnchanged)
@@ -1021,16 +979,16 @@ func TestE2E_IngestTwice_OnlyChangedVersioned(t *testing.T) {
 	}
 
 	run1, err := coordinator.SyncSource(ctx, appIngestion.SyncParams{
-		SourceID: domainSource.ID(sourceID),
-		Adapter:  adapter1,
+		SourceID:    domainSource.ID(sourceID),
+		Adapter:     adapter1,
+		ErrorBudget: domainIngestion.ErrorBudget{MaxErrorRate: 0.10, MinSampleRows: 10},
 	})
 	require.NoError(t, err)
 	require.Equal(t, domainIngestion.StatusCompleted, run1.Status)
 
-	res1, err := env.processor.ProcessRun(ctx, run1.ID, appProduct.ProcessRunOptions{
-		BatchSize:     25,
-		LeaseDuration: 30 * time.Second,
-	})
+	res1, err := env.processor.ProcessRun(ctx, run1.ID, testProcessRunOptions(func(o *appProduct.ProcessRunOptions) {
+		o.BatchSize = 25
+	}))
 	require.NoError(t, err)
 	assert.Equal(t, 100, res1.RecordsNew)
 
@@ -1063,16 +1021,16 @@ func TestE2E_IngestTwice_OnlyChangedVersioned(t *testing.T) {
 	}
 
 	run2, err := coordinator.SyncSource(ctx, appIngestion.SyncParams{
-		SourceID: domainSource.ID(sourceID),
-		Adapter:  adapter2,
+		SourceID:    domainSource.ID(sourceID),
+		Adapter:     adapter2,
+		ErrorBudget: domainIngestion.ErrorBudget{MaxErrorRate: 0.10, MinSampleRows: 10},
 	})
 	require.NoError(t, err)
 	require.Equal(t, domainIngestion.StatusCompleted, run2.Status)
 
-	res2, err := env.processor.ProcessRun(ctx, run2.ID, appProduct.ProcessRunOptions{
-		BatchSize:     25,
-		LeaseDuration: 30 * time.Second,
-	})
+	res2, err := env.processor.ProcessRun(ctx, run2.ID, testProcessRunOptions(func(o *appProduct.ProcessRunOptions) {
+		o.BatchSize = 25
+	}))
 	require.NoError(t, err)
 
 	assert.Equal(t, 100, res2.RecordsSeen)
@@ -1090,3 +1048,61 @@ func TestE2E_IngestTwice_OnlyChangedVersioned(t *testing.T) {
 	require.NoError(t, env.pool.QueryRow(ctx, "SELECT count(*) FROM outbox_events").Scan(&totalOutbox))
 	assert.Equal(t, 105, totalOutbox)
 }
+
+func TestProcessRun_ValidationRejectsInvalidOptions(t *testing.T) {
+	env := setupLiveTestEnv(t)
+	ctx := context.Background()
+
+	sourceID := "src-val-opts"
+	createTestSource(t, ctx, env, sourceID)
+	run := createTestRun(t, ctx, env, sourceID)
+
+	validBudget := domainIngestion.ErrorBudget{MaxErrorRate: 0.10, MinSampleRows: 10}
+
+	// 1. Empty Run ID
+	_, err := env.processor.ProcessRun(ctx, "", appProduct.ProcessRunOptions{
+		ClaimToken:    "token-1",
+		LeaseDuration: 30 * time.Second,
+		BatchSize:     50,
+		ErrorBudget:   validBudget,
+	})
+	require.ErrorIs(t, err, domainIngestion.ErrInvalidRunID)
+
+	// 2. Empty Claim Token
+	_, err = env.processor.ProcessRun(ctx, run.ID, appProduct.ProcessRunOptions{
+		ClaimToken:    "",
+		LeaseDuration: 30 * time.Second,
+		BatchSize:     50,
+		ErrorBudget:   validBudget,
+	})
+	require.ErrorIs(t, err, domainIngestion.ErrInvalidClaimToken)
+
+	// 3. Zero Lease Duration
+	_, err = env.processor.ProcessRun(ctx, run.ID, appProduct.ProcessRunOptions{
+		ClaimToken:    "token-1",
+		LeaseDuration: 0,
+		BatchSize:     50,
+		ErrorBudget:   validBudget,
+	})
+	require.ErrorIs(t, err, domainIngestion.ErrInvalidLeaseDuration)
+
+	// 4. Zero Batch Size
+	_, err = env.processor.ProcessRun(ctx, run.ID, appProduct.ProcessRunOptions{
+		ClaimToken:    "token-1",
+		LeaseDuration: 30 * time.Second,
+		BatchSize:     0,
+		ErrorBudget:   validBudget,
+	})
+	require.ErrorIs(t, err, domainIngestion.ErrInvalidBatchSize)
+
+	// 5. Invalid Error Budget
+	_, err = env.processor.ProcessRun(ctx, run.ID, appProduct.ProcessRunOptions{
+		ClaimToken:    "token-1",
+		LeaseDuration: 30 * time.Second,
+		BatchSize:     50,
+		ErrorBudget:   domainIngestion.ErrorBudget{},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid error budget")
+}
+

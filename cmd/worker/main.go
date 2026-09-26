@@ -120,10 +120,15 @@ func run() error {
 		return fmt.Errorf("initialize outbox relay: %w", err)
 	}
 
+	errorBudget, err := ingestion.NewErrorBudget(cfg.Ingestion.ErrorBudgetMaxRate, cfg.Ingestion.ErrorBudgetMinRows)
+	if err != nil {
+		return fmt.Errorf("invalid ingestion error budget: %w", err)
+	}
+
 	g, gCtx := errgroup.WithContext(ctx)
 
 	g.Go(func() error {
-		runProcessingLoop(gCtx, processingRepo, processor, logger)
+		runProcessingLoop(gCtx, processingRepo, processor, errorBudget, logger)
 		return nil
 	})
 
@@ -144,6 +149,7 @@ func runProcessingLoop(
 	ctx context.Context,
 	processingRepo ingestion.RunProcessingRepository,
 	processor *appProduct.RunProcessor,
+	errorBudget ingestion.ErrorBudget,
 	logger *slog.Logger,
 ) {
 	pollTicker := time.NewTicker(2 * time.Second)
@@ -187,6 +193,7 @@ func runProcessingLoop(
 				ClaimToken:    claimToken,
 				LeaseDuration: 30 * time.Second,
 				BatchSize:     500,
+				ErrorBudget:   errorBudget,
 			})
 			if err != nil {
 				if ctx.Err() == nil {

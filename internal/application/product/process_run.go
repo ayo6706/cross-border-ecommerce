@@ -10,7 +10,6 @@ import (
 	domainIngestion "github.com/ayo6706/cross-border-ecommerce/internal/domain/ingestion"
 	domainProduct "github.com/ayo6706/cross-border-ecommerce/internal/domain/product"
 	domainSource "github.com/ayo6706/cross-border-ecommerce/internal/domain/source"
-	"github.com/ayo6706/cross-border-ecommerce/internal/platform/uuid"
 )
 
 type ProcessRunOptions struct {
@@ -74,33 +73,30 @@ func NewRunProcessor(
 func (p *RunProcessor) ProcessRun(ctx context.Context, runID string, opts ProcessRunOptions) (*ProcessRunResult, error) {
 	trimmedRunID := strings.TrimSpace(runID)
 	if trimmedRunID == "" {
-		return nil, errors.New("run id cannot be empty")
+		return nil, domainIngestion.ErrInvalidRunID
 	}
 
 	claimToken := strings.TrimSpace(opts.ClaimToken)
 	if claimToken == "" {
-		generatedToken, err := uuid.NewString()
-		if err != nil {
-			return nil, fmt.Errorf("generate claim token: %w", err)
-		}
-		claimToken = generatedToken
+		return nil, domainIngestion.ErrInvalidClaimToken
 	}
 
 	leaseDuration := opts.LeaseDuration
 	if leaseDuration <= 0 {
-		return nil, errors.New("lease duration must be greater than zero")
+		return nil, domainIngestion.ErrInvalidLeaseDuration
 	}
 
 	batchSize := opts.BatchSize
 	if batchSize <= 0 {
-		return nil, errors.New("batch size must be greater than zero")
+		return nil, domainIngestion.ErrInvalidBatchSize
 	}
 
-	budget := opts.ErrorBudget.OrDefault()
+	if err := opts.ErrorBudget.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid error budget: %w", err)
+	}
+	budget := opts.ErrorBudget
 
-	cleanupCtx := context.WithoutCancel(ctx)
-
-	run, err := p.runRepo.FindRunByID(cleanupCtx, trimmedRunID)
+	run, err := p.runRepo.FindRunByID(ctx, trimmedRunID)
 	if err != nil {
 		return nil, fmt.Errorf("find ingestion run: %w", err)
 	}
@@ -109,40 +105,40 @@ func (p *RunProcessor) ProcessRun(ctx context.Context, runID string, opts Proces
 			trimmedRunID, run.Status, domainIngestion.StatusCompleted, domainIngestion.StatusPartial)
 	}
 
-	_, err = p.processingRepo.EnsureExists(cleanupCtx, trimmedRunID)
+	_, err = p.processingRepo.EnsureExists(ctx, trimmedRunID)
 	if err != nil {
 		return nil, fmt.Errorf("ensure run processing exists: %w", err)
 	}
 
 	if opts.FromStart {
-		_, err = p.processingRepo.ResetFromStart(cleanupCtx, trimmedRunID)
+		_, err = p.processingRepo.ResetFromStart(ctx, trimmedRunID)
 		if err != nil {
 			return nil, fmt.Errorf("reset run processing from start: %w", err)
 		}
 	}
 
-	rp, err := p.processingRepo.ClaimSpecific(cleanupCtx, trimmedRunID, claimToken, leaseDuration)
+	rp, err := p.processingRepo.ClaimSpecific(ctx, trimmedRunID, claimToken, leaseDuration)
 	if err != nil {
 		return nil, fmt.Errorf("claim run processing: %w", err)
 	}
 
-	src, err := p.sourceRepo.FindByID(cleanupCtx, run.SourceID)
+	src, err := p.sourceRepo.FindByID(ctx, run.SourceID)
 	if err != nil {
 		if ctx.Err() != nil {
-			releaseErr := p.processingRepo.Release(cleanupCtx, trimmedRunID, claimToken)
+			releaseErr := p.releaseRun(ctx, trimmedRunID, claimToken)
 			return nil, errors.Join(ctx.Err(), releaseErr)
 		}
-		failErr := p.processingRepo.Fail(cleanupCtx, trimmedRunID, claimToken, fmt.Sprintf("find source: %v", err))
+		failErr := p.failRun(ctx, trimmedRunID, claimToken, fmt.Sprintf("find source: %v", err))
 		return nil, errors.Join(fmt.Errorf("find source for run: %w", err), failErr)
 	}
 
 	fieldMapping, err := src.GetFieldMapping()
 	if err != nil {
-		failErr := p.processingRepo.Fail(cleanupCtx, trimmedRunID, claimToken, fmt.Sprintf("invalid field mapping: %v", err))
+		failErr := p.failRun(ctx, trimmedRunID, claimToken, fmt.Sprintf("invalid field mapping: %v", err))
 		return nil, errors.Join(fmt.Errorf("%w: %w", domainProduct.ErrInvalidFieldMapping, err), failErr)
 	}
 	if fieldMapping == nil {
-		failErr := p.processingRepo.Fail(cleanupCtx, trimmedRunID, claimToken, "missing field mapping on source configuration")
+		failErr := p.failRun(ctx, trimmedRunID, claimToken, "missing field mapping on source configuration")
 		return nil, errors.Join(domainProduct.ErrMissingFieldMapping, failErr)
 	}
 
@@ -150,17 +146,17 @@ func (p *RunProcessor) ProcessRun(ctx context.Context, runID string, opts Proces
 
 	for {
 		if err := ctx.Err(); err != nil {
-			releaseErr := p.processingRepo.Release(cleanupCtx, trimmedRunID, claimToken)
+			releaseErr := p.releaseRun(ctx, trimmedRunID, claimToken)
 			return nil, errors.Join(err, releaseErr)
 		}
 
 		records, err := p.rawRepo.ListKeysetByRunID(ctx, trimmedRunID, cursorID, batchSize)
 		if err != nil {
 			if ctx.Err() != nil {
-				releaseErr := p.processingRepo.Release(cleanupCtx, trimmedRunID, claimToken)
+				releaseErr := p.releaseRun(ctx, trimmedRunID, claimToken)
 				return nil, errors.Join(ctx.Err(), releaseErr)
 			}
-			failErr := p.processingRepo.Fail(cleanupCtx, trimmedRunID, claimToken, fmt.Sprintf("list raw records: %v", err))
+			failErr := p.failRun(ctx, trimmedRunID, claimToken, fmt.Sprintf("list raw records: %v", err))
 			return nil, errors.Join(fmt.Errorf("list raw records: %w", err), failErr)
 		}
 
@@ -205,24 +201,24 @@ func (p *RunProcessor) ProcessRun(ctx context.Context, runID string, opts Proces
 		)
 		if err != nil {
 			if ctx.Err() != nil {
-				releaseErr := p.processingRepo.Release(cleanupCtx, trimmedRunID, claimToken)
+				releaseErr := p.releaseRun(ctx, trimmedRunID, claimToken)
 				return nil, errors.Join(ctx.Err(), releaseErr)
 			}
 			if errors.Is(err, domainIngestion.ErrLeaseLost) {
 				return nil, err
 			}
-			failErr := p.processingRepo.Fail(cleanupCtx, trimmedRunID, claimToken, err.Error())
+			failErr := p.failRun(ctx, trimmedRunID, claimToken, err.Error())
 			return nil, errors.Join(err, failErr)
 		}
 
 		cursorID = &lastRecordID
 	}
 
-	if err := p.processingRepo.Complete(cleanupCtx, trimmedRunID, claimToken); err != nil {
+	if err := p.completeRun(ctx, trimmedRunID, claimToken); err != nil {
 		return nil, fmt.Errorf("complete run processing: %w", err)
 	}
 
-	finalState, err := p.processingRepo.GetByID(cleanupCtx, trimmedRunID)
+	finalState, err := p.getFinalState(ctx, trimmedRunID)
 	if err != nil {
 		return nil, fmt.Errorf("get final processing state: %w", err)
 	}
@@ -235,6 +231,30 @@ func (p *RunProcessor) ProcessRun(ctx context.Context, runID string, opts Proces
 		RecordsUnchanged: finalState.RecordsUnchanged,
 		RecordsFailed:    finalState.RecordsFailed,
 	}, nil
+}
+
+func (p *RunProcessor) releaseRun(ctx context.Context, runID, claimToken string) error {
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	return p.processingRepo.Release(cleanupCtx, runID, claimToken)
+}
+
+func (p *RunProcessor) failRun(ctx context.Context, runID, claimToken, reason string) error {
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	return p.processingRepo.Fail(cleanupCtx, runID, claimToken, reason)
+}
+
+func (p *RunProcessor) completeRun(ctx context.Context, runID, claimToken string) error {
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	return p.processingRepo.Complete(cleanupCtx, runID, claimToken)
+}
+
+func (p *RunProcessor) getFinalState(ctx context.Context, runID string) (*domainIngestion.RunProcessing, error) {
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	return p.processingRepo.GetByID(cleanupCtx, runID)
 }
 
 //nolint:funlen,gocognit // legacy baseline 2026-09-26: fix in ENG-044
@@ -317,10 +337,11 @@ func (p *RunProcessor) processPageWithRetry(
 		})
 
 		if err == nil {
-			if updatedRp != nil {
-				if budgetErr := errorBudget.Check(updatedRp.RecordsSeen, updatedRp.RecordsFailed); budgetErr != nil {
-					return nil, budgetErr
-				}
+			if updatedRp == nil {
+				return nil, errors.New("transaction committed but updated progress was nil")
+			}
+			if budgetErr := errorBudget.Check(updatedRp.RecordsSeen, updatedRp.RecordsFailed); budgetErr != nil {
+				return nil, budgetErr
 			}
 			return updatedRp, nil
 		}

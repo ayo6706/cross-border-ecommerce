@@ -52,11 +52,11 @@ func runBenchmarkWorkload(b *testing.B, batchSize int, workload string, recordCo
 
 		b.ResetTimer()
 		for n := 0; n < b.N; n++ {
-			summary, err := env.processor.ProcessRun(ctx, run.ID, appProduct.ProcessRunOptions{
-				BatchSize:     batchSize,
-				LeaseDuration: 5 * time.Minute,
-				FromStart:     true,
-			})
+			summary, err := env.processor.ProcessRun(ctx, run.ID, testProcessRunOptions(func(o *appProduct.ProcessRunOptions) {
+				o.BatchSize = batchSize
+				o.LeaseDuration = 5 * time.Minute
+				o.FromStart = true
+			}))
 			if err != nil {
 				b.Fatalf("ProcessRun failed: %v", err)
 			}
@@ -82,10 +82,10 @@ func runBenchmarkWorkload(b *testing.B, batchSize int, workload string, recordCo
 			rawRecords[i] = rec
 		}
 		require.NoError(b, env.rawRepo.SaveBatch(ctx, rawRecords))
-		_, err := env.processor.ProcessRun(ctx, seedRun.ID, appProduct.ProcessRunOptions{
-			BatchSize:     500,
-			LeaseDuration: 5 * time.Minute,
-		})
+		_, err := env.processor.ProcessRun(ctx, seedRun.ID, testProcessRunOptions(func(o *appProduct.ProcessRunOptions) {
+			o.BatchSize = 500
+			o.LeaseDuration = 5 * time.Minute
+		}))
 		require.NoError(b, err)
 
 		// Second run: 100% unchanged
@@ -108,11 +108,11 @@ func runBenchmarkWorkload(b *testing.B, batchSize int, workload string, recordCo
 
 		b.ResetTimer()
 		for n := 0; n < b.N; n++ {
-			summary, err := env.processor.ProcessRun(ctx, run2.ID, appProduct.ProcessRunOptions{
-				BatchSize:     batchSize,
-				LeaseDuration: 5 * time.Minute,
-				FromStart:     true,
-			})
+			summary, err := env.processor.ProcessRun(ctx, run2.ID, testProcessRunOptions(func(o *appProduct.ProcessRunOptions) {
+				o.BatchSize = batchSize
+				o.LeaseDuration = 5 * time.Minute
+				o.FromStart = true
+			}))
 			if err != nil {
 				b.Fatalf("ProcessRun failed: %v", err)
 			}
@@ -138,10 +138,10 @@ func runBenchmarkWorkload(b *testing.B, batchSize int, workload string, recordCo
 			rawRecords[i] = rec
 		}
 		require.NoError(b, env.rawRepo.SaveBatch(ctx, rawRecords[:recordCount/2]))
-		_, err := env.processor.ProcessRun(ctx, seedRun.ID, appProduct.ProcessRunOptions{
-			BatchSize:     500,
-			LeaseDuration: 5 * time.Minute,
-		})
+		_, err := env.processor.ProcessRun(ctx, seedRun.ID, testProcessRunOptions(func(o *appProduct.ProcessRunOptions) {
+			o.BatchSize = 500
+			o.LeaseDuration = 5 * time.Minute
+		}))
 		require.NoError(b, err)
 
 		// Second run: 50% new, 25% changed, 25% unchanged
@@ -174,11 +174,11 @@ func runBenchmarkWorkload(b *testing.B, batchSize int, workload string, recordCo
 
 		b.ResetTimer()
 		for n := 0; n < b.N; n++ {
-			summary, err := env.processor.ProcessRun(ctx, run2.ID, appProduct.ProcessRunOptions{
-				BatchSize:     batchSize,
-				LeaseDuration: 5 * time.Minute,
-				FromStart:     true,
-			})
+			summary, err := env.processor.ProcessRun(ctx, run2.ID, testProcessRunOptions(func(o *appProduct.ProcessRunOptions) {
+				o.BatchSize = batchSize
+				o.LeaseDuration = 5 * time.Minute
+				o.FromStart = true
+			}))
 			if err != nil {
 				b.Fatalf("ProcessRun failed: %v", err)
 			}

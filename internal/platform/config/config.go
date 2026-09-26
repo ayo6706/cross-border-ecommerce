@@ -158,6 +158,21 @@ type AppConfig struct {
 	ServiceName string
 }
 
+type IngestionConfig struct {
+	ErrorBudgetMaxRate float64
+	ErrorBudgetMinRows int
+}
+
+func (i IngestionConfig) Validate() error {
+	if i.ErrorBudgetMaxRate <= 0 || i.ErrorBudgetMaxRate >= 1.0 {
+		return fmt.Errorf("ingestion error budget max rate must be between 0 and 1, got %f", i.ErrorBudgetMaxRate)
+	}
+	if i.ErrorBudgetMinRows <= 0 {
+		return fmt.Errorf("ingestion error budget min rows must be positive, got %d", i.ErrorBudgetMinRows)
+	}
+	return nil
+}
+
 type Config struct {
 	Server      ServerConfig
 	Database    DatabaseConfig
@@ -168,6 +183,7 @@ type Config struct {
 	Outbox      OutboxConfig
 	Worker      WorkerConfig
 	Idempotency IdempotencyConfig
+	Ingestion   IngestionConfig
 }
 
 func Load() (*Config, error) {
@@ -330,6 +346,16 @@ func LoadFromLookup(lookup func(string) string) (*Config, error) {
 		return nil, fmt.Errorf("invalid IDEMPOTENCY_LEASE_TTL: %w", err)
 	}
 
+	errorBudgetMaxRate, err := getEnvFloat64(lookup, "INGESTION_ERROR_BUDGET_MAX_RATE", 0.05)
+	if err != nil {
+		return nil, fmt.Errorf("invalid INGESTION_ERROR_BUDGET_MAX_RATE: %w", err)
+	}
+
+	errorBudgetMinRows, err := getEnvInt(lookup, "INGESTION_ERROR_BUDGET_MIN_ROWS", 100)
+	if err != nil {
+		return nil, fmt.Errorf("invalid INGESTION_ERROR_BUDGET_MIN_ROWS: %w", err)
+	}
+
 	cfg := &Config{
 		Server: ServerConfig{
 			Port:            getEnvString(lookup, "PORT", "8080"),
@@ -376,6 +402,10 @@ func LoadFromLookup(lookup func(string) string) (*Config, error) {
 		},
 		Idempotency: IdempotencyConfig{
 			LeaseTTL: idempotencyLeaseTTL,
+		},
+		Ingestion: IngestionConfig{
+			ErrorBudgetMaxRate: errorBudgetMaxRate,
+			ErrorBudgetMinRows: errorBudgetMinRows,
 		},
 		Outbox: OutboxConfig{
 			BatchSize:    outboxBatchSize,
@@ -441,6 +471,10 @@ func (c *Config) Validate() error {
 		return err
 	}
 
+	if err := c.Ingestion.Validate(); err != nil {
+		return err
+	}
+
 	if c.Idempotency.LeaseTTL <= c.Stream.HandlerTimeout {
 		return fmt.Errorf("idempotency lease TTL (%v) must be strictly greater than stream handler timeout (%v)",
 			c.Idempotency.LeaseTTL, c.Stream.HandlerTimeout)
@@ -502,4 +536,16 @@ func getEnvBool(lookup func(string) string, key string, defaultVal bool) (bool, 
 		return false, fmt.Errorf("parse bool '%s': %w", val, err)
 	}
 	return b, nil
+}
+
+func getEnvFloat64(lookup func(string) string, key string, defaultVal float64) (float64, error) {
+	val := strings.TrimSpace(lookup(key))
+	if val == "" {
+		return defaultVal, nil
+	}
+	f, err := strconv.ParseFloat(val, 64)
+	if err != nil {
+		return 0, fmt.Errorf("parse float64 '%s': %w", val, err)
+	}
+	return f, nil
 }

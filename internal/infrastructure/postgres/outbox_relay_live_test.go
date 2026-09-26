@@ -192,6 +192,7 @@ func TestOutboxRelay_Live(t *testing.T) {
 			ClaimToken:    claimToken,
 			LeaseDuration: 30 * time.Second,
 			BatchSize:     10,
+			ErrorBudget:   domainIngestion.ErrorBudget{MaxErrorRate: 0.10, MinSampleRows: 10},
 		})
 		require.NoError(t, err)
 		assert.Equal(t, 1, result.RecordsNew)
@@ -478,6 +479,7 @@ func TestOutboxRelay_Live(t *testing.T) {
 			ClaimToken:    claimToken,
 			LeaseDuration: 30 * time.Second,
 			BatchSize:     50,
+			ErrorBudget:   domainIngestion.ErrorBudget{MaxErrorRate: 0.10, MinSampleRows: 10},
 		})
 		require.NoError(t, err)
 		assert.Equal(t, totalProducts, result.RecordsNew)
