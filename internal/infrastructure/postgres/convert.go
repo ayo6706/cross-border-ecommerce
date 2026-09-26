@@ -74,6 +74,17 @@ func requiredTimestamptz(t time.Time) (pgtype.Timestamptz, error) {
 	return pgtype.Timestamptz{Time: t.UTC(), Valid: true}, nil
 }
 
+// requiredAuditTimestamps converts the created_at/updated_at pair every aggregate row carries.
+func requiredAuditTimestamps(createdAt, updatedAt time.Time) (created, updated pgtype.Timestamptz, err error) {
+	if created, err = requiredTimestamptz(createdAt); err != nil {
+		return created, updated, fmt.Errorf("created_at: %w", err)
+	}
+	if updated, err = requiredTimestamptz(updatedAt); err != nil {
+		return created, updated, fmt.Errorf("updated_at: %w", err)
+	}
+	return created, updated, nil
+}
+
 // fromTimestamptz converts a pgtype.Timestamptz to *time.Time in UTC.
 func fromTimestamptz(tz pgtype.Timestamptz) *time.Time {
 	if !tz.Valid {

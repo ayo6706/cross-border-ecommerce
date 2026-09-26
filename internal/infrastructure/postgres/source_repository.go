@@ -123,13 +123,9 @@ func (r *SourceRepository) Save(ctx context.Context, s *source.Source) error {
 		return fmt.Errorf("%w: %v", source.ErrInvalidRateLimit, err)
 	}
 
-	createdAt, err := requiredTimestamptz(s.CreatedAt)
+	createdAt, updatedAt, err := requiredAuditTimestamps(s.CreatedAt, s.UpdatedAt)
 	if err != nil {
-		return fmt.Errorf("source created_at: %w", err)
-	}
-	updatedAt, err := requiredTimestamptz(s.UpdatedAt)
-	if err != nil {
-		return fmt.Errorf("source updated_at: %w", err)
+		return fmt.Errorf("source %w", err)
 	}
 
 	saved, err := r.queries.UpsertSource(ctx, generated.UpsertSourceParams{

@@ -50,13 +50,9 @@ func (r *IngestionRepository) CreateRun(ctx context.Context, run *ingestion.Inge
 		return fmt.Errorf("%w: %w", ingestion.ErrInvalidRunState, err)
 	}
 
-	createdAt, err := requiredTimestamptz(run.CreatedAt)
+	createdAt, updatedAt, err := requiredAuditTimestamps(run.CreatedAt, run.UpdatedAt)
 	if err != nil {
-		return fmt.Errorf("run created_at: %w", err)
-	}
-	updatedAt, err := requiredTimestamptz(run.UpdatedAt)
-	if err != nil {
-		return fmt.Errorf("run updated_at: %w", err)
+		return fmt.Errorf("run %w", err)
 	}
 
 	row, err := r.queries.CreateIngestionRun(ctx, generated.CreateIngestionRunParams{

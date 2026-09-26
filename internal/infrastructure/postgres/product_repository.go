@@ -61,10 +61,6 @@ func (r *ProductRepository) Save(ctx context.Context, p *product.Product) error 
 		return fmt.Errorf("validate product: %w", err)
 	}
 
-	if strings.TrimSpace(string(p.ID)) == "" {
-		return fmt.Errorf("%w: product id cannot be empty", product.ErrInvalidProductState)
-	}
-
 	idUUID, err := parseUUID(string(p.ID))
 	if err != nil {
 		return fmt.Errorf("%w: invalid uuid: %w", product.ErrInvalidProductState, err)
@@ -79,13 +75,9 @@ func (r *ProductRepository) Save(ctx context.Context, p *product.Product) error 
 		versionUUID = parsed
 	}
 
-	createdAt, err := requiredTimestamptz(p.CreatedAt)
+	createdAt, updatedAt, err := requiredAuditTimestamps(p.CreatedAt, p.UpdatedAt)
 	if err != nil {
-		return fmt.Errorf("product created_at: %w", err)
-	}
-	updatedAt, err := requiredTimestamptz(p.UpdatedAt)
-	if err != nil {
-		return fmt.Errorf("product updated_at: %w", err)
+		return fmt.Errorf("product %w", err)
 	}
 
 	saved, err := r.queries.UpsertProduct(ctx, generated.UpsertProductParams{

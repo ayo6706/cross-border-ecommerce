@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ayo6706/cross-border-ecommerce/internal/infrastructure/postgres"
 	domainProduct "github.com/ayo6706/cross-border-ecommerce/internal/domain/product"
+	"github.com/ayo6706/cross-border-ecommerce/internal/infrastructure/postgres"
 	"github.com/ayo6706/cross-border-ecommerce/internal/platform/uuid"
 	"github.com/ayo6706/cross-border-ecommerce/migrations"
 	"github.com/jackc/pgx/v5/pgconn"

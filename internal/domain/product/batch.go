@@ -105,8 +105,8 @@ func DecideBatch(snapshots map[string]*Snapshot, incoming []BatchIncomingRecord,
 	}
 	for _, group := range groupByIdentity(incoming) {
 		fold := newIdentityFold(plan, group, snapshots[group.key], now)
-		for _, rec := range group.records {
-			if err := fold.apply(rec); err != nil {
+		for i := range group.records {
+			if err := fold.apply(&group.records[i]); err != nil {
 				return nil, err
 			}
 		}
@@ -127,7 +127,8 @@ type identityGroup struct {
 func groupByIdentity(records []BatchIncomingRecord) []identityGroup {
 	index := make(map[string]int)
 	var groups []identityGroup
-	for _, rec := range records {
+	for i := range records {
+		rec := records[i] // a copy: trimming must not mutate the caller's page
 		rec.SourceID = strings.TrimSpace(rec.SourceID)
 		rec.ExternalProductID = strings.TrimSpace(rec.ExternalProductID)
 		key := IdentityKey(rec.SourceID, rec.ExternalProductID)
@@ -186,7 +187,7 @@ func newIdentityFold(plan *BatchPlan, group identityGroup, start *Snapshot, now 
 	return f
 }
 
-func (f *identityFold) apply(rec BatchIncomingRecord) error {
+func (f *identityFold) apply(rec *BatchIncomingRecord) error {
 	transition := DecideTransition(f.cur, IncomingRecord{
 		Normalized:      rec.Normalized,
 		Fingerprint:     rec.Fingerprint,
@@ -222,7 +223,7 @@ func (f *identityFold) apply(rec BatchIncomingRecord) error {
 // ProductChanged event) and moves the running state to that version.
 //
 //nolint:funlen // legacy baseline 2026-09-26: fix in ENG-044
-func (f *identityFold) addVersion(rec BatchIncomingRecord, transition TransitionResult) error {
+func (f *identityFold) addVersion(rec *BatchIncomingRecord, transition TransitionResult) error {
 	if f.cur == nil {
 		ids, err := newIDs(2)
 		if err != nil {

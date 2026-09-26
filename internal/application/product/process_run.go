@@ -233,26 +233,34 @@ func (p *RunProcessor) ProcessRun(ctx context.Context, runID string, opts Proces
 	}, nil
 }
 
+// finalWriteTimeout bounds the writes that finalize a run's state; they run even after the
+// caller's context is cancelled, so the lease is released instead of left to expire.
+const finalWriteTimeout = 5 * time.Second
+
+func finalWriteContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), finalWriteTimeout)
+}
+
 func (p *RunProcessor) releaseRun(ctx context.Context, runID, claimToken string) error {
-	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	cleanupCtx, cancel := finalWriteContext(ctx)
 	defer cancel()
 	return p.processingRepo.Release(cleanupCtx, runID, claimToken)
 }
 
 func (p *RunProcessor) failRun(ctx context.Context, runID, claimToken, reason string) error {
-	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	cleanupCtx, cancel := finalWriteContext(ctx)
 	defer cancel()
 	return p.processingRepo.Fail(cleanupCtx, runID, claimToken, reason)
 }
 
 func (p *RunProcessor) completeRun(ctx context.Context, runID, claimToken string) error {
-	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	cleanupCtx, cancel := finalWriteContext(ctx)
 	defer cancel()
 	return p.processingRepo.Complete(cleanupCtx, runID, claimToken)
 }
 
 func (p *RunProcessor) getFinalState(ctx context.Context, runID string) (*domainIngestion.RunProcessing, error) {
-	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	cleanupCtx, cancel := finalWriteContext(ctx)
 	defer cancel()
 	return p.processingRepo.GetByID(cleanupCtx, runID)
 }
@@ -277,7 +285,8 @@ func (p *RunProcessor) processPageWithRetry(
 			if len(validRecords) > 0 {
 				seenIdentities := make(map[string]struct{})
 				identities := make([]domainProduct.IdentityRef, 0, len(validRecords))
-				for _, r := range validRecords {
+				for i := range validRecords {
+					r := &validRecords[i]
 					key := domainProduct.IdentityKey(r.SourceID, r.ExternalProductID)
 					if _, ok := seenIdentities[key]; !ok {
 						seenIdentities[key] = struct{}{}
