@@ -3,9 +3,11 @@ package dlq_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/ayo6706/cross-border-ecommerce/internal/application/dlq"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -41,7 +43,17 @@ type memTxView struct {
 	outbox   []dlq.ReplayEvent
 }
 
+// parseUUIDLikeRepository accepts exactly what the PostgreSQL repository's pgtype.UUID parsing
+// accepts, so the fake is neither stricter nor more permissive than the real adapter.
+func parseUUIDLikeRepository(s string) error {
+	var u pgtype.UUID
+	return u.Scan(s)
+}
+
 func (v *memTxView) GetReplaySource(_ context.Context, id string) (dlq.ReplaySource, error) {
+	if err := parseUUIDLikeRepository(id); err != nil {
+		return dlq.ReplaySource{}, fmt.Errorf("%w: invalid uuid %q: %w", dlq.ErrInvalidDLQID, id, err)
+	}
 	src, ok := v.parent.sources[id]
 	if !ok {
 		return dlq.ReplaySource{}, dlq.ErrDLQNotFound
@@ -50,6 +62,12 @@ func (v *memTxView) GetReplaySource(_ context.Context, id string) (dlq.ReplaySou
 }
 
 func (v *memTxView) MarkReplayed(_ context.Context, id, outboxID string) (bool, error) {
+	if err := parseUUIDLikeRepository(id); err != nil {
+		return false, fmt.Errorf("%w: invalid uuid %q: %w", dlq.ErrInvalidDLQID, id, err)
+	}
+	if err := parseUUIDLikeRepository(outboxID); err != nil {
+		return false, fmt.Errorf("%w: invalid outbox uuid %q: %w", dlq.ErrInvalidDLQID, outboxID, err)
+	}
 	if _, done := v.parent.replayed[id]; done {
 		return false, nil
 	}
@@ -94,10 +112,12 @@ func TestNewReplayService_NilTx(t *testing.T) {
 
 func TestReplayService_Replay(t *testing.T) {
 	ctx := context.Background()
+	validDLQID := "11111111-1111-4111-8111-111111111111"
+	unknownUUID := "00000000-0000-4000-8000-000000000000"
 
 	t.Run("publishes original event to its group and marks replayed", func(t *testing.T) {
-		tx := newMemTx(map[string]dlq.ReplaySource{"d1": replayableSource()})
-		outboxID, err := newService(t, tx).Replay(ctx, "d1")
+		tx := newMemTx(map[string]dlq.ReplaySource{validDLQID: replayableSource()})
+		outboxID, err := newService(t, tx).Replay(ctx, validDLQID)
 		require.NoError(t, err)
 
 		require.Len(t, tx.outbox, 1)
@@ -109,16 +129,16 @@ func TestReplayService_Replay(t *testing.T) {
 		assert.Equal(t, "Product", e.AggregateType)
 		assert.Equal(t, "prod-1", e.AggregateID)
 		assert.Equal(t, []byte(`{"id":"prod-1"}`), e.Payload)
-		assert.Equal(t, outboxID, tx.replayed["d1"])
+		assert.Equal(t, outboxID, tx.replayed[validDLQID])
 	})
 
 	t.Run("second replay is refused and writes nothing", func(t *testing.T) {
-		tx := newMemTx(map[string]dlq.ReplaySource{"d1": replayableSource()})
+		tx := newMemTx(map[string]dlq.ReplaySource{validDLQID: replayableSource()})
 		svc := newService(t, tx)
-		_, err := svc.Replay(ctx, "d1")
+		_, err := svc.Replay(ctx, validDLQID)
 		require.NoError(t, err)
 
-		_, err = svc.Replay(ctx, "d1")
+		_, err = svc.Replay(ctx, validDLQID)
 		require.ErrorIs(t, err, dlq.ErrAlreadyReplayed)
 		assert.Len(t, tx.outbox, 1, "the losing replay's outbox write must roll back")
 	})
@@ -126,17 +146,22 @@ func TestReplayService_Replay(t *testing.T) {
 	t.Run("not replayable is refused before any write", func(t *testing.T) {
 		src := replayableSource()
 		src.Replayable = false
-		tx := newMemTx(map[string]dlq.ReplaySource{"d1": src})
+		tx := newMemTx(map[string]dlq.ReplaySource{validDLQID: src})
 
-		_, err := newService(t, tx).Replay(ctx, "d1")
+		_, err := newService(t, tx).Replay(ctx, validDLQID)
 		require.ErrorIs(t, err, dlq.ErrNotReplayable)
 		assert.Empty(t, tx.outbox)
 		assert.Empty(t, tx.replayed)
 	})
 
 	t.Run("unknown id", func(t *testing.T) {
-		_, err := newService(t, newMemTx(nil)).Replay(ctx, "missing")
+		_, err := newService(t, newMemTx(nil)).Replay(ctx, unknownUUID)
 		require.ErrorIs(t, err, dlq.ErrDLQNotFound)
+	})
+
+	t.Run("malformed non-uuid id", func(t *testing.T) {
+		_, err := newService(t, newMemTx(nil)).Replay(ctx, "not-a-valid-uuid")
+		require.ErrorIs(t, err, dlq.ErrInvalidDLQID)
 	})
 
 	t.Run("empty id", func(t *testing.T) {
@@ -145,10 +170,10 @@ func TestReplayService_Replay(t *testing.T) {
 	})
 
 	t.Run("outbox failure leaves message dead", func(t *testing.T) {
-		tx := newMemTx(map[string]dlq.ReplaySource{"d1": replayableSource()})
+		tx := newMemTx(map[string]dlq.ReplaySource{validDLQID: replayableSource()})
 		tx.outboxErr = errors.New("connection reset")
 
-		_, err := newService(t, tx).Replay(ctx, "d1")
+		_, err := newService(t, tx).Replay(ctx, validDLQID)
 		require.ErrorIs(t, err, tx.outboxErr)
 		assert.Empty(t, tx.replayed)
 	})

@@ -1,14 +1,3 @@
--- name: CreateOutboxEvent :exec
-INSERT INTO outbox_events (
-    id,
-    aggregate_type,
-    aggregate_id,
-    event_type,
-    payload
-) VALUES (
-    $1, $2, $3, $4, $5
-);
-
 -- name: CreateReplayOutboxEvent :exec
 INSERT INTO outbox_events (
     id,

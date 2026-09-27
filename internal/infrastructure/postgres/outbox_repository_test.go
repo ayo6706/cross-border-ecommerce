@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	appOutbox "github.com/ayo6706/cross-border-ecommerce/internal/application/outbox"
+	domainProduct "github.com/ayo6706/cross-border-ecommerce/internal/domain/product"
 	"github.com/ayo6706/cross-border-ecommerce/internal/infrastructure/postgres"
 	"github.com/ayo6706/cross-border-ecommerce/internal/platform/uuid"
 	"github.com/ayo6706/cross-border-ecommerce/migrations"
@@ -23,6 +25,39 @@ func TestOutboxRepository_ConstructorValidation(t *testing.T) {
 	repo, err := postgres.NewOutboxRepository(nil)
 	assert.Error(t, err)
 	assert.Nil(t, repo)
+}
+
+func createTestOutboxEvent(t *testing.T, ctx context.Context, repo *postgres.OutboxRepository, prodID string) {
+	t.Helper()
+	eventID, err := uuid.NewString()
+	require.NoError(t, err)
+	err = repo.CreateProductChangedEvents(ctx, []domainProduct.ProductChanged{{
+		EventID:       eventID,
+		ProductID:     domainProduct.ID(prodID),
+		VersionID:     "v-1",
+		VersionNumber: 1,
+		Fingerprint:   "fp-1",
+		ChangeType:    domainProduct.ChangeTypeNew,
+	}})
+	require.NoError(t, err)
+}
+
+func createTestOutboxEvents(t *testing.T, ctx context.Context, repo *postgres.OutboxRepository, count int) {
+	t.Helper()
+	events := make([]domainProduct.ProductChanged, count)
+	for i := 0; i < count; i++ {
+		eventID, err := uuid.NewString()
+		require.NoError(t, err)
+		events[i] = domainProduct.ProductChanged{
+			EventID:       eventID,
+			ProductID:     domainProduct.ID(fmt.Sprintf("prod-%d", i)),
+			VersionID:     "v-1",
+			VersionNumber: 1,
+			Fingerprint:   "fp-1",
+			ChangeType:    domainProduct.ChangeTypeNew,
+		}
+	}
+	require.NoError(t, repo.CreateProductChangedEvents(ctx, events))
 }
 
 func setupLiveOutboxDB(t *testing.T) (*pgxpool.Pool, *postgres.OutboxRepository) {
@@ -82,10 +117,8 @@ func TestOutboxStore_Live(t *testing.T) {
 		_, err := pool.Exec(ctx, "TRUNCATE outbox_events CASCADE")
 		require.NoError(t, err)
 
-		err = repo.CreateEvent(ctx, "product", "prod-1", "product.changed", []byte(`{"v":1}`))
-		require.NoError(t, err)
-		err = repo.CreateEvent(ctx, "product", "prod-2", "product.changed", []byte(`{"v":2}`))
-		require.NoError(t, err)
+		createTestOutboxEvent(t, ctx, repo, "prod-1")
+		createTestOutboxEvent(t, ctx, repo, "prod-2")
 
 		tokenA, err := uuid.NewString()
 		require.NoError(t, err)
@@ -118,10 +151,7 @@ func TestOutboxStore_Live(t *testing.T) {
 		require.NoError(t, err)
 
 		totalRows := 500
-		for i := 0; i < totalRows; i++ {
-			err = repo.CreateEvent(ctx, "product", fmt.Sprintf("prod-%d", i), "product.changed", []byte(`{"v":1}`))
-			require.NoError(t, err)
-		}
+		createTestOutboxEvents(t, ctx, repo, totalRows)
 
 		concurrency := 4
 		var wg sync.WaitGroup
@@ -171,8 +201,7 @@ func TestOutboxStore_Live(t *testing.T) {
 		_, err := pool.Exec(ctx, "TRUNCATE outbox_events CASCADE")
 		require.NoError(t, err)
 
-		err = repo.CreateEvent(ctx, "product", "prod-lease", "product.changed", []byte(`{"v":1}`))
-		require.NoError(t, err)
+		createTestOutboxEvent(t, ctx, repo, "prod-lease")
 
 		tokenA, err := uuid.NewString()
 		require.NoError(t, err)
@@ -204,13 +233,44 @@ func TestOutboxStore_Live(t *testing.T) {
 		assert.Equal(t, int64(1), affected)
 	})
 
+	// Regression (P11): a relay whose claim was taken over must not record a failure on the
+	// new owner's row, and must not report success either.
+	t.Run("record_failure_with_lost_claim", func(t *testing.T) {
+		_, err := pool.Exec(ctx, "TRUNCATE outbox_events CASCADE")
+		require.NoError(t, err)
+		createTestOutboxEvent(t, ctx, repo, "prod-lost-claim")
+
+		staleToken, err := uuid.NewString()
+		require.NoError(t, err)
+		events, err := repo.ClaimBatch(ctx, staleToken, 10, time.Minute)
+		require.NoError(t, err)
+		require.Len(t, events, 1)
+		// Expire the stale relay's lease so another relay can claim the row.
+		_, err = pool.Exec(ctx,
+			"UPDATE outbox_events SET available_at = NOW() - interval '1 second' WHERE id = $1", events[0].ID)
+		require.NoError(t, err)
+
+		owner, err := uuid.NewString()
+		require.NoError(t, err)
+		reclaimed, err := repo.ClaimBatch(ctx, owner, 10, time.Minute)
+		require.NoError(t, err)
+		require.Len(t, reclaimed, 1)
+
+		err = repo.RecordFailure(ctx, staleToken, events[0].ID, "late failure", 5, time.Second)
+		require.ErrorIs(t, err, appOutbox.ErrClaimLost)
+
+		var retries int
+		require.NoError(t, pool.QueryRow(ctx,
+			"SELECT retry_count FROM outbox_events WHERE id = $1", events[0].ID).Scan(&retries))
+		assert.Equal(t, 0, retries, "the stale relay must not bump the new owner's retry count")
+	})
+
 	// I4: Max attempts reached: FAILED and never claimed again; bad status is rejected by CHECK (SQLSTATE 23514)
 	t.Run("poison_terminal", func(t *testing.T) {
 		_, err := pool.Exec(ctx, "TRUNCATE outbox_events CASCADE")
 		require.NoError(t, err)
 
-		err = repo.CreateEvent(ctx, "product", "prod-poison", "product.changed", []byte(`{"v":1}`))
-		require.NoError(t, err)
+		createTestOutboxEvent(t, ctx, repo, "prod-poison")
 
 		maxAttempts := 3
 

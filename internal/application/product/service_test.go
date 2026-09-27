@@ -3,6 +3,7 @@ package product_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 
@@ -60,7 +61,7 @@ func (m *mockProductRepository) FindSnapshotsByIdentities(ctx context.Context, i
 
 func (m *mockProductRepository) ApplyBatch(ctx context.Context, plan *product.BatchPlan) error {
 	if plan == nil {
-		return nil
+		return fmt.Errorf("%w: nil batch plan", product.ErrInvalidProductState)
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()

@@ -17,6 +17,7 @@ var (
 	ErrNilStore      = errors.New("store cannot be nil")
 	ErrNilPublisher  = errors.New("publisher cannot be nil")
 	ErrNilLogger     = errors.New("logger cannot be nil")
+	ErrClaimLost     = errors.New("outbox event claim lost")
 )
 
 type Event struct {
@@ -231,49 +232,76 @@ func (r *Relay) RunOnce(ctx context.Context) (claimed, published int, err error)
 	return len(events), len(publishedIDs), errors.Join(errs...)
 }
 
+// Run relays batches until ctx is cancelled. A cancellation that interrupts a batch is a normal
+// shutdown and returns nil, but a real failure in that batch (e.g. claims that could not be
+// released) is returned, never swallowed.
 func (r *Relay) Run(ctx context.Context) error {
 	consecutiveFailures := 0
 
-	for {
-		if ctx.Err() != nil {
-			return nil
-		}
-
+	for ctx.Err() == nil {
 		claimed, _, err := r.RunOnce(ctx)
+		if err != nil && ctx.Err() != nil {
+			return withoutCancellation(err)
+		}
 		if err != nil {
-			if ctx.Err() != nil {
-				return nil
-			}
 			consecutiveFailures++
-			bo := platformBackoff.Exponential(consecutiveFailures-1, r.cfg.BaseBackoff, r.cfg.MaxBackoff)
-			r.logger.Error("outbox relay batch failed, backing off",
-				slog.Int("consecutive_failures", consecutiveFailures),
-				slog.Duration("backoff", bo),
-				slog.Any("error", err),
-			)
-
-			timer := time.NewTimer(bo)
-			select {
-			case <-ctx.Done():
-				timer.Stop()
-				return nil
-			case <-timer.C:
-			}
+			r.waitAfterFailure(ctx, consecutiveFailures, err)
 			continue
 		}
 
 		consecutiveFailures = 0
-
-		if claimed == r.cfg.BatchSize {
-			continue
-		}
-
-		timer := time.NewTimer(r.cfg.PollInterval)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return nil
-		case <-timer.C:
+		if claimed < r.cfg.BatchSize {
+			sleep(ctx, r.cfg.PollInterval)
 		}
 	}
+	return nil
+}
+
+func (r *Relay) waitAfterFailure(ctx context.Context, consecutiveFailures int, err error) {
+	bo := platformBackoff.Exponential(consecutiveFailures-1, r.cfg.BaseBackoff, r.cfg.MaxBackoff)
+	r.logger.Error("outbox relay batch failed, backing off",
+		slog.Int("consecutive_failures", consecutiveFailures),
+		slog.Duration("backoff", bo),
+		slog.Any("error", err),
+	)
+	sleep(ctx, bo)
+}
+
+// sleep waits for d or until ctx is done, whichever comes first.
+func sleep(ctx context.Context, d time.Duration) {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+	case <-timer.C:
+	}
+}
+
+// withoutCancellation returns nil when err is only cancellation, and err otherwise.
+func withoutCancellation(err error) error {
+	if isOnlyContextCanceled(err) {
+		return nil
+	}
+	return err
+}
+
+// isOnlyContextCanceled reports whether every leaf of err's tree is context.Canceled. It walks
+// both single (%w) and joined wraps, so a real error wrapped around a join is still seen.
+func isOnlyContextCanceled(err error) bool {
+	switch e := err.(type) {
+	case nil:
+		return false
+	case interface{ Unwrap() []error }:
+		for _, inner := range e.Unwrap() {
+			if !isOnlyContextCanceled(inner) {
+				return false
+			}
+		}
+		return true
+	case interface{ Unwrap() error }:
+		if inner := e.Unwrap(); inner != nil {
+			return isOnlyContextCanceled(inner)
+		}
+	}
+	return errors.Is(err, context.Canceled)
 }

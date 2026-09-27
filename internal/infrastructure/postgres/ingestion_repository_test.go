@@ -85,12 +85,15 @@ func newTestSource(t *testing.T, pool *pgxpool.Pool) source.ID {
 		_ = sourceRepo.Delete(cleanupCtx, testSourceID)
 	})
 
+	now := time.Now().UTC()
 	err = sourceRepo.Save(context.Background(), &source.Source{
 		ID:                 testSourceID,
 		Name:               "Ingestion Run Test Source",
 		Type:               source.TypeAPI,
 		RateLimitPerSecond: 100,
 		Enabled:            true,
+		CreatedAt:          now,
+		UpdatedAt:          now,
 	})
 	if err != nil {
 		t.Fatalf("failed to seed test source: %v", err)
@@ -181,7 +184,7 @@ func TestIngestionRepository_LiveIntegration(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to find run after batches: %v", err)
 		}
-		if found.RecordsSeen != 700 || found.RecordsNew != 120 || found.RecordsChanged != 60 || found.RecordsUnchanged != 520 {
+		if found.Seen != 700 || found.New != 120 || found.Changed != 60 || found.Unchanged != 520 {
 			t.Fatalf("expected atomic sum 700/120/60/520, got %+v", found)
 		}
 		if found.Checkpoint != "cursor-700" {

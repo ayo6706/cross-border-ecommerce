@@ -82,6 +82,7 @@ func TestSourceRepository_LiveIntegration(t *testing.T) {
 	})
 
 	t.Run("Save_And_FindByID", func(t *testing.T) {
+		now := time.Now().UTC()
 		s := &source.Source{
 			ID:                 source.ID("shopify-us-live-test"),
 			Name:               "Shopify US Merchant Store",
@@ -89,6 +90,8 @@ func TestSourceRepository_LiveIntegration(t *testing.T) {
 			Config:             map[string]any{"store_domain": "us-merchant.myshopify.com", "sync_interval_sec": float64(300)},
 			RateLimitPerSecond: 50,
 			Enabled:            true,
+			CreatedAt:          now,
+			UpdatedAt:          now,
 		}
 		t.Cleanup(func() {
 			cleanCtx, cleanCancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -113,12 +116,15 @@ func TestSourceRepository_LiveIntegration(t *testing.T) {
 	})
 
 	t.Run("FindActive_FiltersCorrectly", func(t *testing.T) {
+		now := time.Now().UTC()
 		sActive := &source.Source{
 			ID:                 source.ID("active-test-source"),
 			Name:               "Active Source",
 			Type:               source.TypeAPI,
 			RateLimitPerSecond: 20,
 			Enabled:            true,
+			CreatedAt:          now,
+			UpdatedAt:          now,
 		}
 		sDisabled := &source.Source{
 			ID:                 source.ID("disabled-test-source"),
@@ -126,6 +132,8 @@ func TestSourceRepository_LiveIntegration(t *testing.T) {
 			Type:               source.TypeFeed,
 			RateLimitPerSecond: 10,
 			Enabled:            false,
+			CreatedAt:          now,
+			UpdatedAt:          now,
 		}
 
 		t.Cleanup(func() {
@@ -161,12 +169,15 @@ func TestSourceRepository_LiveIntegration(t *testing.T) {
 	})
 
 	t.Run("List_And_Delete", func(t *testing.T) {
+		now := time.Now().UTC()
 		s := &source.Source{
 			ID:                 source.ID("delete-test-source"),
 			Name:               "To Delete",
 			Type:               source.TypeFile,
 			RateLimitPerSecond: 30,
 			Enabled:            true,
+			CreatedAt:          now,
+			UpdatedAt:          now,
 		}
 		_ = repo.Save(ctx, s)
 
@@ -210,11 +221,15 @@ func TestSourceRepository_LiveIntegration(t *testing.T) {
 		defer func() { _ = tx.Rollback(ctx) }()
 
 		txRepo := repo.WithTx(tx)
+		now := time.Now().UTC()
 		sTx := &source.Source{
-			ID:      source.ID("source-in-tx"),
-			Name:    "Source in Tx",
-			Type:    source.TypeScraper,
-			Enabled: true,
+			ID:                 source.ID("source-in-tx"),
+			Name:               "Source in Tx",
+			Type:               source.TypeScraper,
+			RateLimitPerSecond: 10,
+			Enabled:            true,
+			CreatedAt:          now,
+			UpdatedAt:          now,
 		}
 		if err := txRepo.Save(ctx, sTx); err != nil {
 			t.Fatalf("failed to save source in tx: %v", err)

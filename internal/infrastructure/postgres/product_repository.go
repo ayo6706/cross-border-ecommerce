@@ -61,10 +61,6 @@ func (r *ProductRepository) Save(ctx context.Context, p *product.Product) error 
 		return fmt.Errorf("validate product: %w", err)
 	}
 
-	if strings.TrimSpace(string(p.ID)) == "" {
-		return fmt.Errorf("%w: product id cannot be empty", product.ErrInvalidProductState)
-	}
-
 	idUUID, err := parseUUID(string(p.ID))
 	if err != nil {
 		return fmt.Errorf("%w: invalid uuid: %w", product.ErrInvalidProductState, err)
@@ -79,6 +75,11 @@ func (r *ProductRepository) Save(ctx context.Context, p *product.Product) error 
 		versionUUID = parsed
 	}
 
+	createdAt, updatedAt, err := requiredAuditTimestamps(p.CreatedAt, p.UpdatedAt)
+	if err != nil {
+		return fmt.Errorf("%w: product %w", product.ErrInvalidProductState, err)
+	}
+
 	saved, err := r.queries.UpsertProduct(ctx, generated.UpsertProductParams{
 		ID:                 idUUID,
 		CanonicalName:      p.CanonicalName,
@@ -88,8 +89,8 @@ func (r *ProductRepository) Save(ctx context.Context, p *product.Product) error 
 		Status:             string(p.Status),
 		CurrentVersionID:   versionUUID,
 		CurrentFingerprint: p.CurrentFingerprint,
-		CreatedAt:          requiredTimestamptz(p.CreatedAt),
-		UpdatedAt:          requiredTimestamptz(p.UpdatedAt),
+		CreatedAt:          createdAt,
+		UpdatedAt:          updatedAt,
 	})
 	if err != nil {
 		return mapPostgresError(fmt.Errorf("upsert product: %w", err))
@@ -147,8 +148,8 @@ func (r *ProductRepository) FindSnapshotsByIdentities(ctx context.Context, ident
 	sourceIDs := make([]string, len(identities))
 	externalIDs := make([]string, len(identities))
 	for i, id := range identities {
-		sourceIDs[i] = strings.TrimSpace(id.SourceID)
-		externalIDs[i] = strings.TrimSpace(id.ExternalProductID)
+		sourceIDs[i] = id.SourceID
+		externalIDs[i] = id.ExternalProductID
 	}
 
 	rows, err := r.queries.GetProductWithSourceByIdentities(ctx, generated.GetProductWithSourceByIdentitiesParams{

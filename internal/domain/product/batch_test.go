@@ -12,15 +12,14 @@ import (
 func TestDecideBatch_Empty(t *testing.T) {
 	plan, err := domainProduct.DecideBatch(nil, nil, time.Now().UTC())
 	require.NoError(t, err)
-	assert.Equal(t, 0, plan.RecordsSeen)
+	assert.Equal(t, 0, plan.Seen)
 	assert.Empty(t, plan.ProductsToInsert)
 	assert.Empty(t, plan.ProductVersionsToInsert)
 }
 
 func TestDecideBatch_ZeroNowReturnsError(t *testing.T) {
 	_, err := domainProduct.DecideBatch(nil, nil, time.Time{})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "now timestamp cannot be zero")
+	require.ErrorIs(t, err, domainProduct.ErrInvalidProductState)
 }
 
 func TestDecideBatch_AllNew(t *testing.T) {
@@ -32,7 +31,7 @@ func TestDecideBatch_AllNew(t *testing.T) {
 			RawRecordID:       "raw-1",
 			SourceID:          "src-1",
 			ExternalProductID: "ext-1",
-			Normalized: &domainProduct.NormalizedProduct{
+			Normalized: domainProduct.NormalizedProduct{
 				CanonicalName: "Product 1",
 				Description:   "Description 1",
 				Brand:         "Brand 1",
@@ -48,7 +47,7 @@ func TestDecideBatch_AllNew(t *testing.T) {
 			RawRecordID:       "raw-2",
 			SourceID:          "src-1",
 			ExternalProductID: "ext-2",
-			Normalized: &domainProduct.NormalizedProduct{
+			Normalized: domainProduct.NormalizedProduct{
 				CanonicalName: "Product 2",
 				Description:   "Description 2",
 				Brand:         "Brand 2",
@@ -65,10 +64,10 @@ func TestDecideBatch_AllNew(t *testing.T) {
 	plan, err := domainProduct.DecideBatch(nil, incoming, now)
 	require.NoError(t, err)
 
-	assert.Equal(t, 2, plan.RecordsSeen)
-	assert.Equal(t, 2, plan.RecordsNew)
-	assert.Equal(t, 0, plan.RecordsChanged)
-	assert.Equal(t, 0, plan.RecordsUnchanged)
+	assert.Equal(t, 2, plan.Seen)
+	assert.Equal(t, 2, plan.New)
+	assert.Equal(t, 0, plan.Changed)
+	assert.Equal(t, 0, plan.Unchanged)
 	assert.Len(t, plan.ProductsToInsert, 2)
 	assert.Len(t, plan.ProductSourcesToInsert, 2)
 	assert.Len(t, plan.ProductVersionsToInsert, 2)
@@ -90,7 +89,7 @@ func TestDecideBatch_NewThenChangedInSameBatch(t *testing.T) {
 			RawRecordID:       "raw-1",
 			SourceID:          "src-1",
 			ExternalProductID: "ext-1",
-			Normalized: &domainProduct.NormalizedProduct{
+			Normalized: domainProduct.NormalizedProduct{
 				CanonicalName: "Original Title",
 				Description:   "Description 1",
 				Brand:         "Brand",
@@ -106,7 +105,7 @@ func TestDecideBatch_NewThenChangedInSameBatch(t *testing.T) {
 			RawRecordID:       "raw-2",
 			SourceID:          "src-1",
 			ExternalProductID: "ext-1",
-			Normalized: &domainProduct.NormalizedProduct{
+			Normalized: domainProduct.NormalizedProduct{
 				CanonicalName: "Updated Title",
 				Description:   "Description 1",
 				Brand:         "Brand",
@@ -123,10 +122,10 @@ func TestDecideBatch_NewThenChangedInSameBatch(t *testing.T) {
 	plan, err := domainProduct.DecideBatch(nil, incoming, now)
 	require.NoError(t, err)
 
-	assert.Equal(t, 2, plan.RecordsSeen)
-	assert.Equal(t, 1, plan.RecordsNew)
-	assert.Equal(t, 1, plan.RecordsChanged)
-	assert.Equal(t, 0, plan.RecordsUnchanged)
+	assert.Equal(t, 2, plan.Seen)
+	assert.Equal(t, 1, plan.New)
+	assert.Equal(t, 1, plan.Changed)
+	assert.Equal(t, 0, plan.Unchanged)
 
 	// 1 product inserted with final state pointing to v2
 	require.Len(t, plan.ProductsToInsert, 1)
@@ -180,7 +179,7 @@ func TestDecideBatch_ExistingProductChangedTwice(t *testing.T) {
 			RawRecordID:       "raw-1",
 			SourceID:          "src-1",
 			ExternalProductID: "ext-1",
-			Normalized: &domainProduct.NormalizedProduct{
+			Normalized: domainProduct.NormalizedProduct{
 				CanonicalName: "Title v2",
 				Description:   "Desc v2",
 				Brand:         "Brand",
@@ -195,7 +194,7 @@ func TestDecideBatch_ExistingProductChangedTwice(t *testing.T) {
 			RawRecordID:       "raw-2",
 			SourceID:          "src-1",
 			ExternalProductID: "ext-1",
-			Normalized: &domainProduct.NormalizedProduct{
+			Normalized: domainProduct.NormalizedProduct{
 				CanonicalName: "Title v3",
 				Description:   "Desc v3",
 				Brand:         "Brand",
@@ -211,9 +210,9 @@ func TestDecideBatch_ExistingProductChangedTwice(t *testing.T) {
 	plan, err := domainProduct.DecideBatch(snapshots, incoming, now)
 	require.NoError(t, err)
 
-	assert.Equal(t, 2, plan.RecordsSeen)
-	assert.Equal(t, 0, plan.RecordsNew)
-	assert.Equal(t, 2, plan.RecordsChanged)
+	assert.Equal(t, 2, plan.Seen)
+	assert.Equal(t, 0, plan.New)
+	assert.Equal(t, 2, plan.Changed)
 
 	assert.Empty(t, plan.ProductsToInsert)
 	require.Len(t, plan.ProductVersionsToInsert, 2)
@@ -261,7 +260,7 @@ func TestDecideBatch_OutOfOrderStaleRecord(t *testing.T) {
 			RawRecordID:       "raw-2",
 			SourceID:          "src-1",
 			ExternalProductID: "ext-1",
-			Normalized: &domainProduct.NormalizedProduct{
+			Normalized: domainProduct.NormalizedProduct{
 				CanonicalName: "Title v2 (Newer)",
 			},
 			Fingerprint:     "fp-v2",
@@ -273,7 +272,7 @@ func TestDecideBatch_OutOfOrderStaleRecord(t *testing.T) {
 			RawRecordID:       "raw-1",
 			SourceID:          "src-1",
 			ExternalProductID: "ext-1",
-			Normalized: &domainProduct.NormalizedProduct{
+			Normalized: domainProduct.NormalizedProduct{
 				CanonicalName: "Title v1 (Older Replay)",
 			},
 			Fingerprint:     "fp-v1",
@@ -286,9 +285,9 @@ func TestDecideBatch_OutOfOrderStaleRecord(t *testing.T) {
 	plan, err := domainProduct.DecideBatch(snapshots, incoming, now)
 	require.NoError(t, err)
 
-	assert.Equal(t, 2, plan.RecordsSeen)
-	assert.Equal(t, 1, plan.RecordsChanged)
-	assert.Equal(t, 1, plan.RecordsUnchanged) // Older record sorted first -> evaluated against v1 as unchanged, newer evaluated as changed
+	assert.Equal(t, 2, plan.Seen)
+	assert.Equal(t, 1, plan.Changed)
+	assert.Equal(t, 1, plan.Unchanged) // Older record sorted first -> evaluated against v1 as unchanged, newer evaluated as changed
 
 	require.Len(t, plan.ProductVersionsToInsert, 1)
 	assert.Equal(t, 2, plan.ProductVersionsToInsert[0].VersionNumber)

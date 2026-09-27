@@ -3,6 +3,7 @@ package ingestion
 import (
 	"errors"
 
+	"github.com/ayo6706/cross-border-ecommerce/internal/domain/product"
 	"github.com/ayo6706/cross-border-ecommerce/internal/domain/source"
 )
 
@@ -11,8 +12,11 @@ var (
 	ErrInvalidRunState           = errors.New("invalid ingestion run state")
 	ErrInvalidTransition         = errors.New("invalid ingestion run state transition")
 	ErrInvalidRunID              = errors.New("run id cannot be empty")
+	ErrInvalidClaimToken         = errors.New("claim token cannot be empty")
+	ErrInvalidLeaseDuration      = errors.New("lease duration must be greater than zero")
+	ErrInvalidBatchSize          = errors.New("batch size must be greater than zero")
 	ErrInvalidSourceID           = source.ErrInvalidSourceID
-	ErrNegativeMetric            = errors.New("metrics cannot be negative")
+	ErrNegativeMetric            = product.ErrNegativeMetric
 	ErrRecordNotFound            = errors.New("raw record not found")
 	ErrInvalidRecordID           = errors.New("raw record id cannot be empty")
 	ErrInvalidExternalProductID  = errors.New("external product id cannot be empty")

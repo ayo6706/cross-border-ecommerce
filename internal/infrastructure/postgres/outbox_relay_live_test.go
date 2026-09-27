@@ -192,13 +192,14 @@ func TestOutboxRelay_Live(t *testing.T) {
 			ClaimToken:    claimToken,
 			LeaseDuration: 30 * time.Second,
 			BatchSize:     10,
+			ErrorBudget:   domainIngestion.ErrorBudget{MaxErrorRate: 0.10, MinSampleRows: 10},
 		})
 		require.NoError(t, err)
-		assert.Equal(t, 1, result.RecordsNew)
+		assert.Equal(t, 1, result.New)
 
 		// Check outbox row created in DB
 		var eventID, status string
-		err = pool.QueryRow(ctx, "SELECT id, status FROM outbox_events WHERE event_type = $1", domainProduct.EventTypeProductChanged).Scan(&eventID, &status)
+		err = pool.QueryRow(ctx, "SELECT id, status FROM outbox_events WHERE event_type = $1", postgres.EventTypeProductChanged).Scan(&eventID, &status)
 		require.NoError(t, err)
 		assert.Equal(t, "PENDING", status)
 
@@ -228,12 +229,12 @@ func TestOutboxRelay_Live(t *testing.T) {
 		assert.NotNil(t, processedAt)
 
 		// Check Redis Stream product.changed
-		entries, err := rClient.XRange(ctx, domainProduct.EventTypeProductChanged, "-", "+").Result()
+		entries, err := rClient.XRange(ctx, postgres.EventTypeProductChanged, "-", "+").Result()
 		require.NoError(t, err)
 		require.Len(t, entries, 1)
 		assert.Equal(t, eventID, entries[0].Values["event_id"])
-		assert.Equal(t, domainProduct.AggregateTypeProduct, entries[0].Values["aggregate_type"])
-		assert.Equal(t, domainProduct.EventTypeProductChanged, entries[0].Values["event_type"])
+		assert.Equal(t, postgres.AggregateTypeProduct, entries[0].Values["aggregate_type"])
+		assert.Equal(t, postgres.EventTypeProductChanged, entries[0].Values["event_type"])
 	})
 
 	// E2: Redis unreachable (127.0.0.1:1): rows PENDING, retry_count 0, claims released
@@ -241,7 +242,14 @@ func TestOutboxRelay_Live(t *testing.T) {
 		_, err := pool.Exec(ctx, "TRUNCATE outbox_events CASCADE")
 		require.NoError(t, err)
 
-		err = outboxRepo.CreateEvent(ctx, "product", "prod-bdown", "product.changed", []byte(`{"v":1}`))
+		err = outboxRepo.CreateProductChangedEvents(ctx, []domainProduct.ProductChanged{{
+			EventID:       "a0000000-0000-4000-8000-000000000001",
+			ProductID:     domainProduct.ID("prod-bdown"),
+			VersionID:     "v-1",
+			VersionNumber: 1,
+			Fingerprint:   "fp-1",
+			ChangeType:    domainProduct.ChangeTypeNew,
+		}})
 		require.NoError(t, err)
 
 		deadClient := goredis.NewClient(&goredis.Options{
@@ -286,7 +294,14 @@ func TestOutboxRelay_Live(t *testing.T) {
 		require.NoError(t, err)
 		_ = rClient.FlushDB(ctx).Err()
 
-		err = outboxRepo.CreateEvent(ctx, "product", "prod-crash", "product.changed", []byte(`{"v":1}`))
+		err = outboxRepo.CreateProductChangedEvents(ctx, []domainProduct.ProductChanged{{
+			EventID:       "a0000000-0000-4000-8000-000000000002",
+			ProductID:     domainProduct.ID("prod-crash"),
+			VersionID:     "v-1",
+			VersionNumber: 1,
+			Fingerprint:   "fp-1",
+			ChangeType:    domainProduct.ChangeTypeNew,
+		}})
 		require.NoError(t, err)
 
 		brokenStore := &failMarkStore{OutboxRepository: *outboxRepo}
@@ -305,8 +320,11 @@ func TestOutboxRelay_Live(t *testing.T) {
 		_, _, err = failingRelay.RunOnce(ctx)
 		require.Error(t, err)
 
-		// Wait for lease to expire
-		time.Sleep(200 * time.Millisecond)
+		// Expire the lease in the database rather than sleeping past it: a sleep only races the
+		// lease under load (test-hygiene §3).
+		_, err = pool.Exec(ctx,
+			"UPDATE outbox_events SET available_at = NOW() - interval '1 second' WHERE status = 'PENDING'")
+		require.NoError(t, err)
 
 		// Second run with normal store: publishes again and marks PROCESSED
 		normalRelay, err := appOutbox.NewRelay(outboxRepo, pub, cfg, testLogger())
@@ -466,9 +484,10 @@ func TestOutboxRelay_Live(t *testing.T) {
 			ClaimToken:    claimToken,
 			LeaseDuration: 30 * time.Second,
 			BatchSize:     50,
+			ErrorBudget:   domainIngestion.ErrorBudget{MaxErrorRate: 0.10, MinSampleRows: 10},
 		})
 		require.NoError(t, err)
-		assert.Equal(t, totalProducts, result.RecordsNew)
+		assert.Equal(t, totalProducts, result.New)
 
 		// 2. Run Outbox Relay -> Publishes batch to Redis Stream 'product.changed' and marks outbox rows PROCESSED
 		relayCfg := appOutbox.RelayConfig{

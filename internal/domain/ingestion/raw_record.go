@@ -74,7 +74,7 @@ func NewRawRecord(params RawRecordParams) (*RawRecord, error) {
 
 	record := &RawRecord{
 		ID:                trimmedID,
-		SourceID:          params.SourceID,
+		SourceID:          source.ID(strings.TrimSpace(string(params.SourceID))),
 		ExternalProductID: strings.TrimSpace(params.ExternalProductID),
 		Payload:           params.Payload,
 		PayloadRaw:        rawBytes,

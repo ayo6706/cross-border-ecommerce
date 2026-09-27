@@ -151,6 +151,11 @@ func toCreateParams(record *ingestion.RawRecord) (generated.CreateRawRecordParam
 		rawBytes = record.Payload
 	}
 
+	receivedAt, err := requiredTimestamptz(record.ReceivedAt)
+	if err != nil {
+		return generated.CreateRawRecordParams{}, fmt.Errorf("%w: received_at: %w", ingestion.ErrInvalidRecordState, err)
+	}
+
 	return generated.CreateRawRecordParams{
 		ID:                uuidVal,
 		SourceID:          string(record.SourceID),
@@ -162,7 +167,7 @@ func toCreateParams(record *ingestion.RawRecord) (generated.CreateRawRecordParam
 		Etag:              record.ETag,
 		SourceUpdatedAt:   toTimestamptz(record.SourceUpdatedAt),
 		IngestionRunID:    runUUID,
-		ReceivedAt:        requiredTimestamptz(record.ReceivedAt),
+		ReceivedAt:        receivedAt,
 	}, nil
 }
 

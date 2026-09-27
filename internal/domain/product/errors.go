@@ -19,4 +19,5 @@ var (
 	ErrDeadlockConflict      = errors.New("concurrent transaction conflict (deadlock or serialization)")
 	ErrVersionNotFound       = errors.New("product version not found")
 	ErrInvalidTransition     = errors.New("invalid product transition state")
+	ErrNegativeMetric        = errors.New("metrics cannot be negative")
 )

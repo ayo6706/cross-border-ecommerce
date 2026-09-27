@@ -58,11 +58,11 @@ func (m *memoryRunRepo) UpdateProgress(_ context.Context, id string, metrics ing
 		return ingestion.ErrRunNotFound
 	}
 
-	r.RecordsSeen += metrics.Seen
-	r.RecordsNew += metrics.New
-	r.RecordsChanged += metrics.Changed
-	r.RecordsUnchanged += metrics.Unchanged
-	r.RecordsFailed += metrics.Failed
+	r.Seen += metrics.Seen
+	r.New += metrics.New
+	r.Changed += metrics.Changed
+	r.Unchanged += metrics.Unchanged
+	r.Failed += metrics.Failed
 	if checkpoint != "" {
 		r.Checkpoint = checkpoint
 	}
@@ -282,7 +282,7 @@ func TestIngestionService_RecordBatchAndComplete(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to get run: %v", err)
 	}
-	if updated.RecordsSeen != 1000 || updated.Checkpoint != "offset-1000" {
+	if updated.Seen != 1000 || updated.Checkpoint != "offset-1000" {
 		t.Fatalf("unexpected updated metrics: %+v", updated)
 	}
 

@@ -3,8 +3,10 @@ package outbox
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -79,6 +81,12 @@ func (m *mockStore) RecordFailure(ctx context.Context, claimToken, id, cause str
 	defer m.mu.Unlock()
 	if m.recordErr != nil {
 		return m.recordErr
+	}
+	// Same guard as the repository: only the claim holder records a failure. The fake never
+	// hands a claimed event to another token, so a takeover is covered by the live
+	// TestOutboxStore_Live/record_failure_with_lost_claim, not here.
+	if !slices.Contains(m.claimedTokens[claimToken], id) {
+		return ErrClaimLost
 	}
 	m.recordedFails[id] = cause
 	return nil
@@ -528,4 +536,73 @@ func TestRunOnce_RecordFailureError_MultiEvent_MarksPublishedAndReturnsError(t *
 	assert.Contains(t, err.Error(), "database error during record failure")
 
 	assert.Equal(t, []string{"e1", "e3"}, store.publishedIDs)
+}
+
+func TestIsOnlyContextCanceled(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil", nil, false},
+		{"canceled", context.Canceled, true},
+		{"wrapped canceled", fmt.Errorf("wrapped: %w", context.Canceled), true},
+		{"joined cancellations", errors.Join(context.Canceled, fmt.Errorf("nested: %w", context.Canceled)), true},
+		{"unrelated error", errors.New("db error"), false},
+		{"join with a real error", errors.Join(context.Canceled, errors.New("db error")), false},
+		{"real error nested in a join", errors.Join(
+			fmt.Errorf("w: %w", context.Canceled),
+			errors.Join(context.Canceled, errors.New("connection lost")),
+		), false},
+		{"single wrap around a mixed join",
+			fmt.Errorf("batch: %w", errors.Join(context.Canceled, errors.New("release failed"))), false},
+	}
+	for _, tc := range cases {
+		assert.Equal(t, tc.want, isOnlyContextCanceled(tc.err), tc.name)
+	}
+}
+
+// A23: cancellation that interrupts a batch is a normal shutdown, but claims that could not be
+// released on the way out are a real failure and must reach the caller.
+func TestRun_CancelledBatch(t *testing.T) {
+	t.Parallel()
+	cfg := RelayConfig{
+		BatchSize:    10,
+		PollInterval: time.Hour,
+		Lease:        30 * time.Second,
+		BaseBackoff:  time.Hour,
+		MaxBackoff:   time.Hour,
+		MaxAttempts:  5,
+	}
+	cancellingPublisher := func(cancel context.CancelFunc, ctx context.Context) *mockPublisher {
+		return &mockPublisher{publishFn: func(_ context.Context, _ Event) error {
+			cancel()
+			return ctx.Err()
+		}}
+	}
+
+	t.Run("release fails: error returned", func(t *testing.T) {
+		t.Parallel()
+		store := newMockStore([]Event{{ID: "e1"}, {ID: "e2"}})
+		store.releaseErr = errors.New("release db down")
+		ctx, cancel := context.WithCancel(context.Background())
+		relay, err := NewRelay(store, cancellingPublisher(cancel, ctx), cfg, testLogger())
+		require.NoError(t, err)
+
+		err = relay.Run(ctx)
+		require.ErrorIs(t, err, store.releaseErr)
+	})
+
+	t.Run("clean cancellation: nil", func(t *testing.T) {
+		t.Parallel()
+		store := newMockStore([]Event{{ID: "e1"}, {ID: "e2"}})
+		ctx, cancel := context.WithCancel(context.Background())
+		relay, err := NewRelay(store, cancellingPublisher(cancel, ctx), cfg, testLogger())
+		require.NoError(t, err)
+
+		require.NoError(t, relay.Run(ctx))
+		assert.ElementsMatch(t, []string{"e1", "e2"}, releasedIDs(store))
+	})
 }

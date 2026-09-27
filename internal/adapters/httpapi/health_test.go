@@ -1,11 +1,14 @@
 package httpapi_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/ayo6706/cross-border-ecommerce/internal/adapters/httpapi"
@@ -109,6 +112,26 @@ func TestHealthEndpoints(t *testing.T) {
 			t.Errorf("expected database detail 'unavailable', got %q", resp.Details["database"])
 		}
 	})
+}
+
+func TestReadiness_LogsPingError(t *testing.T) {
+	t.Parallel()
+
+	var logs bytes.Buffer
+	router := httpapi.NewRouter(httpapi.RouterConfig{
+		Logger: slog.New(slog.NewJSONHandler(&logs, nil)),
+		DB:     &mockPinger{shouldFail: true},
+	})
+
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/health/ready", nil))
+
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d", rr.Code)
+	}
+	if !strings.Contains(logs.String(), "connection refused") {
+		t.Fatalf("readiness must log the ping error, logs: %s", logs.String())
+	}
 }
 
 type mockPinger struct {

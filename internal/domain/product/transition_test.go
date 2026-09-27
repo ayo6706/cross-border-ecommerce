@@ -13,7 +13,7 @@ func TestDecideTransition(t *testing.T) {
 	t1 := now.Add(-2 * time.Hour)
 	t2 := now.Add(-1 * time.Hour)
 
-	norm1 := &NormalizedProduct{
+	norm1 := NormalizedProduct{
 		CanonicalName: "Sony Bravia 4K TV",
 		Description:   "Ultra HD Smart LED TV",
 		Brand:         "Sony",
@@ -23,7 +23,7 @@ func TestDecideTransition(t *testing.T) {
 			"size":  "65",
 		},
 	}
-	fp1 := Fingerprint(*norm1)
+	fp1 := Fingerprint(norm1)
 
 	ver1 := &ProductVersion{
 		ID:            "ver-1",
@@ -75,7 +75,7 @@ func TestDecideTransition(t *testing.T) {
 	})
 
 	t.Run("Changed record with field diffs", func(t *testing.T) {
-		norm2 := &NormalizedProduct{
+		norm2 := NormalizedProduct{
 			CanonicalName: "Sony Bravia 4K OLED TV", // changed
 			Description:   norm1.Description,
 			Brand:         norm1.Brand,
@@ -85,7 +85,7 @@ func TestDecideTransition(t *testing.T) {
 				"size":  "65",
 			},
 		}
-		fp2 := Fingerprint(*norm2)
+		fp2 := Fingerprint(norm2)
 
 		incoming := IncomingRecord{
 			Normalized:      norm2,
@@ -101,11 +101,11 @@ func TestDecideTransition(t *testing.T) {
 
 	t.Run("Stale record when source_updated_at is older", func(t *testing.T) {
 		tOlder := t1.Add(-1 * time.Hour)
-		normDifferent := &NormalizedProduct{
+		normDifferent := NormalizedProduct{
 			CanonicalName: "Old Name",
 			Description:   norm1.Description,
 		}
-		fpDifferent := Fingerprint(*normDifferent)
+		fpDifferent := Fingerprint(normDifferent)
 
 		incoming := IncomingRecord{
 			Normalized:      normDifferent,
@@ -142,11 +142,11 @@ func TestDecideTransition(t *testing.T) {
 	})
 
 	t.Run("Equal source_updated_at tie breaks with received_at", func(t *testing.T) {
-		normDifferent := &NormalizedProduct{
+		normDifferent := NormalizedProduct{
 			CanonicalName: "Updated Name",
 			Description:   norm1.Description,
 		}
-		fpDifferent := Fingerprint(*normDifferent)
+		fpDifferent := Fingerprint(normDifferent)
 
 		// Older received_at on equal source_updated_at -> Stale
 		incomingStale := IncomingRecord{

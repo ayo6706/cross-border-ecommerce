@@ -1,6 +1,11 @@
 package ingestion
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+)
+
+var ErrInvalidErrorBudget = errors.New("error budget must have max error rate in (0, 1) and positive min sample rows")
 
 // ErrorBudget bounds the share of rows a run may skip before the run is failed.
 // It is evaluated over run totals, not per batch, so a cluster of bad rows in
@@ -10,21 +15,29 @@ type ErrorBudget struct {
 	MinSampleRows int
 }
 
-// DefaultErrorBudget allows up to 5% skipped rows once at least 100 rows have been seen.
-var DefaultErrorBudget = ErrorBudget{MaxErrorRate: 0.05, MinSampleRows: 100}
-
-// OrDefault returns DefaultErrorBudget if b is the zero value (or has non-positive configuration).
-func (b ErrorBudget) OrDefault() ErrorBudget {
-	if b.MaxErrorRate <= 0 && b.MinSampleRows <= 0 {
-		return DefaultErrorBudget
+// NewErrorBudget validates and creates an ErrorBudget.
+func NewErrorBudget(maxErrorRate float64, minSampleRows int) (ErrorBudget, error) {
+	b := ErrorBudget{
+		MaxErrorRate:  maxErrorRate,
+		MinSampleRows: minSampleRows,
 	}
-	return b
+	if err := b.Validate(); err != nil {
+		return ErrorBudget{}, err
+	}
+	return b, nil
+}
+
+// Validate checks that configuration values are strictly positive and within bounds.
+func (b ErrorBudget) Validate() error {
+	if b.MaxErrorRate <= 0 || b.MaxErrorRate >= 1.0 || b.MinSampleRows <= 0 {
+		return ErrInvalidErrorBudget
+	}
+	return nil
 }
 
 // Check returns ErrErrorBudgetExceeded when failed/seen exceeds MaxErrorRate.
-// A zero MaxErrorRate disables the budget.
 func (b ErrorBudget) Check(seen, failed int) error {
-	if b.MaxErrorRate <= 0 || seen == 0 || seen < b.MinSampleRows {
+	if seen < b.MinSampleRows {
 		return nil
 	}
 

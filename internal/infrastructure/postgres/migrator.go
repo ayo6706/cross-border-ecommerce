@@ -22,7 +22,17 @@ var (
 	ErrNoChange        = errors.New("no migrations to apply")
 	ErrInvalidStep     = errors.New("invalid migration step count")
 	ErrMigrationFailed = errors.New("migration execution failed")
+
+	ErrMalformedMigrationName = errors.New("malformed migration file name")
+	ErrInvalidNoTxMigration   = errors.New("invalid no-transaction migration")
+	ErrInvalidIndex           = errors.New("migration left an invalid index")
 )
+
+// noTransactionDirective, as a migration's first line, runs it outside a transaction. CREATE and
+// DROP INDEX CONCURRENTLY require this: PostgreSQL refuses them inside a transaction block. Such a
+// file holds exactly one statement, because without a transaction a failure after the first of
+// several statements would leave it applied but unrecorded.
+const noTransactionDirective = "-- migrate:no-transaction"
 
 const (
 	migrationLockID     int64 = 8472918471928471
@@ -39,15 +49,20 @@ const (
 )
 
 type Migration struct {
-	Version   int64
-	Name      string
-	Direction MigrationDirection
-	Path      string
+	Version       int64
+	Name          string
+	Direction     MigrationDirection
+	Path          string
+	NoTransaction bool
+
+	script string
 }
 
-// Migrator applies embedded SQL migrations. Each migration runs in its own
-// transaction together with its schema_migrations bookkeeping, so a failed
-// migration leaves no partial state behind and there is no "dirty" version.
+// Migrator applies embedded SQL migrations. A migration normally runs in its own transaction
+// together with its schema_migrations bookkeeping, so a failure leaves no partial state and no
+// "dirty" version. A no-transaction migration (see noTransactionDirective) is one idempotent
+// statement recorded only after it succeeds and left no invalid index, so a failure is retried
+// by running it again.
 type Migrator struct {
 	pool *pgxpool.Pool
 	fsys fs.FS
@@ -105,26 +120,14 @@ func (m *Migrator) DiscoverMigrations() ([]Migration, error) {
 
 	migrations := make([]Migration, 0, len(entries))
 	for _, entry := range entries {
-		if entry.IsDir() {
+		if entry.IsDir() || path.Ext(entry.Name()) != ".sql" {
 			continue
 		}
-
-		matches := migrationFilePattern.FindStringSubmatch(entry.Name())
-		if len(matches) != 4 {
-			continue
-		}
-
-		v, err := strconv.ParseInt(matches[1], 10, 64)
+		mig, err := m.parseMigration(entry.Name())
 		if err != nil {
-			return nil, fmt.Errorf("parse migration version %s: %w", matches[1], err)
+			return nil, err
 		}
-
-		migrations = append(migrations, Migration{
-			Version:   v,
-			Name:      matches[2],
-			Direction: MigrationDirection(matches[3]),
-			Path:      entry.Name(),
-		})
+		migrations = append(migrations, mig)
 	}
 
 	slices.SortFunc(migrations, func(a, b Migration) int {
@@ -153,6 +156,133 @@ func (m *Migrator) Version(ctx context.Context) (int64, error) {
 	return version, nil
 }
 
+// parseMigration reads one migration file. A .sql file that does not match the naming pattern
+// is an error, not skipped: skipping it would mean the migration silently never runs.
+func (m *Migrator) parseMigration(name string) (Migration, error) {
+	matches := migrationFilePattern.FindStringSubmatch(name)
+	if len(matches) != 4 {
+		return Migration{}, fmt.Errorf("%w: %s (want <version>_<name>.up.sql or .down.sql)",
+			ErrMalformedMigrationName, name)
+	}
+	v, err := strconv.ParseInt(matches[1], 10, 64)
+	if err != nil {
+		return Migration{}, fmt.Errorf("parse migration version %s: %w", matches[1], err)
+	}
+	script, err := fs.ReadFile(m.fsys, name)
+	if err != nil {
+		return Migration{}, fmt.Errorf("read migration file %s: %w", name, err)
+	}
+	text := strings.TrimPrefix(string(script), "\ufeff") // a BOM is not SQL; PostgreSQL would reject it
+	noTx, err := parseNoTransaction(text)
+	if err != nil {
+		return Migration{}, fmt.Errorf("migration %s: %w", name, err)
+	}
+	return Migration{
+		Version:       v,
+		Name:          matches[2],
+		Direction:     MigrationDirection(matches[3]),
+		Path:          name,
+		NoTransaction: noTx,
+		script:        text,
+	}, nil
+}
+
+func parseNoTransaction(script string) (bool, error) {
+	firstLine, body, _ := strings.Cut(script, "\n")
+	if strings.TrimSpace(firstLine) != noTransactionDirective {
+		return false, nil
+	}
+	n, err := countStatements(body)
+	if err != nil {
+		return true, err
+	}
+	if n != 1 {
+		return true, fmt.Errorf("%w: must hold exactly one statement, found %d", ErrInvalidNoTxMigration, n)
+	}
+	return true, nil
+}
+
+// countStatements counts the non-empty statements in a script, ignoring comments and quoted text.
+// Dollar quoting is refused rather than parsed: a no-transaction migration is a single index
+// statement and never needs it.
+func countStatements(sql string) (int, error) {
+	count, pending := 0, false
+	for i := 0; i < len(sql); i++ {
+		switch c := sql[i]; {
+		case strings.HasPrefix(sql[i:], "--"):
+			i = indexPast(sql, "\n", i) - 1
+		case strings.HasPrefix(sql[i:], "/*"):
+			i = blockCommentEnd(sql, i) - 1
+		case c == '\'' || c == '"':
+			i = closingQuote(sql, i)
+			pending = true
+		case c == '$':
+			return 0, fmt.Errorf("%w: dollar quoting is not supported", ErrInvalidNoTxMigration)
+		case c == ';':
+			if pending {
+				count++
+			}
+			pending = false
+		case !isSQLSpace(c):
+			pending = true
+		}
+	}
+	if pending {
+		count++
+	}
+	return count, nil
+}
+
+// indexPast returns the index just after the first terminator at or after from, or len(s).
+func indexPast(s, terminator string, from int) int {
+	j := strings.Index(s[from:], terminator)
+	if j < 0 {
+		return len(s)
+	}
+	return from + j + len(terminator)
+}
+
+// blockCommentEnd returns the index just after the block comment opened at s[open]. PostgreSQL
+// block comments nest.
+func blockCommentEnd(s string, open int) int {
+	depth := 0
+	for i := open; i < len(s)-1; i++ {
+		switch s[i : i+2] {
+		case "/*":
+			depth++
+			i++
+		case "*/":
+			depth--
+			i++
+			if depth == 0 {
+				return i + 1
+			}
+		}
+	}
+	return len(s)
+}
+
+func isSQLSpace(c byte) bool {
+	return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' || c == '\v'
+}
+
+// closingQuote returns the index of the quote closing the one at s[open]; a doubled quote is an
+// escaped quote, not a close.
+func closingQuote(s string, open int) int {
+	q := s[open]
+	for j := open + 1; j < len(s); j++ {
+		if s[j] != q {
+			continue
+		}
+		if j+1 < len(s) && s[j+1] == q {
+			j++
+			continue
+		}
+		return j
+	}
+	return len(s) - 1
+}
+
 func (m *Migrator) Up(ctx context.Context) error {
 	upMigrations, err := m.migrationsByDirection(DirectionUp)
 	if err != nil {
@@ -177,13 +307,8 @@ func (m *Migrator) Up(ctx context.Context) error {
 				continue
 			}
 
-			script, err := fs.ReadFile(m.fsys, path.Clean(mig.Path))
-			if err != nil {
-				return fmt.Errorf("read migration file %s: %w", mig.Path, err)
-			}
-
 			const record = `INSERT INTO schema_migrations (version) VALUES ($1)`
-			if err := runInTx(ctx, conn, string(script), record, mig.Version); err != nil {
+			if err := runMigration(ctx, conn, mig, record); err != nil {
 				return fmt.Errorf("apply migration %d (%s): %w", mig.Version, mig.Name, err)
 			}
 		}
@@ -221,13 +346,8 @@ func (m *Migrator) Down(ctx context.Context, steps int) error {
 				return fmt.Errorf("down migration file not found for version %d", version)
 			}
 
-			script, err := fs.ReadFile(m.fsys, path.Clean(mig.Path))
-			if err != nil {
-				return fmt.Errorf("read down migration file %s: %w", mig.Path, err)
-			}
-
 			const unrecord = `DELETE FROM schema_migrations WHERE version = $1`
-			if err := runInTx(ctx, conn, string(script), unrecord, version); err != nil {
+			if err := runMigration(ctx, conn, mig, unrecord); err != nil {
 				return fmt.Errorf("rollback migration %d (%s): %w", version, mig.Name, err)
 			}
 		}
@@ -249,6 +369,49 @@ func (m *Migrator) migrationsByDirection(dir MigrationDirection) ([]Migration, e
 		}
 	}
 	return filtered, nil
+}
+
+func runMigration(ctx context.Context, conn *pgxpool.Conn, mig Migration, bookkeeping string) error {
+	if mig.NoTransaction {
+		return runWithoutTx(ctx, conn, mig.script, bookkeeping, mig.Version)
+	}
+	return runInTx(ctx, conn, mig.script, bookkeeping, mig.Version)
+}
+
+// runWithoutTx executes a single-statement no-transaction migration, then refuses to record it if
+// it left an invalid index. A failed CREATE INDEX CONCURRENTLY leaves its index behind as INVALID,
+// and a rerun with IF NOT EXISTS then succeeds without building anything.
+func runWithoutTx(ctx context.Context, conn *pgxpool.Conn, script, bookkeeping string, version int64) error {
+	if _, err := conn.Exec(ctx, script); err != nil {
+		return fmt.Errorf("%w: %w", ErrMigrationFailed, err)
+	}
+	if err := checkNoInvalidIndexes(ctx, conn); err != nil {
+		return err
+	}
+	if _, err := conn.Exec(ctx, bookkeeping, version); err != nil {
+		return fmt.Errorf("update schema_migrations: %w", err)
+	}
+	return nil
+}
+
+// checkNoInvalidIndexes looks only at the schemas on the search path, so it sees the indexes
+// migrations create and not those of unrelated schemas.
+func checkNoInvalidIndexes(ctx context.Context, conn *pgxpool.Conn) error {
+	const q = `
+	SELECT string_agg(c.relname, ', ' ORDER BY c.relname)
+	FROM pg_index i
+	JOIN pg_class c ON c.oid = i.indexrelid
+	JOIN pg_namespace n ON n.oid = c.relnamespace
+	WHERE NOT i.indisvalid AND n.nspname = ANY (current_schemas(false))`
+
+	var invalid *string
+	if err := conn.QueryRow(ctx, q).Scan(&invalid); err != nil {
+		return fmt.Errorf("check for invalid indexes: %w", err)
+	}
+	if invalid != nil {
+		return fmt.Errorf("%w: %s (drop it and rerun the migration)", ErrInvalidIndex, *invalid)
+	}
+	return nil
 }
 
 // runInTx executes a migration script and its schema_migrations bookkeeping

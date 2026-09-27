@@ -1,11 +1,7 @@
 package product
 
-const (
-	AggregateTypeProduct    = "product"
-	EventTypeProductChanged = "product.changed"
-)
-
 type ProductChanged struct {
+	EventID       string
 	ProductID     ID
 	VersionID     string
 	VersionNumber int

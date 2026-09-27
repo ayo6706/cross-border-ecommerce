@@ -38,10 +38,6 @@ func run() error {
 		return fmt.Errorf("validate redis configuration: %w", err)
 	}
 
-	if err := cfg.Worker.ValidateAgainstDBPool(cfg.Database.MaxConns); err != nil {
-		return fmt.Errorf("validate worker configuration: %w", err)
-	}
-
 	logger := logging.NewLogger(os.Stdout, logging.Options{
 		Level:     cfg.Log.Level,
 		Format:    cfg.Log.Format,
@@ -52,7 +48,7 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	logger.Info("starting stream consumer and outbox worker daemon",
+	logger.Info("starting outbox worker and run processing daemon",
 		slog.String("service", cfg.App.ServiceName),
 		slog.String("environment", cfg.App.Environment),
 	)
@@ -120,10 +116,15 @@ func run() error {
 		return fmt.Errorf("initialize outbox relay: %w", err)
 	}
 
+	errorBudget, err := cfg.Ingestion.ErrorBudget()
+	if err != nil {
+		return err
+	}
+
 	g, gCtx := errgroup.WithContext(ctx)
 
 	g.Go(func() error {
-		runProcessingLoop(gCtx, processingRepo, processor, logger)
+		runProcessingLoop(gCtx, processingRepo, processor, errorBudget, logger)
 		return nil
 	})
 
@@ -131,7 +132,7 @@ func run() error {
 		return relay.Run(gCtx)
 	})
 
-	if err := g.Wait(); err != nil && ctx.Err() == nil {
+	if err := g.Wait(); err != nil {
 		return fmt.Errorf("worker group execution error: %w", err)
 	}
 
@@ -144,6 +145,7 @@ func runProcessingLoop(
 	ctx context.Context,
 	processingRepo ingestion.RunProcessingRepository,
 	processor *appProduct.RunProcessor,
+	errorBudget ingestion.ErrorBudget,
 	logger *slog.Logger,
 ) {
 	pollTicker := time.NewTicker(2 * time.Second)
@@ -187,6 +189,7 @@ func runProcessingLoop(
 				ClaimToken:    claimToken,
 				LeaseDuration: 30 * time.Second,
 				BatchSize:     500,
+				ErrorBudget:   errorBudget,
 			})
 			if err != nil {
 				if ctx.Err() == nil {
@@ -198,11 +201,11 @@ func runProcessingLoop(
 			} else {
 				logger.Info("completed run processing job",
 					slog.String("run_id", result.RunID),
-					slog.Int("seen", result.RecordsSeen),
-					slog.Int("new", result.RecordsNew),
-					slog.Int("changed", result.RecordsChanged),
-					slog.Int("unchanged", result.RecordsUnchanged),
-					slog.Int("failed", result.RecordsFailed),
+					slog.Int("seen", result.Seen),
+					slog.Int("new", result.New),
+					slog.Int("changed", result.Changed),
+					slog.Int("unchanged", result.Unchanged),
+					slog.Int("failed", result.Failed),
 				)
 			}
 		}

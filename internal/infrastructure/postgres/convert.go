@@ -1,10 +1,12 @@
 package postgres
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"time"
 
+	"github.com/ayo6706/cross-border-ecommerce/internal/domain/ingestion"
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
@@ -32,18 +34,18 @@ type runCounters struct {
 	seen, newRecords, changed, unchanged, failed int32
 }
 
-func toRunCounters(seen, newRecords, changed, unchanged, failed int) (runCounters, error) {
+func toRunCounters(m ingestion.BatchMetrics) (runCounters, error) {
 	var c runCounters
 	fields := []struct {
 		dst  *int32
 		val  int
 		name string
 	}{
-		{&c.seen, seen, "seen"},
-		{&c.newRecords, newRecords, "new"},
-		{&c.changed, changed, "changed"},
-		{&c.unchanged, unchanged, "unchanged"},
-		{&c.failed, failed, "failed"},
+		{&c.seen, m.Seen, "seen"},
+		{&c.newRecords, m.New, "new"},
+		{&c.changed, m.Changed, "changed"},
+		{&c.unchanged, m.Unchanged, "unchanged"},
+		{&c.failed, m.Failed, "failed"},
 	}
 	for _, f := range fields {
 		v, err := toInt32(f.val)
@@ -63,12 +65,25 @@ func toTimestamptz(t *time.Time) pgtype.Timestamptz {
 	return pgtype.Timestamptz{Time: t.UTC(), Valid: true}
 }
 
-// requiredTimestamptz converts a time.Time to a valid UTC pgtype.Timestamptz.
-func requiredTimestamptz(t time.Time) pgtype.Timestamptz {
+var ErrZeroTimestamp = errors.New("timestamp cannot be zero")
+
+// requiredTimestamptz converts a time.Time to a valid UTC pgtype.Timestamptz or returns an error on zero time.
+func requiredTimestamptz(t time.Time) (pgtype.Timestamptz, error) {
 	if t.IsZero() {
-		return pgtype.Timestamptz{Time: time.Now().UTC(), Valid: true}
+		return pgtype.Timestamptz{}, ErrZeroTimestamp
 	}
-	return pgtype.Timestamptz{Time: t.UTC(), Valid: true}
+	return pgtype.Timestamptz{Time: t.UTC(), Valid: true}, nil
+}
+
+// requiredAuditTimestamps converts the created_at/updated_at pair every aggregate row carries.
+func requiredAuditTimestamps(createdAt, updatedAt time.Time) (created, updated pgtype.Timestamptz, err error) {
+	if created, err = requiredTimestamptz(createdAt); err != nil {
+		return created, updated, fmt.Errorf("created_at: %w", err)
+	}
+	if updated, err = requiredTimestamptz(updatedAt); err != nil {
+		return created, updated, fmt.Errorf("updated_at: %w", err)
+	}
+	return created, updated, nil
 }
 
 // fromTimestamptz converts a pgtype.Timestamptz to *time.Time in UTC.

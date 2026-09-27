@@ -184,3 +184,20 @@ func TestRawRecord_Validate_EmptyID(t *testing.T) {
 		t.Fatalf("expected ErrInvalidRecordID, got: %v", err)
 	}
 }
+
+// D21: identity is trimmed once, here at the boundary; everything downstream (grouping,
+// snapshot lookup, persistence) uses the IDs as stored.
+func TestNewRawRecord_TrimsIdentityAtTheBoundary(t *testing.T) {
+	rec, err := ingestion.NewRawRecord(ingestion.RawRecordParams{
+		SourceID:          source.ID("  supplier-a \t"),
+		ExternalProductID: "\tPROD-999  ",
+		Payload:           []byte(`{"sku": "ABC-123"}`),
+		ReceivedAt:        time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if rec.SourceID != "supplier-a" || rec.ExternalProductID != "PROD-999" {
+		t.Fatalf("identity not trimmed: source=%q external=%q", rec.SourceID, rec.ExternalProductID)
+	}
+}

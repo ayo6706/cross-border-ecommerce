@@ -85,26 +85,9 @@ func (r *RunProcessingRepository) ClaimSpecific(ctx context.Context, runID, clai
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, fmt.Errorf("cannot claim run %s: run not found or active lease held", runID)
+			return nil, r.guardFailure(ctx, rUUID, ingestion.ErrLeaseHeld)
 		}
 		return nil, fmt.Errorf("claim specific run processing: %w", err)
-	}
-
-	return toDomainRunProcessing(&row), nil
-}
-
-func (r *RunProcessingRepository) GetByID(ctx context.Context, runID string) (*ingestion.RunProcessing, error) {
-	rUUID, err := parseUUID(runID)
-	if err != nil {
-		return nil, fmt.Errorf("%w: invalid run id: %w", ingestion.ErrInvalidRunID, err)
-	}
-
-	row, err := r.queries.GetRunProcessingByID(ctx, rUUID)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, ingestion.ErrRunProcessingNotFound
-		}
-		return nil, fmt.Errorf("get run processing by id: %w", err)
 	}
 
 	return toDomainRunProcessing(&row), nil
@@ -124,35 +107,56 @@ func (r *RunProcessingRepository) EnsureExists(ctx context.Context, runID string
 	return toDomainRunProcessing(&row), nil
 }
 
-//nolint:funlen // legacy baseline 2026-09-26: fix in ENG-016
 func (r *RunProcessingRepository) UpdateProgress(
 	ctx context.Context,
 	runID string,
 	claimToken string,
-	seen, newRecs, changed, unchanged, failed int,
+	metrics ingestion.BatchMetrics,
 	cursorID *string,
 	leaseDuration time.Duration,
 ) (*ingestion.RunProcessing, error) {
+	params, err := parseUpdateProgressParams(runID, claimToken, metrics, cursorID, leaseDuration)
+	if err != nil {
+		return nil, err
+	}
+
+	row, err := r.queries.UpdateRunProcessingProgress(ctx, params)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ingestion.ErrLeaseLost
+		}
+		return nil, fmt.Errorf("update run processing progress: %w", err)
+	}
+
+	return toDomainRunProcessing(&row), nil
+}
+
+func parseUpdateProgressParams(
+	runID, claimToken string,
+	metrics ingestion.BatchMetrics,
+	cursorID *string,
+	leaseDuration time.Duration,
+) (generated.UpdateRunProcessingProgressParams, error) {
 	rUUID, err := parseUUID(runID)
 	if err != nil {
-		return nil, fmt.Errorf("%w: invalid run id: %w", ingestion.ErrInvalidRunID, err)
+		return generated.UpdateRunProcessingProgressParams{}, fmt.Errorf("%w: invalid run id: %w", ingestion.ErrInvalidRunID, err)
 	}
 	tokenUUID, err := parseUUID(claimToken)
 	if err != nil {
-		return nil, fmt.Errorf("invalid claim token uuid: %w", err)
+		return generated.UpdateRunProcessingProgressParams{}, fmt.Errorf("invalid claim token uuid: %w", err)
 	}
 
 	var cUUID pgtype.UUID
 	if cursorID != nil && strings.TrimSpace(*cursorID) != "" {
 		cUUID, err = parseUUID(*cursorID)
 		if err != nil {
-			return nil, fmt.Errorf("invalid cursor uuid: %w", err)
+			return generated.UpdateRunProcessingProgressParams{}, fmt.Errorf("invalid cursor uuid: %w", err)
 		}
 	}
 
-	counters, err := toRunCounters(seen, newRecs, changed, unchanged, failed)
+	counters, err := toRunCounters(metrics)
 	if err != nil {
-		return nil, err
+		return generated.UpdateRunProcessingProgressParams{}, err
 	}
 
 	leaseInterval := pgtype.Interval{
@@ -160,7 +164,7 @@ func (r *RunProcessingRepository) UpdateProgress(
 		Valid:        true,
 	}
 
-	row, err := r.queries.UpdateRunProcessingProgress(ctx, generated.UpdateRunProcessingProgressParams{
+	return generated.UpdateRunProcessingProgressParams{
 		RunID:         rUUID,
 		ClaimToken:    tokenUUID,
 		CursorID:      cUUID,
@@ -170,15 +174,7 @@ func (r *RunProcessingRepository) UpdateProgress(
 		UnchangedInc:  counters.unchanged,
 		FailedInc:     counters.failed,
 		LeaseDuration: leaseInterval,
-	})
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, ingestion.ErrLeaseLost
-		}
-		return nil, fmt.Errorf("update run processing progress: %w", err)
-	}
-
-	return toDomainRunProcessing(&row), nil
+	}, nil
 }
 
 func (r *RunProcessingRepository) Release(ctx context.Context, runID, claimToken string) error {
@@ -201,27 +197,29 @@ func (r *RunProcessingRepository) Release(ctx context.Context, runID, claimToken
 	return nil
 }
 
-func (r *RunProcessingRepository) Complete(ctx context.Context, runID, claimToken string) error {
+func (r *RunProcessingRepository) Complete(
+	ctx context.Context, runID, claimToken string,
+) (*ingestion.RunProcessing, error) {
 	rUUID, err := parseUUID(runID)
 	if err != nil {
-		return fmt.Errorf("%w: invalid run id: %w", ingestion.ErrInvalidRunID, err)
+		return nil, fmt.Errorf("%w: invalid run id: %w", ingestion.ErrInvalidRunID, err)
 	}
 	tokenUUID, err := parseUUID(claimToken)
 	if err != nil {
-		return fmt.Errorf("invalid claim token uuid: %w", err)
+		return nil, fmt.Errorf("invalid claim token uuid: %w", err)
 	}
 
-	_, err = r.queries.CompleteRunProcessing(ctx, generated.CompleteRunProcessingParams{
+	row, err := r.queries.CompleteRunProcessing(ctx, generated.CompleteRunProcessingParams{
 		RunID:      rUUID,
 		ClaimToken: tokenUUID,
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return ingestion.ErrLeaseLost
+			return nil, ingestion.ErrLeaseLost
 		}
-		return fmt.Errorf("complete run processing: %w", err)
+		return nil, fmt.Errorf("complete run processing: %w", err)
 	}
-	return nil
+	return toDomainRunProcessing(&row), nil
 }
 
 func (r *RunProcessingRepository) Fail(ctx context.Context, runID, claimToken, errSummary string) error {
@@ -244,7 +242,10 @@ func (r *RunProcessingRepository) Fail(ctx context.Context, runID, claimToken, e
 		ClaimToken:   tokenUUID,
 		ErrorSummary: strings.TrimSpace(errSummary),
 	})
-	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return r.guardFailure(ctx, rUUID, ingestion.ErrLeaseLost)
+		}
 		return fmt.Errorf("fail run processing: %w", err)
 	}
 	return nil
@@ -259,12 +260,26 @@ func (r *RunProcessingRepository) ResetFromStart(ctx context.Context, runID stri
 	row, err := r.queries.ResetRunProcessingFromStart(ctx, rUUID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, fmt.Errorf("cannot reset run %s: active lease held by running worker", runID)
+			return nil, r.guardFailure(ctx, rUUID, ingestion.ErrLeaseHeld)
 		}
 		return nil, fmt.Errorf("reset run processing: %w", err)
 	}
 
 	return toDomainRunProcessing(&row), nil
+}
+
+// guardFailure explains a guarded write that matched no row: either the run has no processing
+// state, or it exists and the guard (claim token, lease) refused the write.
+func (r *RunProcessingRepository) guardFailure(ctx context.Context, rUUID pgtype.UUID, whenExists error) error {
+	_, err := r.queries.GetRunProcessingByID(ctx, rUUID)
+	switch {
+	case err == nil:
+		return whenExists
+	case errors.Is(err, pgx.ErrNoRows):
+		return ingestion.ErrRunProcessingNotFound
+	default:
+		return fmt.Errorf("probe run processing %s: %w", uuidToString(rUUID), err)
+	}
 }
 
 func toDomainRunProcessing(row *generated.IngestionRunProcessing) *ingestion.RunProcessing {
@@ -286,15 +301,17 @@ func toDomainRunProcessing(row *generated.IngestionRunProcessing) *ingestion.Run
 		ClaimToken:        claimToken,
 		LeaseExpiresAt:    fromTimestamptz(row.LeaseExpiresAt),
 		CursorRawRecordID: cursorID,
-		RecordsSeen:       int(row.RecordsSeen),
-		RecordsNew:        int(row.RecordsNew),
-		RecordsChanged:    int(row.RecordsChanged),
-		RecordsUnchanged:  int(row.RecordsUnchanged),
-		RecordsFailed:     int(row.RecordsFailed),
-		ErrorSummary:      row.ErrorSummary,
-		StartedAt:         fromTimestamptz(row.StartedAt),
-		CompletedAt:       fromTimestamptz(row.CompletedAt),
-		CreatedAt:         row.CreatedAt.Time.UTC(),
-		UpdatedAt:         row.UpdatedAt.Time.UTC(),
+		BatchMetrics: ingestion.BatchMetrics{
+			Seen:      int(row.RecordsSeen),
+			New:       int(row.RecordsNew),
+			Changed:   int(row.RecordsChanged),
+			Unchanged: int(row.RecordsUnchanged),
+			Failed:    int(row.RecordsFailed),
+		},
+		ErrorSummary: row.ErrorSummary,
+		StartedAt:    fromTimestamptz(row.StartedAt),
+		CompletedAt:  fromTimestamptz(row.CompletedAt),
+		CreatedAt:    row.CreatedAt.Time.UTC(),
+		UpdatedAt:    row.UpdatedAt.Time.UTC(),
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ayo6706/cross-border-ecommerce/internal/domain/ingestion"
 	"github.com/ayo6706/cross-border-ecommerce/internal/platform/config"
 )
 
@@ -451,37 +452,6 @@ func TestConfig_ValidationFailures(t *testing.T) {
 	}
 }
 
-func TestWorkerConfig_ValidateWithDBMaxConns(t *testing.T) {
-	t.Parallel()
-
-	w := config.WorkerConfig{
-		Concurrency:  25,
-		QueueSize:    10,
-		DrainTimeout: 5 * time.Second,
-	}
-
-	if err := w.Validate(); err != nil {
-		t.Fatalf("expected valid WorkerConfig, got %v", err)
-	}
-
-	// dbMaxConns <= 0 must fail loudly
-	if err := w.ValidateAgainstDBPool(0); !errors.Is(err, config.ErrInvalidWorkerConfig) {
-		t.Fatalf("expected ErrInvalidWorkerConfig for maxConns=0, got %v", err)
-	}
-
-	// 25 exceeds 80% of 25 (20)
-	err := w.ValidateAgainstDBPool(25)
-	if !errors.Is(err, config.ErrInvalidWorkerConfig) {
-		t.Fatalf("expected ErrInvalidWorkerConfig, got %v", err)
-	}
-
-	// 25 is within 80% of 50 (40)
-	err = w.ValidateAgainstDBPool(50)
-	if err != nil {
-		t.Fatalf("expected nil error when concurrency <= 80%% of db max conns, got %v", err)
-	}
-}
-
 func TestLoad_InvalidEnvironmentValues(t *testing.T) {
 	t.Parallel()
 
@@ -660,4 +630,81 @@ func onlyDatabaseURL(key string) string {
 		return "postgres://user:pass@dbhost:5432/testdb"
 	}
 	return ""
+}
+
+// The run error budget has a documented default (README "Ingestion Tuning Variables"); an
+// explicit value outside the domain's bounds is rejected at startup, never clamped.
+func TestLoad_IngestionErrorBudget(t *testing.T) {
+	t.Parallel()
+
+	withEnv := func(env map[string]string) func(string) string {
+		return func(k string) string {
+			if k == "DATABASE_URL" {
+				return "postgres://user:pass@dbhost:5432/testdb"
+			}
+			return env[k]
+		}
+	}
+
+	t.Run("unset uses the documented default", func(t *testing.T) {
+		t.Parallel()
+		cfg, err := config.LoadFromLookup(onlyDatabaseURL)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		budget, err := cfg.Ingestion.ErrorBudget()
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if budget != (ingestion.ErrorBudget{MaxErrorRate: 0.05, MinSampleRows: 100}) {
+			t.Fatalf("default budget = %+v, want 5%% over at least 100 rows", budget)
+		}
+	})
+
+	t.Run("explicit values override", func(t *testing.T) {
+		t.Parallel()
+		cfg, err := config.LoadFromLookup(withEnv(map[string]string{
+			"INGESTION_ERROR_BUDGET_MAX_RATE": "0.2",
+			"INGESTION_ERROR_BUDGET_MIN_ROWS": "10",
+		}))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		budget, err := cfg.Ingestion.ErrorBudget()
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if budget != (ingestion.ErrorBudget{MaxErrorRate: 0.2, MinSampleRows: 10}) {
+			t.Fatalf("budget = %+v, want the configured values", budget)
+		}
+	})
+
+	rejected := map[string]map[string]string{
+		"zero rate":     {"INGESTION_ERROR_BUDGET_MAX_RATE": "0"},
+		"rate of one":   {"INGESTION_ERROR_BUDGET_MAX_RATE": "1"},
+		"negative rate": {"INGESTION_ERROR_BUDGET_MAX_RATE": "-0.1"},
+		"zero min rows": {"INGESTION_ERROR_BUDGET_MIN_ROWS": "0"},
+	}
+	for name, env := range rejected {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			_, err := config.LoadFromLookup(withEnv(env))
+			if !errors.Is(err, ingestion.ErrInvalidErrorBudget) {
+				t.Fatalf("want ErrInvalidErrorBudget, got %v", err)
+			}
+		})
+	}
+
+	malformed := map[string]map[string]string{
+		"non-numeric rate":     {"INGESTION_ERROR_BUDGET_MAX_RATE": "five-percent"},
+		"non-numeric min rows": {"INGESTION_ERROR_BUDGET_MIN_ROWS": "many"},
+	}
+	for name, env := range malformed {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if _, err := config.LoadFromLookup(withEnv(env)); err == nil {
+				t.Fatal("expected a parse error, got nil")
+			}
+		})
+	}
 }

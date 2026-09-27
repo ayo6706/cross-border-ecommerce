@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ayo6706/cross-border-ecommerce/internal/domain/ingestion"
 	"github.com/ayo6706/cross-border-ecommerce/internal/platform/backoff"
 )
 
@@ -112,21 +113,6 @@ func (w WorkerConfig) Validate() error {
 	return nil
 }
 
-func (w WorkerConfig) ValidateAgainstDBPool(dbMaxConns int32) error {
-	if err := w.Validate(); err != nil {
-		return err
-	}
-	if dbMaxConns <= 0 {
-		return fmt.Errorf("%w: database max connections must be strictly positive, got %d", ErrInvalidWorkerConfig, dbMaxConns)
-	}
-	maxAllowed := int(float64(dbMaxConns) * 0.8)
-	if w.Concurrency > maxAllowed {
-		return fmt.Errorf("%w: WORKER_CONCURRENCY (%d) exceeds 80%% of DB_MAX_CONNS (%d, max %d)",
-			ErrInvalidWorkerConfig, w.Concurrency, dbMaxConns, maxAllowed)
-	}
-	return nil
-}
-
 type OutboxConfig struct {
 	BatchSize    int
 	PollInterval time.Duration
@@ -158,6 +144,20 @@ type AppConfig struct {
 	ServiceName string
 }
 
+type IngestionConfig struct {
+	ErrorBudgetMaxRate float64
+	ErrorBudgetMinRows int
+}
+
+// ErrorBudget builds the run error budget. Its bounds are owned by ingestion.ErrorBudget.
+func (i IngestionConfig) ErrorBudget() (ingestion.ErrorBudget, error) {
+	budget, err := ingestion.NewErrorBudget(i.ErrorBudgetMaxRate, i.ErrorBudgetMinRows)
+	if err != nil {
+		return ingestion.ErrorBudget{}, fmt.Errorf("INGESTION_ERROR_BUDGET_*: %w", err)
+	}
+	return budget, nil
+}
+
 type Config struct {
 	Server      ServerConfig
 	Database    DatabaseConfig
@@ -168,6 +168,7 @@ type Config struct {
 	Outbox      OutboxConfig
 	Worker      WorkerConfig
 	Idempotency IdempotencyConfig
+	Ingestion   IngestionConfig
 }
 
 func Load() (*Config, error) {
@@ -330,6 +331,16 @@ func LoadFromLookup(lookup func(string) string) (*Config, error) {
 		return nil, fmt.Errorf("invalid IDEMPOTENCY_LEASE_TTL: %w", err)
 	}
 
+	errorBudgetMaxRate, err := getEnvFloat64(lookup, "INGESTION_ERROR_BUDGET_MAX_RATE", 0.05)
+	if err != nil {
+		return nil, fmt.Errorf("invalid INGESTION_ERROR_BUDGET_MAX_RATE: %w", err)
+	}
+
+	errorBudgetMinRows, err := getEnvInt(lookup, "INGESTION_ERROR_BUDGET_MIN_ROWS", 100)
+	if err != nil {
+		return nil, fmt.Errorf("invalid INGESTION_ERROR_BUDGET_MIN_ROWS: %w", err)
+	}
+
 	cfg := &Config{
 		Server: ServerConfig{
 			Port:            getEnvString(lookup, "PORT", "8080"),
@@ -376,6 +387,10 @@ func LoadFromLookup(lookup func(string) string) (*Config, error) {
 		},
 		Idempotency: IdempotencyConfig{
 			LeaseTTL: idempotencyLeaseTTL,
+		},
+		Ingestion: IngestionConfig{
+			ErrorBudgetMaxRate: errorBudgetMaxRate,
+			ErrorBudgetMinRows: errorBudgetMinRows,
 		},
 		Outbox: OutboxConfig{
 			BatchSize:    outboxBatchSize,
@@ -441,6 +456,10 @@ func (c *Config) Validate() error {
 		return err
 	}
 
+	if _, err := c.Ingestion.ErrorBudget(); err != nil {
+		return err
+	}
+
 	if c.Idempotency.LeaseTTL <= c.Stream.HandlerTimeout {
 		return fmt.Errorf("idempotency lease TTL (%v) must be strictly greater than stream handler timeout (%v)",
 			c.Idempotency.LeaseTTL, c.Stream.HandlerTimeout)
@@ -502,4 +521,16 @@ func getEnvBool(lookup func(string) string, key string, defaultVal bool) (bool, 
 		return false, fmt.Errorf("parse bool '%s': %w", val, err)
 	}
 	return b, nil
+}
+
+func getEnvFloat64(lookup func(string) string, key string, defaultVal float64) (float64, error) {
+	val := strings.TrimSpace(lookup(key))
+	if val == "" {
+		return defaultVal, nil
+	}
+	f, err := strconv.ParseFloat(val, 64)
+	if err != nil {
+		return 0, fmt.Errorf("parse float64 '%s': %w", val, err)
+	}
+	return f, nil
 }

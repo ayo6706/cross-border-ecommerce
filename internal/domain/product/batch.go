@@ -1,7 +1,6 @@
 package product
 
 import (
-	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -11,7 +10,7 @@ import (
 )
 
 func IdentityKey(sourceID, externalProductID string) string {
-	return strings.TrimSpace(sourceID) + "\x00" + strings.TrimSpace(externalProductID)
+	return sourceID + "\x00" + externalProductID
 }
 
 type IdentityRef struct {
@@ -23,11 +22,28 @@ type BatchIncomingRecord struct {
 	RawRecordID       string
 	SourceID          string
 	ExternalProductID string
-	Normalized        *NormalizedProduct
+	Normalized        NormalizedProduct
 	Fingerprint       string
 	SourceUpdatedAt   *time.Time
 	ReceivedAt        time.Time
 	IngestionRunID    string
+}
+
+// BatchMetrics counts records by change-detection outcome. It is the one declaration of the
+// run counters: ingestion runs, run processing and the batch plan all use it.
+type BatchMetrics struct {
+	Seen      int
+	New       int
+	Changed   int
+	Unchanged int
+	Failed    int
+}
+
+func (m BatchMetrics) Validate() error {
+	if m.Seen < 0 || m.New < 0 || m.Changed < 0 || m.Unchanged < 0 || m.Failed < 0 {
+		return ErrNegativeMetric
+	}
+	return nil
 }
 
 type ProductGuardedUpdate struct {
@@ -74,11 +90,7 @@ type BatchPlan struct {
 	SourcesToUpdateWatermark    []SourceWatermarkUpdate
 	SourcesToUpdateChanged      []SourceChangedUpdate
 
-	RecordsSeen      int
-	RecordsNew       int
-	RecordsChanged   int
-	RecordsUnchanged int
-	RecordsFailed    int
+	BatchMetrics
 }
 
 // DecideBatch folds a page of normalized records into one BatchPlan. Each identity's records
@@ -86,13 +98,17 @@ type BatchPlan struct {
 // alone; the rows to write are then derived once, from the identity's state before and after.
 func DecideBatch(snapshots map[string]*Snapshot, incoming []BatchIncomingRecord, now time.Time) (*BatchPlan, error) {
 	if now.IsZero() {
-		return nil, errors.New("now timestamp cannot be zero")
+		return nil, fmt.Errorf("%w: now cannot be zero", ErrInvalidProductState)
 	}
-	plan := &BatchPlan{RecordsSeen: len(incoming)}
+	plan := &BatchPlan{
+		BatchMetrics: BatchMetrics{
+			Seen: len(incoming),
+		},
+	}
 	for _, group := range groupByIdentity(incoming) {
 		fold := newIdentityFold(plan, group, snapshots[group.key], now)
-		for _, rec := range group.records {
-			if err := fold.apply(rec); err != nil {
+		for i := range group.records {
+			if err := fold.apply(&group.records[i]); err != nil {
 				return nil, err
 			}
 		}
@@ -113,7 +129,8 @@ type identityGroup struct {
 func groupByIdentity(records []BatchIncomingRecord) []identityGroup {
 	index := make(map[string]int)
 	var groups []identityGroup
-	for _, rec := range records {
+	for i := range records {
+		rec := &records[i]
 		key := IdentityKey(rec.SourceID, rec.ExternalProductID)
 		i, ok := index[key]
 		if !ok {
@@ -121,7 +138,7 @@ func groupByIdentity(records []BatchIncomingRecord) []identityGroup {
 			index[key] = i
 			groups = append(groups, identityGroup{key: key, sourceID: rec.SourceID, externalProductID: rec.ExternalProductID})
 		}
-		groups[i].records = append(groups[i].records, rec)
+		groups[i].records = append(groups[i].records, *rec)
 	}
 	for _, g := range groups {
 		slices.SortStableFunc(g.records, compareProcessingOrder)
@@ -170,7 +187,7 @@ func newIdentityFold(plan *BatchPlan, group identityGroup, start *Snapshot, now 
 	return f
 }
 
-func (f *identityFold) apply(rec BatchIncomingRecord) error {
+func (f *identityFold) apply(rec *BatchIncomingRecord) error {
 	transition := DecideTransition(f.cur, IncomingRecord{
 		Normalized:      rec.Normalized,
 		Fingerprint:     rec.Fingerprint,
@@ -181,7 +198,7 @@ func (f *identityFold) apply(rec BatchIncomingRecord) error {
 
 	switch transition.Type {
 	case TransitionStale:
-		f.plan.RecordsUnchanged++
+		f.plan.Unchanged++
 		return nil
 	case TransitionNew, TransitionChanged:
 		if err := f.addVersion(rec, transition); err != nil {
@@ -189,9 +206,9 @@ func (f *identityFold) apply(rec BatchIncomingRecord) error {
 		}
 	case TransitionVersionMismatch:
 		f.cur.CurrentFingerprint = rec.Fingerprint
-		f.plan.RecordsUnchanged++
+		f.plan.Unchanged++
 	case TransitionUnchanged:
-		f.plan.RecordsUnchanged++
+		f.plan.Unchanged++
 	default:
 		return fmt.Errorf("%w: unknown transition type %s", ErrInvalidTransition, transition.Type)
 	}
@@ -206,7 +223,7 @@ func (f *identityFold) apply(rec BatchIncomingRecord) error {
 // ProductChanged event) and moves the running state to that version.
 //
 //nolint:funlen // legacy baseline 2026-09-26: fix in ENG-044
-func (f *identityFold) addVersion(rec BatchIncomingRecord, transition TransitionResult) error {
+func (f *identityFold) addVersion(rec *BatchIncomingRecord, transition TransitionResult) error {
 	if f.cur == nil {
 		ids, err := newIDs(2)
 		if err != nil {
@@ -214,11 +231,11 @@ func (f *identityFold) addVersion(rec BatchIncomingRecord, transition Transition
 		}
 		f.cur = &Snapshot{ProductID: ID(ids[0]), ProductSourceID: ids[1], LastReceivedAt: rec.ReceivedAt}
 	}
-	ids, err := newIDs(2)
+	ids, err := newIDs(3)
 	if err != nil {
 		return err
 	}
-	versionID, changeID := ids[0], ids[1]
+	versionID, changeID, eventID := ids[0], ids[1], ids[2]
 
 	changeType, changedFields := ChangeTypeChanged, transition.ChangedFields
 	if transition.Type == TransitionNew {
@@ -259,6 +276,7 @@ func (f *identityFold) addVersion(rec BatchIncomingRecord, transition Transition
 	f.plan.ProductVersionsToInsert = append(f.plan.ProductVersionsToInsert, version)
 	f.plan.ProductChangesToInsert = append(f.plan.ProductChangesToInsert, change)
 	f.plan.Events = append(f.plan.Events, ProductChanged{
+		EventID:       eventID,
 		ProductID:     version.ProductID,
 		VersionID:     version.ID,
 		VersionNumber: version.VersionNumber,
@@ -267,9 +285,9 @@ func (f *identityFold) addVersion(rec BatchIncomingRecord, transition Transition
 		ChangedFields: changedFields,
 	})
 	if changeType == ChangeTypeNew {
-		f.plan.RecordsNew++
+		f.plan.New++
 	} else {
-		f.plan.RecordsChanged++
+		f.plan.Changed++
 	}
 
 	f.cur.CurrentVersionID = &version.ID
