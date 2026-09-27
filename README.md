@@ -25,7 +25,7 @@ Infrastructure Adapters (internal/infrastructure/)
   - `ingestion/`: Ingestion runs, raw records, checkpoints, error budgets, and the source adapter port.
 - **`internal/application/`**: Use case orchestrators coordinating domain operations and calling domain repository ports.
 - **`internal/infrastructure/`**: Secondary / Driven adapters implementing domain and application ports (`postgres` repositories and the transaction runner).
-- **`internal/adapters/`**: Primary / Driving adapters (`httpapi` router, middleware, health endpoints; `sources` REST and feed adapters).
+- **`internal/adapters/`**: Primary / Driving adapters (`httpapi` router, middleware, health, DLQ replay and catalogue endpoints; `sources` REST and feed adapters).
 
 ## Tooling & Commands
 
@@ -99,4 +99,21 @@ make build
 # Start API server / background worker
 make run-api
 make run-worker
+```
+
+### Catalogue API
+
+| Route | Response |
+|---|---|
+| `GET /v1/products?limit=&cursor=` | `{"items": [...], "next_cursor": "..." \| null}`, newest first (`created_at DESC, id DESC`) |
+| `GET /v1/products/{id}` | one product; `404` if unknown |
+
+`limit` defaults to 50 and must be 1..500. `next_cursor` is opaque: pass it back unchanged as
+`cursor` to get the next page; it is `null` on the last page. A limit out of range or a cursor
+that was not issued by the API is `400`. Pages are keyset seeks, so page depth does not slow them
+down (ADR 0010).
+
+```bash
+curl 'http://localhost:8080/v1/products?limit=100'
+curl "http://localhost:8080/v1/products?limit=100&cursor=$NEXT_CURSOR"
 ```

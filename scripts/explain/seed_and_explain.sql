@@ -122,14 +122,13 @@ WHERE (ps.source_id, ps.external_product_id) IN (
            unnest(ARRAY(SELECT ('ext-' || g * 397 % 200000)::varchar FROM generate_series(1, 500) g))
 );
 
-\echo '=== 6. GetLatestProductVersion (uq_product_versions_product_version; replaces idx_product_versions_product_id) ==='
+\echo '=== 6. ListProductVersions (uq_product_versions_product_version; replaces idx_product_versions_product_id) ==='
 SELECT id AS product_id FROM products ORDER BY created_at OFFSET 12345 LIMIT 1 \gset
 EXPLAIN (ANALYZE, BUFFERS)
 SELECT id, version_number, fingerprint
 FROM product_versions
 WHERE product_id = :'product_id'
-ORDER BY version_number DESC
-LIMIT 1;
+ORDER BY version_number DESC;
 
 \echo '=== 7. ListProductChangesByProductID (idx_product_changes_product_detected) ==='
 EXPLAIN (ANALYZE, BUFFERS)

@@ -27,10 +27,8 @@ type Querier interface {
 	CopyProductVersions(ctx context.Context, arg []CopyProductVersionsParams) (int64, error)
 	CopyProducts(ctx context.Context, arg []CopyProductsParams) (int64, error)
 	CreateIngestionRun(ctx context.Context, arg CreateIngestionRunParams) (IngestionRun, error)
-	CreateProductVersion(ctx context.Context, arg CreateProductVersionParams) (CreateProductVersionRow, error)
 	CreateRawRecord(ctx context.Context, arg CreateRawRecordParams) (RawRecord, error)
 	CreateReplayOutboxEvent(ctx context.Context, arg CreateReplayOutboxEventParams) error
-	DeleteProduct(ctx context.Context, id pgtype.UUID) error
 	DeleteSource(ctx context.Context, id string) error
 	EnsureRunProcessingExists(ctx context.Context, runID pgtype.UUID) (IngestionRunProcessing, error)
 	FailRunProcessing(ctx context.Context, arg FailRunProcessingParams) (IngestionRunProcessing, error)
@@ -38,7 +36,6 @@ type Querier interface {
 	GetIdempotencyKey(ctx context.Context, arg GetIdempotencyKeyParams) (IdempotencyKey, error)
 	GetIngestionRunByID(ctx context.Context, id pgtype.UUID) (IngestionRun, error)
 	GetLatestIngestionRunBySource(ctx context.Context, sourceID string) (IngestionRun, error)
-	GetLatestProductVersion(ctx context.Context, productID pgtype.UUID) (GetLatestProductVersionRow, error)
 	GetLatestRawRecordBySourceAndExternalID(ctx context.Context, arg GetLatestRawRecordBySourceAndExternalIDParams) (RawRecord, error)
 	GetProductByID(ctx context.Context, id pgtype.UUID) (Product, error)
 	GetProductWithSourceByIdentities(ctx context.Context, arg GetProductWithSourceByIdentitiesParams) ([]GetProductWithSourceByIdentitiesRow, error)
@@ -68,7 +65,6 @@ type Querier interface {
 	UpdateIngestionRunProgress(ctx context.Context, arg UpdateIngestionRunProgressParams) (IngestionRun, error)
 	UpdateIngestionRunStatus(ctx context.Context, arg UpdateIngestionRunStatusParams) (IngestionRun, error)
 	UpdateRunProcessingProgress(ctx context.Context, arg UpdateRunProcessingProgressParams) (IngestionRunProcessing, error)
-	UpsertProduct(ctx context.Context, arg UpsertProductParams) (Product, error)
 	UpsertSource(ctx context.Context, arg UpsertSourceParams) (Source, error)
 }
 

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/ayo6706/cross-border-ecommerce/internal/domain/product"
 	"github.com/ayo6706/cross-border-ecommerce/internal/infrastructure/postgres/generated"
@@ -29,12 +28,6 @@ func NewProductRepository(db generated.DBTX) (*ProductRepository, error) {
 	}, nil
 }
 
-func (r *ProductRepository) WithTx(tx pgx.Tx) *ProductRepository {
-	return &ProductRepository{
-		queries: r.queries.WithTx(tx),
-	}
-}
-
 func (r *ProductRepository) FindByID(ctx context.Context, id product.ID) (*product.Product, error) {
 	uid, err := parseUUID(string(id))
 	if err != nil {
@@ -52,91 +45,58 @@ func (r *ProductRepository) FindByID(ctx context.Context, id product.ID) (*produ
 	return toDomainProduct(&row), nil
 }
 
-func (r *ProductRepository) Save(ctx context.Context, p *product.Product) error {
-	if p == nil {
-		return product.ErrInvalidProductState
+// List reads one row past the page so Next is set only when another page exists.
+func (r *ProductRepository) List(ctx context.Context, params product.ListParams) (product.Page, error) {
+	if err := params.Validate(); err != nil {
+		return product.Page{}, err
 	}
-
-	if err := p.Validate(); err != nil {
-		return fmt.Errorf("validate product: %w", err)
-	}
-
-	idUUID, err := parseUUID(string(p.ID))
+	rows, err := r.listRows(ctx, params)
 	if err != nil {
-		return fmt.Errorf("%w: invalid uuid: %w", product.ErrInvalidProductState, err)
+		return product.Page{}, err
 	}
 
-	var versionUUID pgtype.UUID
-	if p.CurrentVersionID != nil && strings.TrimSpace(*p.CurrentVersionID) != "" {
-		parsed, err := parseUUID(*p.CurrentVersionID)
-		if err != nil {
-			return fmt.Errorf("%w: invalid current version uuid: %w", product.ErrInvalidProductState, err)
+	var page product.Page
+	if len(rows) > params.Limit {
+		rows = rows[:params.Limit]
+		last := rows[len(rows)-1]
+		page.Next = &product.Cursor{
+			CreatedAt: last.CreatedAt.Time.UTC(),
+			ID:        product.ID(uuidToString(last.ID)),
 		}
-		versionUUID = parsed
 	}
-
-	createdAt, updatedAt, err := requiredAuditTimestamps(p.CreatedAt, p.UpdatedAt)
-	if err != nil {
-		return fmt.Errorf("%w: product %w", product.ErrInvalidProductState, err)
+	page.Items = make([]*product.Product, 0, len(rows))
+	for i := range rows {
+		page.Items = append(page.Items, toDomainProduct(&rows[i]))
 	}
-
-	saved, err := r.queries.UpsertProduct(ctx, generated.UpsertProductParams{
-		ID:                 idUUID,
-		CanonicalName:      p.CanonicalName,
-		Description:        p.Description,
-		Brand:              p.Brand,
-		OriginCountry:      p.OriginCountry,
-		Status:             string(p.Status),
-		CurrentVersionID:   versionUUID,
-		CurrentFingerprint: p.CurrentFingerprint,
-		CreatedAt:          createdAt,
-		UpdatedAt:          updatedAt,
-	})
-	if err != nil {
-		return mapPostgresError(fmt.Errorf("upsert product: %w", err))
-	}
-
-	p.ID = product.ID(uuidToString(saved.ID))
-	p.CreatedAt = saved.CreatedAt.Time.UTC()
-	p.UpdatedAt = saved.UpdatedAt.Time.UTC()
-	return nil
+	return page, nil
 }
 
-func (r *ProductRepository) List(ctx context.Context, params product.ListParams) ([]*product.Product, error) {
-	limit := listLimit(params.Limit, 50)
-
-	if (params.LastCreatedAt != nil && params.LastID == nil) || (params.LastCreatedAt == nil && params.LastID != nil) {
-		return nil, errors.New("invalid cursor: both LastCreatedAt and LastID must be specified together")
-	}
-
-	var rows []generated.Product
-	var err error
-
-	if params.LastCreatedAt != nil && params.LastID != nil {
-		cursorID, parseErr := parseUUID(string(*params.LastID))
-		if parseErr != nil {
-			return nil, fmt.Errorf("invalid cursor id format: %w", parseErr)
-		}
-
-		rows, err = r.queries.ListProductsAfterCursor(ctx, generated.ListProductsAfterCursorParams{
-			Limit:           limit,
-			CursorCreatedAt: toTimestamptz(params.LastCreatedAt),
-			CursorID:        cursorID,
-		})
-	} else {
-		rows, err = r.queries.ListProductsFirstPage(ctx, limit)
-	}
-
+func (r *ProductRepository) listRows(ctx context.Context, params product.ListParams) ([]generated.Product, error) {
+	limit, err := toInt32(params.Limit + 1)
 	if err != nil {
-		return nil, fmt.Errorf("list products: %w", err)
+		return nil, fmt.Errorf("%w: %w", product.ErrInvalidListParams, err)
+	}
+	if params.After == nil {
+		rows, err := r.queries.ListProductsFirstPage(ctx, limit)
+		if err != nil {
+			return nil, fmt.Errorf("list first product page: %w", err)
+		}
+		return rows, nil
 	}
 
-	result := make([]*product.Product, 0, len(rows))
-	for i := range rows {
-		result = append(result, toDomainProduct(&rows[i]))
+	cursorID, err := parseUUID(string(params.After.ID))
+	if err != nil {
+		return nil, fmt.Errorf("%w: cursor id: %w", product.ErrInvalidListParams, err)
 	}
-
-	return result, nil
+	rows, err := r.queries.ListProductsAfterCursor(ctx, generated.ListProductsAfterCursorParams{
+		Limit:           limit,
+		CursorCreatedAt: pgtype.Timestamptz{Time: params.After.CreatedAt.UTC(), Valid: true},
+		CursorID:        cursorID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list products after cursor: %w", err)
+	}
+	return rows, nil
 }
 
 //nolint:funlen // legacy baseline 2026-09-26: fix in ENG-044

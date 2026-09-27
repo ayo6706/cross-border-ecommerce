@@ -14,6 +14,8 @@ import (
 	"golang.org/x/text/unicode/norm"
 )
 
+// Column widths of canonical_name VARCHAR(512) and brand VARCHAR(255) in products and product_versions
+// (migration 000001), measured in characters like VARCHAR(n). A live test compares them with the schema.
 const (
 	MaxCanonicalNameChars = 512
 	MaxBrandChars         = 255

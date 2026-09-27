@@ -1,7 +1,6 @@
 package httpapi
 
 import (
-	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -15,10 +14,6 @@ type dlqReplayResponse struct {
 	ReplayOutboxID string `json:"replay_outbox_id"`
 }
 
-type errorResponse struct {
-	Error string `json:"error"`
-}
-
 func HandleDLQReplay(replayer dlq.Replayer, logger *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := strings.TrimSpace(r.PathValue("id"))
@@ -28,10 +23,7 @@ func HandleDLQReplay(replayer dlq.Replayer, logger *slog.Logger) http.HandlerFun
 		}
 
 		if replayer == nil {
-			if logger != nil {
-				logger.ErrorContext(r.Context(), "dlq replayer is not configured")
-			}
-			writeJSONError(w, "dlq service unavailable", http.StatusServiceUnavailable)
+			writeUnavailable(w, r, logger, "dlq service")
 			return
 		}
 
@@ -47,28 +39,14 @@ func HandleDLQReplay(replayer dlq.Replayer, logger *slog.Logger) http.HandlerFun
 			case errors.Is(err, dlq.ErrNotReplayable):
 				writeJSONError(w, "dlq message cannot be replayed", http.StatusConflict)
 			default:
-				if logger != nil {
-					logger.ErrorContext(r.Context(), "failed to replay dlq message",
-						slog.String("id", id),
-						slog.Any("error", err),
-					)
-				}
-				writeJSONError(w, "internal server error", http.StatusInternalServerError)
+				writeInternalError(w, r, logger, "failed to replay dlq message", err, slog.String("id", id))
 			}
 			return
 		}
 
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusAccepted)
-		_ = json.NewEncoder(w).Encode(dlqReplayResponse{
+		writeJSON(w, http.StatusAccepted, dlqReplayResponse{
 			Status:         "REPLAYED",
 			ReplayOutboxID: outboxID,
 		})
 	}
-}
-
-func writeJSONError(w http.ResponseWriter, msg string, code int) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(code)
-	_ = json.NewEncoder(w).Encode(errorResponse{Error: msg})
 }
