@@ -1,22 +1,13 @@
 package product
 
-import (
-	"strings"
-	"time"
-
-	"github.com/ayo6706/cross-border-ecommerce/internal/platform/uuid"
-)
+import "time"
 
 type ID string
 
 type Status string
 
-const (
-	StatusUnknown  Status = ""
-	StatusDraft    Status = "DRAFT"
-	StatusActive   Status = "ACTIVE"
-	StatusArchived Status = "ARCHIVED"
-)
+// StatusDraft is the only status the ingestion path writes; products.status defaults to it (migration 000006).
+const StatusDraft Status = "DRAFT"
 
 type Product struct {
 	ID                 ID
@@ -29,41 +20,4 @@ type Product struct {
 	CurrentFingerprint string
 	CreatedAt          time.Time
 	UpdatedAt          time.Time
-}
-
-func NewProduct(id ID, canonicalName, description, brand, originCountry string) (*Product, error) {
-	trimmedID := strings.TrimSpace(string(id))
-	if trimmedID == "" {
-		generatedID, err := uuid.NewString()
-		if err != nil {
-			return nil, err
-		}
-		trimmedID = generatedID
-	}
-
-	now := time.Now().UTC()
-	p := &Product{
-		ID:            ID(trimmedID),
-		CanonicalName: strings.TrimSpace(canonicalName),
-		Description:   strings.TrimSpace(description),
-		Brand:         strings.TrimSpace(brand),
-		OriginCountry: strings.ToUpper(strings.TrimSpace(originCountry)),
-		Status:        StatusDraft,
-		CreatedAt:     now,
-		UpdatedAt:     now,
-	}
-	if err := p.Validate(); err != nil {
-		return nil, err
-	}
-	return p, nil
-}
-
-func (p *Product) Validate() error {
-	if p == nil {
-		return ErrInvalidProductState
-	}
-	if strings.TrimSpace(p.CanonicalName) == "" {
-		return ErrEmptyCanonicalName
-	}
-	return nil
 }

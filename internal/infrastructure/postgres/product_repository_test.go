@@ -3,15 +3,16 @@ package postgres_test
 import (
 	"context"
 	"errors"
-	"os"
 	"testing"
 	"time"
 
 	"github.com/ayo6706/cross-border-ecommerce/internal/domain/product"
 	"github.com/ayo6706/cross-border-ecommerce/internal/infrastructure/postgres"
-	"github.com/ayo6706/cross-border-ecommerce/migrations"
+	"github.com/ayo6706/cross-border-ecommerce/internal/testsupport"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+const productTables = "products, product_versions, product_sources, product_changes, ingestion_run_processing"
 
 func TestProductRepository_ConstructorValidation(t *testing.T) {
 	t.Parallel()
@@ -25,201 +26,167 @@ func TestProductRepository_ConstructorValidation(t *testing.T) {
 	}
 }
 
-func setupLiveProductDB(t *testing.T) (*pgxpool.Pool, *postgres.ProductRepository) {
-	t.Helper()
-
-	connStr := os.Getenv("TEST_DATABASE_URL")
-	if connStr == "" {
-		t.Skip("skipping live database test: TEST_DATABASE_URL not set")
-		return nil, nil
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	pool, err := postgres.NewPool(ctx, connStr,
-		postgres.WithConnectTimeout(3*time.Second),
-		postgres.WithMaxConns(5),
-		postgres.WithMinConns(1),
-	)
-	if err != nil {
-		t.Skipf("skipping live database test: unable to connect to %s: %v", connStr, err)
-		return nil, nil
-	}
-	t.Cleanup(func() {
-		cleanCtx, cleanCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cleanCancel()
-		_, _ = pool.Exec(cleanCtx, "TRUNCATE products, product_versions, product_sources, product_changes, ingestion_run_processing CASCADE")
-		pool.Close()
-	})
-
-	if err := pool.Ping(ctx); err != nil {
-		t.Fatalf("expected successful pool ping: %v", err)
-	}
-
-	migrator, err := postgres.NewMigrator(pool, migrations.FS)
-	if err != nil {
-		t.Fatalf("failed to create migrator: %v", err)
-	}
-	if err := migrator.Up(ctx); err != nil {
-		t.Fatalf("failed to apply migrations: %v", err)
-	}
-
+func TestProductRepository_LiveIntegration(t *testing.T) {
+	pool := testsupport.LiveDB(t)
 	repo, err := postgres.NewProductRepository(pool)
 	if err != nil {
-		t.Fatalf("failed to create product repository: %v", err)
+		t.Fatalf("create product repository: %v", err)
 	}
-
-	return pool, repo
-}
-
-func TestProductRepository_LiveIntegration(t *testing.T) {
-	pool, repo := setupLiveProductDB(t)
 	ctx := context.Background()
+	base := time.Date(2026, 9, 27, 10, 0, 0, 123456000, time.UTC)
 
-	t.Run("Validation_NilOrInvalid", func(t *testing.T) {
-		if err := repo.Save(ctx, nil); !errors.Is(err, product.ErrInvalidProductState) {
-			t.Fatalf("expected ErrInvalidProductState on nil product, got %v", err)
-		}
+	t.Run("find_by_id", func(t *testing.T) {
+		testsupport.Truncate(t, pool, productTables)
+		id := testsupport.InsertProduct(t, pool, "Logitech MX Master 3S", base)
 
-		invalidProduct := &product.Product{
-			CanonicalName: "   ",
+		found, err := repo.FindByID(ctx, product.ID(id))
+		if err != nil {
+			t.Fatalf("FindByID: %v", err)
 		}
-		if err := repo.Save(ctx, invalidProduct); err == nil {
-			t.Fatal("expected error on empty canonical name, got nil")
+		if found.CanonicalName != "Logitech MX Master 3S" || !found.CreatedAt.Equal(base) {
+			t.Errorf("found %+v, want name Logitech MX Master 3S created %v", found, base)
+		}
+		if found.Status != product.StatusDraft || found.CurrentVersionID != nil {
+			t.Errorf("status %q version %v, want DRAFT and no version", found.Status, found.CurrentVersionID)
 		}
 	})
 
-	t.Run("Save_And_FindByID", func(t *testing.T) {
-		now := time.Now().UTC().Truncate(time.Microsecond)
-		p1 := newTestProduct(t, "Logitech MX Master 3S", "Logitech", "CH", "sha256-logitech-mx3s-test")
-		p1.Description = "Wireless Performance Mouse"
-		p1.Status = product.StatusActive
-		p1.CreatedAt = now
-		p1.UpdatedAt = now
-
-		if err := repo.Save(ctx, p1); err != nil {
-			t.Fatalf("failed to save product: %v", err)
-		}
-
-		found, err := repo.FindByID(ctx, p1.ID)
-		if err != nil {
-			t.Fatalf("failed to find product by id: %v", err)
-		}
-		if found.CanonicalName != p1.CanonicalName {
-			t.Errorf("expected canonical name %q, got %q", p1.CanonicalName, found.CanonicalName)
-		}
-		if found.Status != product.StatusActive {
-			t.Errorf("expected status %v, got %v", product.StatusActive, found.Status)
-		}
-
-		// Update existing product
-		p1.Brand = "Logitech International"
-		if err := repo.Save(ctx, p1); err != nil {
-			t.Fatalf("failed to update product: %v", err)
-		}
-		updated, err := repo.FindByID(ctx, p1.ID)
-		if err != nil {
-			t.Fatalf("failed to find updated product: %v", err)
-		}
-		if updated.Brand != "Logitech International" {
-			t.Errorf("expected updated brand 'Logitech International', got %q", updated.Brand)
+	t.Run("find_unknown_or_non_uuid_id_is_not_found", func(t *testing.T) {
+		for _, id := range []product.ID{"00000000-0000-0000-0000-000000000000", "not-a-uuid"} {
+			if _, err := repo.FindByID(ctx, id); !errors.Is(err, product.ErrProductNotFound) {
+				t.Errorf("FindByID(%q) = %v, want ErrProductNotFound", id, err)
+			}
 		}
 	})
 
-	t.Run("Find_NotFound", func(t *testing.T) {
-		_, err := repo.FindByID(ctx, product.ID("00000000-0000-0000-0000-000000000000"))
-		if !errors.Is(err, product.ErrProductNotFound) {
-			t.Errorf("expected ErrProductNotFound, got %v", err)
+	t.Run("keyset_ties_on_created_at", func(t *testing.T) {
+		testsupport.Truncate(t, pool, productTables)
+		// One ingestion batch stamps every product with the same created_at; the id tie-break
+		// must split them across pages without dropping or repeating any.
+		want := seedNewestFirst(t, pool, base, []int{0, 0, 0, 0, 0, -1, 1})
+
+		got := pageThrough(ctx, t, repo, 2)
+
+		assertIDs(t, got, want)
+	})
+
+	t.Run("full_last_page_has_no_next_cursor", func(t *testing.T) {
+		testsupport.Truncate(t, pool, productTables)
+		want := seedNewestFirst(t, pool, base, []int{0, 1, 2})
+
+		page, err := repo.List(ctx, product.ListParams{Limit: 3})
+		if err != nil {
+			t.Fatalf("List: %v", err)
+		}
+		if page.Next != nil {
+			t.Errorf("Next = %+v, want nil when exactly limit products remain", page.Next)
+		}
+		assertIDs(t, idsOf(page.Items), want)
+	})
+
+	t.Run("empty_catalogue_is_an_empty_last_page", func(t *testing.T) {
+		testsupport.Truncate(t, pool, productTables)
+
+		page, err := repo.List(ctx, product.ListParams{Limit: 10})
+		if err != nil || len(page.Items) != 0 || page.Next != nil {
+			t.Fatalf("List = (%+v, %v), want empty page without cursor", page, err)
 		}
 	})
 
-	t.Run("Keyset_Pagination", func(t *testing.T) {
-		now := time.Now().UTC()
-		p2 := newTestProduct(t, "Apple Magic Keyboard", "Apple", "US", "sha256-apple-keyboard-test")
-		p2.CreatedAt = now.Add(1 * time.Second)
-		p3 := newTestProduct(t, "Dell UltraSharp 27", "Dell", "US", "sha256-dell-monitor-test")
-		p3.CreatedAt = now.Add(2 * time.Second)
-		if err := repo.Save(ctx, p2); err != nil {
-			t.Fatalf("failed to save p2: %v", err)
-		}
-		if err := repo.Save(ctx, p3); err != nil {
-			t.Fatalf("failed to save p3: %v", err)
-		}
-
-		page1, err := repo.List(ctx, product.ListParams{Limit: 2})
-		if err != nil {
-			t.Fatalf("failed to fetch page 1: %v", err)
-		}
-		if len(page1) != 2 {
-			t.Fatalf("expected 2 items on page 1, got %d", len(page1))
-		}
-
-		lastItem := page1[1]
-		page2, err := repo.List(ctx, product.ListParams{
-			Limit:         2,
-			LastCreatedAt: &lastItem.CreatedAt,
-			LastID:        &lastItem.ID,
-		})
-		if err != nil {
-			t.Fatalf("failed to fetch page 2: %v", err)
-		}
-		if len(page2) < 1 {
-			t.Fatalf("expected at least 1 item on page 2, got %d", len(page2))
-		}
-		if page2[0].ID == lastItem.ID {
-			t.Errorf("page 2 first item must not equal page 1 last item: %v", page2[0].ID)
-		}
-
-		// Verify partial cursor parameter rejection
-		_, err = repo.List(ctx, product.ListParams{
-			Limit:         2,
-			LastCreatedAt: &lastItem.CreatedAt,
-			LastID:        nil,
-		})
-		if err == nil {
-			t.Error("expected error when LastCreatedAt is provided without LastID")
-		}
-		_, err = repo.List(ctx, product.ListParams{
-			Limit:         2,
-			LastCreatedAt: nil,
-			LastID:        &lastItem.ID,
-		})
-		if err == nil {
-			t.Error("expected error when LastID is provided without LastCreatedAt")
+	t.Run("invalid_params_rejected", func(t *testing.T) {
+		for _, params := range []product.ListParams{
+			{Limit: 0},
+			{Limit: product.MaxListLimit + 1},
+			{Limit: 1, After: &product.Cursor{ID: "00000000-0000-0000-0000-000000000000"}},
+		} {
+			if _, err := repo.List(ctx, params); !errors.Is(err, product.ErrInvalidListParams) {
+				t.Errorf("List(%+v) = %v, want ErrInvalidListParams", params, err)
+			}
 		}
 	})
 
-	t.Run("Transaction_Rollback", func(t *testing.T) {
-		tx, err := pool.Begin(ctx)
-		if err != nil {
-			t.Fatalf("failed to start transaction: %v", err)
+	t.Run("non_uuid_cursor_id_is_invalid_params", func(t *testing.T) {
+		params := product.ListParams{Limit: 1, After: &product.Cursor{CreatedAt: base, ID: "not-a-uuid"}}
+		if _, err := repo.List(ctx, params); !errors.Is(err, product.ErrInvalidListParams) {
+			t.Fatalf("List = %v, want ErrInvalidListParams", err)
 		}
-		defer func() { _ = tx.Rollback(ctx) }()
+	})
 
-		txRepo := repo.WithTx(tx)
-		pTx := newTestProduct(t, "Sony WH-1000XM5 in Tx", "Sony", "", "sha256-sony-tx-test")
-		if err := txRepo.Save(ctx, pTx); err != nil {
-			t.Fatalf("failed to save in transaction: %v", err)
-		}
-		if err := tx.Rollback(ctx); err != nil {
-			t.Fatalf("failed to rollback tx: %v", err)
-		}
-
-		_, err = repo.FindByID(ctx, pTx.ID)
-		if !errors.Is(err, product.ErrProductNotFound) {
-			t.Errorf("expected ErrProductNotFound for rolled back record, got %v", err)
+	t.Run("domain_limits_match_schema", func(t *testing.T) {
+		for column, want := range map[string]int{
+			"canonical_name": product.MaxCanonicalNameChars,
+			"brand":          product.MaxBrandChars,
+		} {
+			for _, table := range []string{"products", "product_versions"} {
+				var got int
+				err := pool.QueryRow(ctx, `SELECT character_maximum_length FROM information_schema.columns
+					WHERE table_schema = current_schema() AND table_name = $1 AND column_name = $2`,
+					table, column).Scan(&got)
+				if err != nil {
+					t.Fatalf("read width of %s.%s: %v", table, column, err)
+				}
+				if got != want {
+					t.Errorf("%s.%s is VARCHAR(%d), domain limit is %d", table, column, got, want)
+				}
+			}
 		}
 	})
 }
 
-func newTestProduct(t *testing.T, name, brand, origin, fingerprint string) *product.Product {
+// seedNewestFirst inserts one product per offset (seconds from base) and returns their ids in
+// the order the catalogue must list them: created_at DESC, id DESC.
+func seedNewestFirst(t *testing.T, pool *pgxpool.Pool, base time.Time, offsets []int) []product.ID {
 	t.Helper()
-
-	p, err := product.NewProduct("", name, "", brand, origin)
-	if err != nil {
-		t.Fatalf("failed to build test product: %v", err)
+	for _, off := range offsets {
+		testsupport.InsertProduct(t, pool, "Product", base.Add(time.Duration(off)*time.Second))
 	}
-	p.CurrentFingerprint = fingerprint
-	return p
+	var ids []product.ID
+	for _, id := range testsupport.CatalogueOrder(t, pool) {
+		ids = append(ids, product.ID(id))
+	}
+	return ids
+}
+
+// pageThrough follows Next until the last page and fails if paging does not terminate.
+func pageThrough(ctx context.Context, t *testing.T, repo *postgres.ProductRepository, limit int) []product.ID {
+	t.Helper()
+	var ids []product.ID
+	params := product.ListParams{Limit: limit}
+	for pages := 0; ; pages++ {
+		if pages > 100 {
+			t.Fatal("paging did not terminate")
+		}
+		page, err := repo.List(ctx, params)
+		if err != nil {
+			t.Fatalf("List page %d: %v", pages, err)
+		}
+		if len(page.Items) > limit {
+			t.Fatalf("page %d has %d items, limit %d", pages, len(page.Items), limit)
+		}
+		ids = append(ids, idsOf(page.Items)...)
+		if page.Next == nil {
+			return ids
+		}
+		params.After = page.Next
+	}
+}
+
+func idsOf(items []*product.Product) []product.ID {
+	ids := make([]product.ID, 0, len(items))
+	for _, p := range items {
+		ids = append(ids, p.ID)
+	}
+	return ids
+}
+
+func assertIDs(t *testing.T, got, want []product.ID) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("got %d ids %v, want %d %v", len(got), got, len(want), want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("position %d: got %s, want %s (got %v, want %v)", i, got[i], want[i], got, want)
+		}
+	}
 }

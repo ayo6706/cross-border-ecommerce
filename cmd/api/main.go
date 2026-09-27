@@ -13,9 +13,11 @@ import (
 
 	"github.com/ayo6706/cross-border-ecommerce/internal/adapters/httpapi"
 	appDLQ "github.com/ayo6706/cross-border-ecommerce/internal/application/dlq"
+	appProduct "github.com/ayo6706/cross-border-ecommerce/internal/application/product"
 	"github.com/ayo6706/cross-border-ecommerce/internal/infrastructure/postgres"
 	"github.com/ayo6706/cross-border-ecommerce/internal/platform/config"
 	"github.com/ayo6706/cross-border-ecommerce/internal/platform/logging"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func main() {
@@ -68,20 +70,10 @@ func run() error {
 		slog.Int("min_conns", int(cfg.Database.MinConns)),
 	)
 
-	dlqTx, err := postgres.NewDLQTxManager(dbPool)
+	handler, err := newHandler(logger, dbPool)
 	if err != nil {
-		return fmt.Errorf("create dlq transaction manager: %w", err)
+		return err
 	}
-	dlqReplayer, err := appDLQ.NewReplayService(dlqTx)
-	if err != nil {
-		return fmt.Errorf("create dlq replay service: %w", err)
-	}
-
-	handler := httpapi.NewRouter(httpapi.RouterConfig{
-		Logger:      logger,
-		DB:          dbPool,
-		DLQReplayer: dlqReplayer,
-	})
 
 	srv := &http.Server{
 		Addr:         ":" + cfg.Server.Port,
@@ -120,4 +112,32 @@ func run() error {
 	}
 
 	return nil
+}
+
+// newHandler wires the application services behind the HTTP router.
+func newHandler(logger *slog.Logger, dbPool *pgxpool.Pool) (http.Handler, error) {
+	dlqTx, err := postgres.NewDLQTxManager(dbPool)
+	if err != nil {
+		return nil, fmt.Errorf("create dlq transaction manager: %w", err)
+	}
+	dlqReplayer, err := appDLQ.NewReplayService(dlqTx)
+	if err != nil {
+		return nil, fmt.Errorf("create dlq replay service: %w", err)
+	}
+
+	productRepo, err := postgres.NewProductRepository(dbPool)
+	if err != nil {
+		return nil, fmt.Errorf("create product repository: %w", err)
+	}
+	products, err := appProduct.NewService(productRepo)
+	if err != nil {
+		return nil, fmt.Errorf("create product service: %w", err)
+	}
+
+	return httpapi.NewRouter(httpapi.RouterConfig{
+		Logger:      logger,
+		DB:          dbPool,
+		DLQReplayer: dlqReplayer,
+		Products:    products,
+	}), nil
 }
