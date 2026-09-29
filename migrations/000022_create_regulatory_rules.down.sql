@@ -1,0 +1,12 @@
+DROP TABLE IF EXISTS preferential_agreements;
+DROP TABLE IF EXISTS export_controls;
+DROP TABLE IF EXISTS sanctions_list;
+DROP TABLE IF EXISTS permit_requirements;
+DROP TABLE IF EXISTS import_restrictions;
+DROP TABLE IF EXISTS tariff_rates;
+DROP TABLE IF EXISTS regulatory_datasets;
+DROP DOMAIN IF EXISTS country_code_or_any;
+DROP DOMAIN IF EXISTS country_code;
+DROP DOMAIN IF EXISTS hs_code;
+DROP DOMAIN IF EXISTS regulatory_date;
+DROP EXTENSION IF EXISTS btree_gist;

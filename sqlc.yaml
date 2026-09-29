@@ -23,6 +23,7 @@ sql:
       - "migrations/000019_backfill_run_processing_queue.up.sql"
       - "migrations/000020_chk_outbox_claim_pending.up.sql"
       - "migrations/000021_validate_chk_outbox_claim_pending.up.sql"
+      - "migrations/000022_create_regulatory_rules.up.sql"
     queries: "internal/infrastructure/postgres/queries"
     gen:
       go:
@@ -32,3 +33,16 @@ sql:
         emit_json_tags: true
         emit_interface: true
         emit_empty_slices: true
+        overrides:
+          # sqlc does not resolve domains to their base type; without these they generate as interface{}.
+          - db_type: "regulatory_date"
+            go_type: "github.com/jackc/pgx/v5/pgtype.Date"
+          - db_type: "regulatory_date"
+            nullable: true
+            go_type: "github.com/jackc/pgx/v5/pgtype.Date"
+          - db_type: "hs_code"
+            go_type: "string"
+          - db_type: "country_code"
+            go_type: "string"
+          - db_type: "country_code_or_any"
+            go_type: "string"

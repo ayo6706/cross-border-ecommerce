@@ -33,6 +33,20 @@ type DlqMessage struct {
 	Replayable      bool               `json:"replayable"`
 }
 
+type ExportControl struct {
+	ID                 pgtype.UUID        `json:"id"`
+	DatasetID          pgtype.UUID        `json:"dataset_id"`
+	Category           string             `json:"category"`
+	HsCode             string             `json:"hs_code"`
+	DestinationCountry string             `json:"destination_country"`
+	ControlCode        string             `json:"control_code"`
+	LicenceType        string             `json:"licence_type"`
+	EffectiveFrom      pgtype.Date        `json:"effective_from"`
+	EffectiveTo        pgtype.Date        `json:"effective_to"`
+	SourceReference    string             `json:"source_reference"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+}
+
 type IdempotencyKey struct {
 	Scope          string             `json:"scope"`
 	Key            string             `json:"key"`
@@ -43,6 +57,19 @@ type IdempotencyKey struct {
 	Attempts       int32              `json:"attempts"`
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
 	CompletedAt    pgtype.Timestamptz `json:"completed_at"`
+}
+
+type ImportRestriction struct {
+	ID              pgtype.UUID        `json:"id"`
+	DatasetID       pgtype.UUID        `json:"dataset_id"`
+	Category        string             `json:"category"`
+	HsCode          string             `json:"hs_code"`
+	OriginCountry   string             `json:"origin_country"`
+	Description     string             `json:"description"`
+	EffectiveFrom   pgtype.Date        `json:"effective_from"`
+	EffectiveTo     pgtype.Date        `json:"effective_to"`
+	SourceReference string             `json:"source_reference"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
 }
 
 type IngestionRun struct {
@@ -95,6 +122,34 @@ type OutboxEvent struct {
 	LastError       pgtype.Text        `json:"last_error"`
 	ReplayOfEventID pgtype.Text        `json:"replay_of_event_id"`
 	TargetGroup     pgtype.Text        `json:"target_group"`
+}
+
+type PermitRequirement struct {
+	ID              pgtype.UUID        `json:"id"`
+	DatasetID       pgtype.UUID        `json:"dataset_id"`
+	Category        string             `json:"category"`
+	HsCode          string             `json:"hs_code"`
+	OriginCountry   string             `json:"origin_country"`
+	PermitCode      string             `json:"permit_code"`
+	IssuingAgency   string             `json:"issuing_agency"`
+	DocumentType    string             `json:"document_type"`
+	EffectiveFrom   pgtype.Date        `json:"effective_from"`
+	EffectiveTo     pgtype.Date        `json:"effective_to"`
+	SourceReference string             `json:"source_reference"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+}
+
+type PreferentialAgreement struct {
+	ID              pgtype.UUID        `json:"id"`
+	DatasetID       pgtype.UUID        `json:"dataset_id"`
+	Category        string             `json:"category"`
+	AgreementCode   string             `json:"agreement_code"`
+	PartnerCountry  string             `json:"partner_country"`
+	ProofOfOrigin   string             `json:"proof_of_origin"`
+	EffectiveFrom   pgtype.Date        `json:"effective_from"`
+	EffectiveTo     pgtype.Date        `json:"effective_to"`
+	SourceReference string             `json:"source_reference"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
 }
 
 type Product struct {
@@ -161,6 +216,33 @@ type RawRecord struct {
 	PayloadSha256     string             `json:"payload_sha256"`
 }
 
+type RegulatoryDataset struct {
+	ID            pgtype.UUID        `json:"id"`
+	Jurisdiction  string             `json:"jurisdiction"`
+	Category      string             `json:"category"`
+	Source        string             `json:"source"`
+	Version       string             `json:"version"`
+	FetchedAt     pgtype.Timestamptz `json:"fetched_at"`
+	ContentSha256 []byte             `json:"content_sha256"`
+	Licence       string             `json:"licence"`
+	Attribution   string             `json:"attribution"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+}
+
+type SanctionsList struct {
+	ID              pgtype.UUID        `json:"id"`
+	DatasetID       pgtype.UUID        `json:"dataset_id"`
+	Category        string             `json:"category"`
+	ListEntryID     string             `json:"list_entry_id"`
+	EntityType      string             `json:"entity_type"`
+	PrimaryName     string             `json:"primary_name"`
+	Program         string             `json:"program"`
+	EffectiveFrom   pgtype.Date        `json:"effective_from"`
+	EffectiveTo     pgtype.Date        `json:"effective_to"`
+	SourceReference string             `json:"source_reference"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+}
+
 type Source struct {
 	ID        string             `json:"id"`
 	Name      string             `json:"name"`
@@ -170,4 +252,24 @@ type Source struct {
 	Enabled   bool               `json:"enabled"`
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
+}
+
+type TariffRate struct {
+	ID               pgtype.UUID        `json:"id"`
+	DatasetID        pgtype.UUID        `json:"dataset_id"`
+	Category         string             `json:"category"`
+	HsCode           string             `json:"hs_code"`
+	OriginCountry    string             `json:"origin_country"`
+	MeasureType      string             `json:"measure_type"`
+	MeasureCode      pgtype.Text        `json:"measure_code"`
+	RateType         string             `json:"rate_type"`
+	AdValoremPercent pgtype.Numeric     `json:"ad_valorem_percent"`
+	SpecificAmount   pgtype.Numeric     `json:"specific_amount"`
+	SpecificCurrency pgtype.Text        `json:"specific_currency"`
+	SpecificUnit     pgtype.Text        `json:"specific_unit"`
+	RateExpression   string             `json:"rate_expression"`
+	EffectiveFrom    pgtype.Date        `json:"effective_from"`
+	EffectiveTo      pgtype.Date        `json:"effective_to"`
+	SourceReference  string             `json:"source_reference"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
 }
