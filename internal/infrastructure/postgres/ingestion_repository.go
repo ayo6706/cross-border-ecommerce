@@ -29,12 +29,6 @@ func NewIngestionRepository(db generated.DBTX) (*IngestionRepository, error) {
 	}, nil
 }
 
-func (r *IngestionRepository) WithTx(tx pgx.Tx) *IngestionRepository {
-	return &IngestionRepository{
-		queries: r.queries.WithTx(tx),
-	}
-}
-
 func (r *IngestionRepository) CreateRun(ctx context.Context, run *ingestion.IngestionRun) error {
 	if run == nil {
 		return ingestion.ErrInvalidRunState
@@ -158,13 +152,14 @@ func (r *IngestionRepository) UpdateStatus(ctx context.Context, run *ingestion.I
 	}
 
 	_, err = r.queries.UpdateIngestionRunStatus(ctx, generated.UpdateIngestionRunStatusParams{
-		Status:         string(run.Status),
-		ErrorSummary:   run.ErrorSummary,
-		Checkpoint:     run.Checkpoint,
-		CompletedAt:    toTimestamptz(run.CompletedAt),
-		UpdatedAt:      updatedAt,
-		ID:             uuidVal,
-		ExpectedStatus: string(from),
+		Status:          string(run.Status),
+		ErrorSummary:    run.ErrorSummary,
+		Checkpoint:      run.Checkpoint,
+		CompletedAt:     toTimestamptz(run.CompletedAt),
+		UpdatedAt:       updatedAt,
+		ID:              uuidVal,
+		ExpectedStatus:  string(from),
+		QueueProcessing: run.Status.Processable(),
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {

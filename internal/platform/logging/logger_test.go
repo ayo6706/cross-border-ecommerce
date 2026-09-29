@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"strings"
 	"testing"
@@ -16,8 +17,8 @@ func TestLogger_ContextPropagation(t *testing.T) {
 
 	var buf bytes.Buffer
 	opts := logging.Options{
-		Level:  "info",
-		Format: "json",
+		Level:  slog.LevelInfo,
+		Format: logging.FormatJSON,
 	}
 
 	logger := logging.NewLogger(&buf, opts)
@@ -55,8 +56,8 @@ func TestLogger_LevelFiltering(t *testing.T) {
 
 	var buf bytes.Buffer
 	opts := logging.Options{
-		Level:  "warn",
-		Format: "json",
+		Level:  slog.LevelWarn,
+		Format: logging.FormatJSON,
 	}
 
 	logger := logging.NewLogger(&buf, opts)
@@ -80,8 +81,8 @@ func TestLogger_WithAttrsAndGroup(t *testing.T) {
 
 	var buf bytes.Buffer
 	opts := logging.Options{
-		Level:  "info",
-		Format: "json",
+		Level:  slog.LevelInfo,
+		Format: logging.FormatJSON,
 	}
 
 	logger := logging.NewLogger(&buf, opts)
@@ -130,5 +131,35 @@ func TestContextHelpers_Unset(t *testing.T) {
 	}
 	if id := logging.CorrelationIDFromContext(ctxTodo); id != "" {
 		t.Errorf("expected empty string for unset correlation_id with context.TODO, got %s", id)
+	}
+}
+
+func TestParseLevel(t *testing.T) {
+	t.Parallel()
+	for in, want := range map[string]slog.Level{
+		"debug": slog.LevelDebug, " INFO ": slog.LevelInfo, "warn": slog.LevelWarn, "Error": slog.LevelError,
+	} {
+		got, err := logging.ParseLevel(in)
+		if err != nil || got != want {
+			t.Errorf("ParseLevel(%q) = %v, %v; want %v, nil", in, got, err, want)
+		}
+	}
+	for _, in := range []string{"verbose", "", "information"} {
+		if _, err := logging.ParseLevel(in); !errors.Is(err, logging.ErrInvalidLevel) {
+			t.Errorf("ParseLevel(%q) error = %v; want ErrInvalidLevel, never a fallback to info", in, err)
+		}
+	}
+}
+
+func TestParseFormat(t *testing.T) {
+	t.Parallel()
+	for in, want := range map[string]logging.Format{"json": logging.FormatJSON, " TEXT ": logging.FormatText} {
+		got, err := logging.ParseFormat(in)
+		if err != nil || got != want {
+			t.Errorf("ParseFormat(%q) = %q, %v; want %q, nil", in, got, err, want)
+		}
+	}
+	if _, err := logging.ParseFormat("xml"); !errors.Is(err, logging.ErrInvalidFormat) {
+		t.Errorf("ParseFormat(xml) error = %v; want ErrInvalidFormat", err)
 	}
 }

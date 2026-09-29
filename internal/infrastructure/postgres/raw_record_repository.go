@@ -34,17 +34,10 @@ func NewRawRecordRepository(db generated.DBTX) (*RawRecordRepository, error) {
 	}, nil
 }
 
-func (r *RawRecordRepository) WithTx(tx pgx.Tx) *RawRecordRepository {
-	return &RawRecordRepository{
-		db:      tx,
-		queries: r.queries.WithTx(tx),
-	}
-}
-
 func (r *RawRecordRepository) Save(ctx context.Context, record *ingestion.RawRecord) error {
 	params, err := toCreateParams(record)
 	if err != nil {
-		return err
+		return fmt.Errorf("raw record params: %w", err)
 	}
 
 	row, err := r.queries.CreateRawRecord(ctx, params)
@@ -63,10 +56,10 @@ func (r *RawRecordRepository) SaveBatch(ctx context.Context, records []*ingestio
 	}
 
 	paramsList := make([]generated.CreateRawRecordParams, 0, len(records))
-	for _, record := range records {
+	for i, record := range records {
 		params, err := toCreateParams(record)
 		if err != nil {
-			return err
+			return fmt.Errorf("raw record %d params: %w", i, err)
 		}
 		paramsList = append(paramsList, params)
 	}
@@ -127,10 +120,6 @@ func (r *RawRecordRepository) SaveBatch(ctx context.Context, records []*ingestio
 func toCreateParams(record *ingestion.RawRecord) (generated.CreateRawRecordParams, error) {
 	if record == nil {
 		return generated.CreateRawRecordParams{}, ingestion.ErrInvalidRecordState
-	}
-
-	if err := record.Validate(); err != nil {
-		return generated.CreateRawRecordParams{}, err
 	}
 
 	uuidVal, err := parseUUID(record.ID)
@@ -282,11 +271,11 @@ func (r *RawRecordRepository) ListKeysetByRunID(
 	clampedLimit := listLimit(limit, 50)
 	var rows []generated.RawRecord
 
-	if cursorID != nil && strings.TrimSpace(*cursorID) != "" {
-		cUUID, parseErr := parseUUID(*cursorID)
-		if parseErr != nil {
-			return nil, fmt.Errorf("invalid cursor id: %w", parseErr)
-		}
+	cUUID, err := parseOptionalUUID(cursorID)
+	if err != nil {
+		return nil, fmt.Errorf("invalid cursor id: %w", err)
+	}
+	if cUUID.Valid {
 		rows, err = r.queries.ListRawRecordsByRunIDKeysetAfterCursor(ctx, generated.ListRawRecordsByRunIDKeysetAfterCursorParams{
 			IngestionRunID: runUUID,
 			CursorID:       cUUID,

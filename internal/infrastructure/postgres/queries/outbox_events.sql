@@ -31,14 +31,16 @@ RETURNING o.id, o.aggregate_type, o.aggregate_id, o.event_type, o.payload, o.ret
           COALESCE(o.target_group, '')::varchar AS target_group;
 
 -- name: MarkOutboxPublished :execrows
+-- A matching claim token implies status = 'PENDING' (chk_outbox_claim_pending). Leaving status out
+-- keeps this on the primary key: with it, the planner may walk idx_outbox_claimable over the whole
+-- pending backlog when statistics lag a burst of events.
 UPDATE outbox_events
 SET status = 'PROCESSED',
     processed_at = NOW(),
     claim_token = NULL,
     last_error = NULL
 WHERE id = ANY(@ids::uuid[])
-  AND claim_token = @claim_token::uuid
-  AND status = 'PENDING';
+  AND claim_token = @claim_token::uuid;
 
 -- name: RecordOutboxPublishFailure :execrows
 UPDATE outbox_events

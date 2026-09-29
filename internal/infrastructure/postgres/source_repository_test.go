@@ -9,6 +9,7 @@ import (
 
 	"github.com/ayo6706/cross-border-ecommerce/internal/domain/source"
 	"github.com/ayo6706/cross-border-ecommerce/internal/infrastructure/postgres"
+	"github.com/ayo6706/cross-border-ecommerce/internal/testsupport"
 	"github.com/ayo6706/cross-border-ecommerce/migrations"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -37,11 +38,7 @@ func setupLiveSourceDB(t *testing.T) (*pgxpool.Pool, *postgres.SourceRepository)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	pool, err := postgres.NewPool(ctx, connStr,
-		postgres.WithConnectTimeout(3*time.Second),
-		postgres.WithMaxConns(5),
-		postgres.WithMinConns(1),
-	)
+	pool, err := postgres.NewPool(ctx, testsupport.PoolConfig(connStr, 5))
 	if err != nil {
 		t.Skipf("skipping live database test: unable to connect to %s: %v", connStr, err)
 		return nil, nil
@@ -220,7 +217,10 @@ func TestSourceRepository_LiveIntegration(t *testing.T) {
 		}
 		defer func() { _ = tx.Rollback(ctx) }()
 
-		txRepo := repo.WithTx(tx)
+		txRepo, err := postgres.NewSourceRepository(tx)
+		if err != nil {
+			t.Fatalf("failed to create tx repository: %v", err)
+		}
 		now := time.Now().UTC()
 		sTx := &source.Source{
 			ID:                 source.ID("source-in-tx"),

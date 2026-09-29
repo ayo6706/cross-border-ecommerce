@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -9,156 +10,103 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
-	"time"
 
-	appProduct "github.com/ayo6706/cross-border-ecommerce/internal/application/product"
 	"github.com/ayo6706/cross-border-ecommerce/internal/infrastructure/postgres"
 	"github.com/ayo6706/cross-border-ecommerce/internal/platform/config"
 	"github.com/ayo6706/cross-border-ecommerce/internal/platform/logging"
-	"github.com/ayo6706/cross-border-ecommerce/internal/platform/uuid"
+	"github.com/ayo6706/cross-border-ecommerce/internal/wiring"
 )
 
 func main() {
-	if err := run(); err != nil {
+	err := run(os.Args[1:])
+	if errors.Is(err, flag.ErrHelp) {
+		return
+	}
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "ingest error: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-func run() error {
-	if len(os.Args) < 2 {
-		return fmt.Errorf("usage: ingest <command> [options]\ncommands: process")
+func run(args []string) error {
+	if len(args) == 0 {
+		return errors.New("usage: ingest <command> [options]\ncommands: process")
 	}
-
-	command := os.Args[1]
-	switch command {
+	switch args[0] {
 	case "process":
-		return runProcess(os.Args[2:])
+		return runProcess(args[1:])
 	default:
-		return fmt.Errorf("unknown command %q (expected 'process')", command)
+		return fmt.Errorf("unknown command %q (expected 'process')", args[0])
 	}
 }
 
-//nolint:funlen // legacy baseline 2026-09-26: fix in ENG-018
+// runProcess processes one run now. Configuration loads first because it supplies the flag
+// defaults, so even -h needs a valid environment (DATABASE_URL).
 func runProcess(args []string) error {
-	fs := flag.NewFlagSet("process", flag.ExitOnError)
-	runID := fs.String("run", "", "Ingestion run UUID to process")
-	fromStart := fs.Bool("from-start", false, "Reset processing cursor and counters to re-process from start")
-	batchSize := fs.Int("batch-size", 500, "Batch size for keyset pagination")
-	leaseSec := fs.Int("lease", 30, "Lease duration in seconds")
-
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-
-	if strings.TrimSpace(*runID) == "" {
-		return fmt.Errorf("--run <id> is required")
-	}
-
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
+	p, err := parseProcessFlags(args, &cfg.RunProcessing)
+	if err != nil {
+		return err
+	}
 
-	logger := logging.NewLogger(os.Stdout, logging.Options{
-		Level:     cfg.Log.Level,
-		Format:    cfg.Log.Format,
-		AddSource: cfg.Log.AddSource,
-	})
+	logger := logging.NewLogger(os.Stdout, cfg.Log)
 	slog.SetDefault(logger)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
-	shutdown := make(chan os.Signal, 1)
-	signal.Notify(shutdown, os.Interrupt, syscall.SIGTERM)
-	go func() {
-		<-shutdown
-		logger.Info("cancellation signal received, stopping processing gracefully")
-		cancel()
-	}()
+	return processRun(ctx, cfg, p.runID, p.fromStart, logger)
+}
 
-	pool, err := postgres.NewPool(
-		ctx,
-		cfg.Database.URL,
-		postgres.WithMaxConns(cfg.Database.MaxConns),
-		postgres.WithMinConns(cfg.Database.MinConns),
-	)
+type processArgs struct {
+	runID     string
+	fromStart bool
+}
+
+// parseProcessFlags reads the process flags. --lease and --batch-size default to RUN_PROCESSING_*
+// (the worker's values) and override cfg in place; the result is validated like the environment.
+func parseProcessFlags(args []string, cfg *config.RunProcessingConfig) (processArgs, error) {
+	fs := flag.NewFlagSet("process", flag.ContinueOnError)
+	runID := fs.String("run", "", "Ingestion run UUID to process")
+	fromStart := fs.Bool("from-start", false, "Reset processing cursor and counters to re-process from start")
+	fs.IntVar(&cfg.BatchSize, "batch-size", cfg.BatchSize, "Raw records per page")
+	fs.DurationVar(&cfg.Lease, "lease", cfg.Lease, "Claim lease, e.g. 45s")
+	if err := fs.Parse(args); err != nil {
+		return processArgs{}, fmt.Errorf("parse process flags: %w", err)
+	}
+	if strings.TrimSpace(*runID) == "" {
+		return processArgs{}, errors.New("--run <id> is required")
+	}
+	if err := cfg.Validate(); err != nil {
+		return processArgs{}, fmt.Errorf("validate process flags: %w", err)
+	}
+	return processArgs{runID: strings.TrimSpace(*runID), fromStart: *fromStart}, nil
+}
+
+func processRun(ctx context.Context, cfg *config.Config, runID string, fromStart bool, logger *slog.Logger) error {
+	pool, err := postgres.NewPool(ctx, cfg.Database)
 	if err != nil {
 		return fmt.Errorf("connect to database: %w", err)
 	}
 	defer pool.Close()
 
-	runRepo, err := postgres.NewIngestionRepository(pool)
+	processor, err := wiring.RunProcessor(pool)
 	if err != nil {
-		return err
+		return fmt.Errorf("wire run processor: %w", err)
 	}
-	sourceRepo, err := postgres.NewSourceRepository(pool)
+	opts, err := wiring.ProcessRunOptions(cfg.RunProcessing, fromStart)
 	if err != nil {
-		return err
-	}
-	rawRepo, err := postgres.NewRawRecordRepository(pool)
-	if err != nil {
-		return err
-	}
-	processingRepo, err := postgres.NewRunProcessingRepository(pool)
-	if err != nil {
-		return err
-	}
-	txRunner, err := postgres.NewProductTxManager(pool)
-	if err != nil {
-		return err
+		return fmt.Errorf("build run processing options: %w", err)
 	}
 
-	processor, err := appProduct.NewRunProcessor(runRepo, sourceRepo, rawRepo, processingRepo, txRunner)
+	logger.Info("starting run processing", slog.String("run_id", runID), slog.Bool("from_start", fromStart))
+	result, err := processor.ProcessRun(ctx, runID, opts)
 	if err != nil {
-		return fmt.Errorf("initialize processor: %w", err)
+		return fmt.Errorf("process run %s: %w", runID, err)
 	}
-
-	logger.Info("starting run processing",
-		slog.String("run_id", *runID),
-		slog.Bool("from_start", *fromStart),
-	)
-
-	opts, err := processRunOptions(cfg.Ingestion, time.Duration(*leaseSec)*time.Second, *batchSize, *fromStart)
-	if err != nil {
-		return err
-	}
-	result, err := processor.ProcessRun(ctx, *runID, opts)
-	if err != nil {
-		return fmt.Errorf("process run %s: %w", *runID, err)
-	}
-
-	logger.Info("run processing completed successfully",
-		slog.String("run_id", result.RunID),
-		slog.Int("records_seen", result.Seen),
-		slog.Int("records_new", result.New),
-		slog.Int("records_changed", result.Changed),
-		slog.Int("records_unchanged", result.Unchanged),
-		slog.Int("records_failed", result.Failed),
-	)
-
+	logger.Info("run processing completed successfully", slog.Any("result", result))
 	return nil
-}
-
-// processRunOptions builds the options ProcessRun requires: a fresh claim token for this
-// invocation and the error budget from configuration.
-func processRunOptions(
-	cfg config.IngestionConfig, lease time.Duration, batchSize int, fromStart bool,
-) (appProduct.ProcessRunOptions, error) {
-	budget, err := cfg.ErrorBudget()
-	if err != nil {
-		return appProduct.ProcessRunOptions{}, err
-	}
-	claimToken, err := uuid.NewString()
-	if err != nil {
-		return appProduct.ProcessRunOptions{}, fmt.Errorf("generate claim token: %w", err)
-	}
-	return appProduct.ProcessRunOptions{
-		ClaimToken:    claimToken,
-		LeaseDuration: lease,
-		BatchSize:     batchSize,
-		FromStart:     fromStart,
-		ErrorBudget:   budget,
-	}, nil
 }

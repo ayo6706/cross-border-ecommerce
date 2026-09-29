@@ -82,18 +82,42 @@ RETURNING
     updated_at;
 
 -- name: UpdateIngestionRunStatus :one
-UPDATE ingestion_runs
-SET 
-    status = @status::varchar,
-    error_summary = @error_summary::text,
-    checkpoint = CASE 
-        WHEN @checkpoint::varchar != '' THEN @checkpoint::varchar 
-        ELSE checkpoint 
-    END,
-    completed_at = @completed_at::timestamptz,
-    updated_at = @updated_at::timestamptz
-WHERE id = @id::uuid AND status = @expected_status::varchar
-RETURNING 
+-- A run that finishes processable (RunStatus.Processable, passed as queue_processing) is queued
+-- for product processing in the same statement, so the queue never misses a finished run and the
+-- worker never scans for them.
+WITH updated AS (
+    UPDATE ingestion_runs
+    SET
+        status = @status::varchar,
+        error_summary = @error_summary::text,
+        checkpoint = CASE
+            WHEN @checkpoint::varchar != '' THEN @checkpoint::varchar
+            ELSE checkpoint
+        END,
+        completed_at = @completed_at::timestamptz,
+        updated_at = @updated_at::timestamptz
+    WHERE id = @id::uuid AND status = @expected_status::varchar
+    RETURNING
+        id,
+        source_id,
+        status,
+        checkpoint,
+        records_seen,
+        records_new,
+        records_changed,
+        records_unchanged,
+        records_failed,
+        error_summary,
+        started_at,
+        completed_at,
+        created_at,
+        updated_at
+), queued AS (
+    INSERT INTO ingestion_run_processing (run_id)
+    SELECT id FROM updated WHERE @queue_processing::bool
+    ON CONFLICT (run_id) DO NOTHING
+)
+SELECT
     id,
     source_id,
     status,
@@ -107,7 +131,8 @@ RETURNING
     started_at,
     completed_at,
     created_at,
-    updated_at;
+    updated_at
+FROM updated;
 
 -- name: ListIngestionRunsBySource :many
 SELECT 

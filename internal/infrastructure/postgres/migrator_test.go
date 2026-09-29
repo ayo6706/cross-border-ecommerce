@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ayo6706/cross-border-ecommerce/internal/infrastructure/postgres"
+	"github.com/ayo6706/cross-border-ecommerce/internal/testsupport"
 	"github.com/ayo6706/cross-border-ecommerce/migrations"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -114,11 +115,7 @@ func TestMigrator_LiveLifecycle(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	pool, err := postgres.NewPool(ctx, connStr,
-		postgres.WithConnectTimeout(3*time.Second),
-		postgres.WithMaxConns(5),
-		postgres.WithMinConns(1),
-	)
+	pool, err := postgres.NewPool(ctx, testsupport.PoolConfig(connStr, 5))
 	if err != nil {
 		t.Skipf("skipping live database test: unable to connect to %s: %v", connStr, err)
 		return
@@ -421,8 +418,7 @@ func TestMigrator_NoTransaction_Live(t *testing.T) {
 
 func openLivePool(ctx context.Context, t *testing.T, connStr string) *pgxpool.Pool {
 	t.Helper()
-	pool, err := postgres.NewPool(ctx, connStr,
-		postgres.WithConnectTimeout(3*time.Second), postgres.WithMaxConns(2), postgres.WithMinConns(1))
+	pool, err := postgres.NewPool(ctx, testsupport.PoolConfig(connStr, 2))
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}

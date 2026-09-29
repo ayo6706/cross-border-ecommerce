@@ -1,9 +1,8 @@
-package postgres //nolint:dupl // legacy baseline 2026-09-26: fix in ENG-018
+package postgres
 
 import (
 	"context"
 	"errors"
-	"fmt"
 
 	appDLQ "github.com/ayo6706/cross-border-ecommerce/internal/application/dlq"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -23,29 +22,7 @@ func NewDLQTxManager(pool *pgxpool.Pool) (*DLQTxManager, error) {
 }
 
 func (m *DLQTxManager) WithinTx(ctx context.Context, fn func(repos appDLQ.TxRepos) error) error {
-	tx, err := m.pool.Begin(ctx)
-	if err != nil {
-		return fmt.Errorf("begin dlq transaction: %w", err)
-	}
-	defer func() {
-		_ = tx.Rollback(ctx)
-	}()
-
-	dlqRepo, err := NewDLQRepository(tx)
-	if err != nil {
-		return fmt.Errorf("create tx dlq repository: %w", err)
-	}
-	outboxRepo, err := NewOutboxRepository(tx)
-	if err != nil {
-		return fmt.Errorf("create tx outbox repository: %w", err)
-	}
-
-	if err := fn(appDLQ.TxRepos{DLQ: dlqRepo, Outbox: outboxRepo}); err != nil {
-		return err
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit dlq transaction: %w", err)
-	}
-	return nil
+	return withinTx(ctx, m.pool, "dlq", func(r txRepositories) error {
+		return fn(appDLQ.TxRepos{DLQ: r.dlq, Outbox: r.outbox})
+	})
 }

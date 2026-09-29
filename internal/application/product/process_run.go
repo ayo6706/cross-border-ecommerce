@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
 	domainIngestion "github.com/ayo6706/cross-border-ecommerce/internal/domain/ingestion"
 	domainProduct "github.com/ayo6706/cross-border-ecommerce/internal/domain/product"
 	domainSource "github.com/ayo6706/cross-border-ecommerce/internal/domain/source"
+	"github.com/ayo6706/cross-border-ecommerce/internal/platform/cleanup"
 )
 
 type ProcessRunOptions struct {
@@ -23,6 +25,18 @@ type ProcessRunOptions struct {
 type ProcessRunResult struct {
 	RunID string
 	domainIngestion.BatchMetrics
+}
+
+// LogValue logs a result as one group, so the worker and cmd/ingest report runs the same way.
+func (r ProcessRunResult) LogValue() slog.Value {
+	return slog.GroupValue(
+		slog.String("run_id", r.RunID),
+		slog.Int("seen", r.Seen),
+		slog.Int("new", r.New),
+		slog.Int("changed", r.Changed),
+		slog.Int("unchanged", r.Unchanged),
+		slog.Int("failed", r.Failed),
+	)
 }
 
 type RunProcessor struct {
@@ -65,6 +79,24 @@ func NewRunProcessor(
 	}, nil
 }
 
+// ProcessNext is one worker step: it claims the oldest claimable run with opts.ClaimToken and
+// processes it. Runs are queued when they finish (IngestionRepository.UpdateStatus). It returns
+// (nil, nil) when no run is claimable, the same convention as RunProcessingRepository.ClaimNext.
+func (p *RunProcessor) ProcessNext(ctx context.Context, opts ProcessRunOptions) (*ProcessRunResult, error) {
+	claimed, err := p.processingRepo.ClaimNext(ctx, opts.ClaimToken, opts.LeaseDuration)
+	if err != nil {
+		return nil, fmt.Errorf("claim next run processing: %w", err)
+	}
+	if claimed == nil {
+		return nil, nil
+	}
+	result, err := p.ProcessRun(ctx, claimed.RunID, opts)
+	if err != nil {
+		return nil, fmt.Errorf("process run %s: %w", claimed.RunID, err)
+	}
+	return result, nil
+}
+
 //nolint:funlen,gocognit // legacy baseline 2026-09-26: fix in ENG-044
 func (p *RunProcessor) ProcessRun(ctx context.Context, runID string, opts ProcessRunOptions) (*ProcessRunResult, error) {
 	trimmedRunID := strings.TrimSpace(runID)
@@ -96,9 +128,9 @@ func (p *RunProcessor) ProcessRun(ctx context.Context, runID string, opts Proces
 	if err != nil {
 		return nil, fmt.Errorf("find ingestion run: %w", err)
 	}
-	if run.Status != domainIngestion.StatusCompleted && run.Status != domainIngestion.StatusPartial {
-		return nil, fmt.Errorf("%w: run %s has status %s, want %s or %s", domainIngestion.ErrInvalidRunState,
-			trimmedRunID, run.Status, domainIngestion.StatusCompleted, domainIngestion.StatusPartial)
+	if !run.Status.Processable() {
+		return nil, fmt.Errorf("%w: run %s has status %s, which is not processable",
+			domainIngestion.ErrInvalidRunState, trimmedRunID, run.Status)
 	}
 
 	_, err = p.processingRepo.EnsureExists(ctx, trimmedRunID)
@@ -218,22 +250,14 @@ func (p *RunProcessor) ProcessRun(ctx context.Context, runID string, opts Proces
 	return &ProcessRunResult{RunID: trimmedRunID, BatchMetrics: finalState.BatchMetrics}, nil
 }
 
-// finalWriteTimeout bounds the writes that finalize a run's state; they run even after the
-// caller's context is cancelled, so the lease is released instead of left to expire.
-const finalWriteTimeout = 5 * time.Second
-
-func finalWriteContext(ctx context.Context) (context.Context, context.CancelFunc) {
-	return context.WithTimeout(context.WithoutCancel(ctx), finalWriteTimeout)
-}
-
 func (p *RunProcessor) releaseRun(ctx context.Context, runID, claimToken string) error {
-	cleanupCtx, cancel := finalWriteContext(ctx)
+	cleanupCtx, cancel := cleanup.Context(ctx)
 	defer cancel()
 	return p.processingRepo.Release(cleanupCtx, runID, claimToken)
 }
 
 func (p *RunProcessor) failRun(ctx context.Context, runID, claimToken, reason string) error {
-	cleanupCtx, cancel := finalWriteContext(ctx)
+	cleanupCtx, cancel := cleanup.Context(ctx)
 	defer cancel()
 	return p.processingRepo.Fail(cleanupCtx, runID, claimToken, reason)
 }
@@ -241,7 +265,7 @@ func (p *RunProcessor) failRun(ctx context.Context, runID, claimToken, reason st
 func (p *RunProcessor) completeRun(
 	ctx context.Context, runID, claimToken string,
 ) (*domainIngestion.RunProcessing, error) {
-	cleanupCtx, cancel := finalWriteContext(ctx)
+	cleanupCtx, cancel := cleanup.Context(ctx)
 	defer cancel()
 	return p.processingRepo.Complete(cleanupCtx, runID, claimToken)
 }

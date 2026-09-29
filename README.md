@@ -38,6 +38,23 @@ Infrastructure Adapters (internal/infrastructure/)
 
 `DATABASE_URL` is required for all database-backed services.
 `REDIS_URL` is required by the background worker (`cmd/worker`) for publishing outbox events to Redis Streams.
+Every variable is read once by `internal/platform/config`; a malformed or out-of-range value fails
+startup (all bad variables are reported together), it is never replaced by the default.
+
+Database Pool Variables (with defaults), used by every binary (`api`, `worker`, `ingest`, `migrate`):
+- `DB_MAX_CONNS`: Pool size per process (default: `25`). Each process opens its own pool, so the sum
+  over all running processes must stay below PostgreSQL `max_connections` (100 by default) minus
+  its reserved slots. The worker runs two loops (run processing, outbox relay); the API holds one
+  connection per in-flight query. Sizing against measured concurrency is ENG-044.
+- `DB_MIN_CONNS`: Idle connections kept open (default: `5`, must be <= `DB_MAX_CONNS`).
+- `DB_MAX_CONN_IDLE_TIME`: Idle connection lifetime (default: `15m`).
+- `DB_MAX_CONN_LIFETIME`: Connection lifetime (default: `1h`).
+- `DB_CONNECT_TIMEOUT`: Bound on every connection attempt and the startup ping (default: `5s`).
+
+Logging Variables (with defaults):
+- `LOG_LEVEL`: `debug`, `info`, `warn` or `error` (default: `info`); any other value fails startup.
+- `LOG_FORMAT`: `json` or `text` (default: `json`).
+- `LOG_ADD_SOURCE`: Add the source file and line to each record (default: `false`).
 
 Outbox Relay Tuning Variables (with defaults):
 - `OUTBOX_BATCH_SIZE`: Batch size for outbox claim query (default: `100`, range 1–1000).
@@ -53,14 +70,17 @@ Stream Broker Tuning Variables (with defaults):
 Stream Consumer & Worker Pool Tuning Variables (with defaults):
 - `STREAM_CONSUMER_BLOCK`: XREADGROUP block timeout duration (default: `2s`).
 - `STREAM_CONSUMER_BATCH`: Maximum number of messages read per batch from Redis Stream (default: `10`, max 1000).
-- `STREAM_CLAIM_MIN_IDLE`: Minimum idle duration before reclaiming pending messages with XAUTOCLAIM (default: `30s`, must be > `STREAM_HANDLER_TIMEOUT`).
+- `STREAM_CLAIM_MIN_IDLE`: Minimum idle duration before reclaiming pending messages with XAUTOCLAIM (default: `60s`, must exceed the worst-case retry window: `STREAM_RETRY_MAX_ATTEMPTS` handler timeouts plus the backoffs between them).
 - `STREAM_CLAIM_INTERVAL`: Periodic interval between XAUTOCLAIM sweeps (default: `10s`).
 - `STREAM_HANDLER_TIMEOUT`: Maximum execution time allowed per message handler (default: `5s`).
 - `WORKER_CONCURRENCY`: Fixed number of concurrent worker goroutines in the pool (default: `10`). Used by the stream consumer, which no binary starts yet (ENG-025).
 - `WORKER_QUEUE_SIZE`: Buffer capacity of the worker task queue (default: `10`).
 - `WORKER_DRAIN_TIMEOUT`: Graceful shutdown drain timeout before cancelling in-flight tasks (default: `10s`).
 
-Ingestion Tuning Variables (with defaults):
+Run Processing Variables (with defaults), used by the worker loop and `cmd/ingest`:
+- `RUN_PROCESSING_POLL_INTERVAL`: How often the worker claims the next finished run (default: `2s`).
+- `RUN_PROCESSING_LEASE`: Claim lease, renewed per page (default: `30s`); default of `ingest process --lease`.
+- `RUN_PROCESSING_BATCH_SIZE`: Raw records per page (default: `500`); default of `ingest process --batch-size`.
 - `INGESTION_ERROR_BUDGET_MAX_RATE`: Share of rows a run may fail to normalize before the run is failed (default: `0.05`, must be > 0 and < 1).
 - `INGESTION_ERROR_BUDGET_MIN_ROWS`: Rows seen before the budget is enforced (default: `100`, must be > 0). An explicit value outside these bounds fails startup; it is never clamped.
 
@@ -92,6 +112,17 @@ make test-integration
 # Every gate, the same script CI runs: gofmt, go vet, staticcheck (go.mod tool), golangci-lint,
 # sqlc diff, tests against live PostgreSQL + Redis; any skipped test fails. VERIFY_RACE=1 adds -race.
 make verify
+
+# Query-plan suite (separate CI job): seeds ~100k-200k rows per large table into TEST_DATABASE_URL,
+# which it TRUNCATES, and fails when a statement the worker, relay or API sends reads a large table
+# without an index. Timings are logged, not asserted (ADR 0010).
+make perf
+
+# Process one finished run now (lease/batch default to RUN_PROCESSING_*). migrate reads only
+# DATABASE_URL (or -database-url) and DB_*, logs plain text (LOG_* do not apply), and has no
+# deadline: the deploy job owns the timeout
+go run ./cmd/ingest process --run <run-id> [--from-start] [--lease 45s] [--batch-size 250]
+go run ./cmd/migrate [-database-url URL] up | down [steps] | version
 
 # Build executables into bin/
 make build

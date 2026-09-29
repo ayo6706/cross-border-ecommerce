@@ -11,6 +11,7 @@ import (
 	"github.com/ayo6706/cross-border-ecommerce/internal/domain/ingestion"
 	"github.com/ayo6706/cross-border-ecommerce/internal/domain/source"
 	"github.com/ayo6706/cross-border-ecommerce/internal/infrastructure/postgres"
+	"github.com/ayo6706/cross-border-ecommerce/internal/testsupport"
 	"github.com/ayo6706/cross-border-ecommerce/migrations"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -39,11 +40,7 @@ func setupLiveIngestionDB(t *testing.T) (*pgxpool.Pool, *postgres.IngestionRepos
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	pool, err := postgres.NewPool(ctx, connStr,
-		postgres.WithConnectTimeout(3*time.Second),
-		postgres.WithMaxConns(5),
-		postgres.WithMinConns(1),
-	)
+	pool, err := postgres.NewPool(ctx, testsupport.PoolConfig(connStr, 5))
 	if err != nil {
 		t.Skipf("skipping live database test: unable to connect to %s: %v", connStr, err)
 		return nil, nil
@@ -228,6 +225,62 @@ func TestIngestionRepository_LiveIntegration(t *testing.T) {
 		}
 	})
 
+	// Completion queues the run for product processing in the same statement, so the worker never
+	// scans for finished runs (ADR 0011).
+	t.Run("UpdateStatus_QueuesProcessingOnlyForProcessableRuns", func(t *testing.T) {
+		finish := func(t *testing.T, end func(*ingestion.IngestionRun, time.Time) error) *ingestion.IngestionRun {
+			t.Helper()
+			now := time.Now().UTC()
+			run, err := ingestion.NewRun("", newTestSource(t, pool), "")
+			if err != nil {
+				t.Fatalf("failed to initialize run: %v", err)
+			}
+			if err := run.Start(now); err != nil {
+				t.Fatalf("failed to start run: %v", err)
+			}
+			if err := repo.CreateRun(ctx, run); err != nil {
+				t.Fatalf("failed to create run: %v", err)
+			}
+			if err := end(run, now.Add(time.Second)); err != nil {
+				t.Fatalf("failed to end run: %v", err)
+			}
+			if err := repo.UpdateStatus(ctx, run, ingestion.StatusRunning); err != nil {
+				t.Fatalf("failed to update status: %v", err)
+			}
+			return run
+		}
+		processingStatus := func(t *testing.T, runID string) (string, int) {
+			t.Helper()
+			var status string
+			var rows int
+			err := pool.QueryRow(ctx,
+				`SELECT coalesce(max(status), ''), count(*) FROM ingestion_run_processing WHERE run_id = $1`,
+				runID).Scan(&status, &rows)
+			if err != nil {
+				t.Fatalf("read processing row: %v", err)
+			}
+			return status, rows
+		}
+
+		completed := finish(t, func(r *ingestion.IngestionRun, at time.Time) error { return r.Complete("", at) })
+		if status, rows := processingStatus(t, completed.ID); rows != 1 || status != string(ingestion.ProcessingPending) {
+			t.Fatalf("completed run: %d processing rows with status %q; want 1 PENDING", rows, status)
+		}
+
+		failed := finish(t, func(r *ingestion.IngestionRun, at time.Time) error { return r.Fail("boom", at) })
+		if _, rows := processingStatus(t, failed.ID); rows != 0 {
+			t.Fatalf("failed run: %d processing rows; want none", rows)
+		}
+
+		// A rejected (stale) transition writes nothing, including no processing row.
+		if err := repo.UpdateStatus(ctx, failed, ingestion.StatusRunning); !errors.Is(err, ingestion.ErrInvalidTransition) {
+			t.Fatalf("expected ErrInvalidTransition, got %v", err)
+		}
+		if _, rows := processingStatus(t, failed.ID); rows != 0 {
+			t.Fatalf("rejected transition queued %d processing rows; want none", rows)
+		}
+	})
+
 	t.Run("ListAndLatestRuns", func(t *testing.T) {
 		sourceID := newTestSource(t, pool)
 		now := time.Now().UTC()
@@ -311,7 +364,10 @@ func TestIngestionRepository_LiveIntegration(t *testing.T) {
 		}
 		defer func() { _ = tx.Rollback(ctx) }()
 
-		txRepo := repo.WithTx(tx)
+		txRepo, err := postgres.NewIngestionRepository(tx)
+		if err != nil {
+			t.Fatalf("failed to create tx repository: %v", err)
+		}
 		runTx, _ := ingestion.NewRun("", sourceID, "cursor-tx")
 		if err := txRepo.CreateRun(ctx, runTx); err != nil {
 			t.Fatalf("failed to create run in tx: %v", err)

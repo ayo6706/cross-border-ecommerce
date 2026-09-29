@@ -221,3 +221,22 @@ func TestIngestionRun_PartialAndFailures(t *testing.T) {
 		t.Fatalf("expected ErrNegativeMetric, got %v", negErr)
 	}
 }
+
+// Only finished runs with records are processed; UpdateStatus queues exactly these (ADR 0011).
+func TestRunStatus_Processable(t *testing.T) {
+	t.Parallel()
+
+	want := map[ingestion.RunStatus]bool{
+		ingestion.StatusPending:   false,
+		ingestion.StatusRunning:   false,
+		ingestion.StatusCompleted: true,
+		ingestion.StatusPartial:   true,
+		ingestion.StatusFailed:    false,
+		ingestion.StatusCancelled: false,
+	}
+	for status, processable := range want {
+		if got := status.Processable(); got != processable {
+			t.Errorf("%s.Processable() = %v, want %v", status, got, processable)
+		}
+	}
+}

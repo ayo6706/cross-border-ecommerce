@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/ayo6706/cross-border-ecommerce/internal/infrastructure/postgres"
+	"github.com/ayo6706/cross-border-ecommerce/internal/platform/config"
 	"github.com/ayo6706/cross-border-ecommerce/migrations"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -29,11 +30,7 @@ func LiveDB(t testing.TB) *pgxpool.Pool {
 	ctx, cancel := context.WithTimeout(context.Background(), liveSetupTimeout)
 	defer cancel()
 
-	pool, err := postgres.NewPool(ctx, url,
-		postgres.WithConnectTimeout(5*time.Second),
-		postgres.WithMaxConns(5),
-		postgres.WithMinConns(1),
-	)
+	pool, err := postgres.NewPool(ctx, PoolConfig(url, 5))
 	if err != nil {
 		t.Fatalf("connect to TEST_DATABASE_URL: %v", err)
 	}
@@ -47,6 +44,19 @@ func LiveDB(t testing.TB) *pgxpool.Pool {
 		t.Fatalf("apply migrations: %v", err)
 	}
 	return pool
+}
+
+// PoolConfig is a small valid pool configuration for live tests; maxConns is the one setting
+// tests vary (concurrency tests need more than the default).
+func PoolConfig(url string, maxConns int32) config.DatabaseConfig {
+	return config.DatabaseConfig{
+		URL:             url,
+		MaxConns:        maxConns,
+		MinConns:        1,
+		MaxConnIdleTime: time.Minute,
+		MaxConnLifetime: time.Hour,
+		ConnectTimeout:  5 * time.Second,
+	}
 }
 
 // Truncate empties tables now and again at cleanup, so a test starts from a known state and

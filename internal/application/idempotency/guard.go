@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/ayo6706/cross-border-ecommerce/internal/application/messaging"
+	"github.com/ayo6706/cross-border-ecommerce/internal/platform/cleanup"
 	"github.com/ayo6706/cross-border-ecommerce/internal/platform/uuid"
 )
 
@@ -141,7 +142,7 @@ func (g *Guard) Wrap(scope string, next messaging.Handler) (messaging.Handler, e
 // release expires the lease early so the next delivery can claim it without waiting out the TTL.
 // It runs on a detached context because the handler's context may already be cancelled.
 func (g *Guard) release(ctx context.Context, scope, key, token, reason string) {
-	releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	releaseCtx, cancel := cleanup.Context(ctx)
 	defer cancel()
 	if err := g.store.ReleaseKey(releaseCtx, scope, key, token); err != nil {
 		g.logger.WarnContext(ctx, "failed to release idempotency lease; retry waits for lease expiry",

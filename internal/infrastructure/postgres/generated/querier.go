@@ -55,15 +55,20 @@ type Querier interface {
 	ListRawRecordsBySourceAndExternalID(ctx context.Context, arg ListRawRecordsBySourceAndExternalIDParams) ([]RawRecord, error)
 	ListSources(ctx context.Context) ([]Source, error)
 	MarkDLQMessageReplayed(ctx context.Context, arg MarkDLQMessageReplayedParams) (int64, error)
+	// A matching claim token implies status = 'PENDING' (chk_outbox_claim_pending). Leaving status out
+	// keeps this on the primary key: with it, the planner may walk idx_outbox_claimable over the whole
+	// pending backlog when statistics lag a burst of events.
 	MarkOutboxPublished(ctx context.Context, arg MarkOutboxPublishedParams) (int64, error)
 	RecordOutboxPublishFailure(ctx context.Context, arg RecordOutboxPublishFailureParams) (int64, error)
 	ReleaseIdempotencyKey(ctx context.Context, arg ReleaseIdempotencyKeyParams) (int64, error)
 	ReleaseOutboxClaims(ctx context.Context, arg ReleaseOutboxClaimsParams) (int64, error)
 	ReleaseRunProcessingClaim(ctx context.Context, arg ReleaseRunProcessingClaimParams) (IngestionRunProcessing, error)
 	ResetRunProcessingFromStart(ctx context.Context, runID pgtype.UUID) (IngestionRunProcessing, error)
-	SeedPendingRunProcessing(ctx context.Context) error
 	UpdateIngestionRunProgress(ctx context.Context, arg UpdateIngestionRunProgressParams) (IngestionRun, error)
-	UpdateIngestionRunStatus(ctx context.Context, arg UpdateIngestionRunStatusParams) (IngestionRun, error)
+	// A run that finishes processable (RunStatus.Processable, passed as queue_processing) is queued
+	// for product processing in the same statement, so the queue never misses a finished run and the
+	// worker never scans for them.
+	UpdateIngestionRunStatus(ctx context.Context, arg UpdateIngestionRunStatusParams) (UpdateIngestionRunStatusRow, error)
 	UpdateRunProcessingProgress(ctx context.Context, arg UpdateRunProcessingProgressParams) (IngestionRunProcessing, error)
 	UpsertSource(ctx context.Context, arg UpsertSourceParams) (Source, error)
 }

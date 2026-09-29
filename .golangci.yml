@@ -6,6 +6,7 @@ version: "2"
 
 run:
   timeout: 5m
+  build-tags: [perf] # lint the query-plan suite (tests/performance), which `go test ./...` does not build
   modules-download-mode: readonly
 
 output:

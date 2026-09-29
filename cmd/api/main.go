@@ -11,13 +11,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/ayo6706/cross-border-ecommerce/internal/adapters/httpapi"
-	appDLQ "github.com/ayo6706/cross-border-ecommerce/internal/application/dlq"
-	appProduct "github.com/ayo6706/cross-border-ecommerce/internal/application/product"
 	"github.com/ayo6706/cross-border-ecommerce/internal/infrastructure/postgres"
 	"github.com/ayo6706/cross-border-ecommerce/internal/platform/config"
 	"github.com/ayo6706/cross-border-ecommerce/internal/platform/logging"
-	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/ayo6706/cross-border-ecommerce/internal/wiring"
 )
 
 func main() {
@@ -27,18 +24,13 @@ func main() {
 	}
 }
 
-//nolint:funlen // legacy baseline 2026-09-26: fix in ENG-018
 func run() error {
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("load configuration: %w", err)
 	}
 
-	logger := logging.NewLogger(os.Stdout, logging.Options{
-		Level:     cfg.Log.Level,
-		Format:    cfg.Log.Format,
-		AddSource: cfg.Log.AddSource,
-	})
+	logger := logging.NewLogger(os.Stdout, cfg.Log)
 	slog.SetDefault(logger)
 
 	logger.Info("starting api server",
@@ -48,33 +40,25 @@ func run() error {
 		slog.String("database_url", cfg.Database.RedactedURL()),
 	)
 
-	initCtx, cancelInit := context.WithTimeout(context.Background(), cfg.Database.ConnectTimeout+5*time.Second)
-	defer cancelInit()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
-	dbPool, err := postgres.NewPool(
-		initCtx,
-		cfg.Database.URL,
-		postgres.WithMaxConns(cfg.Database.MaxConns),
-		postgres.WithMinConns(cfg.Database.MinConns),
-		postgres.WithMaxConnIdleTime(cfg.Database.MaxConnIdleTime),
-		postgres.WithMaxConnLifetime(cfg.Database.MaxConnLifetime),
-		postgres.WithConnectTimeout(cfg.Database.ConnectTimeout),
-	)
+	pool, err := postgres.NewPool(ctx, cfg.Database)
 	if err != nil {
 		return fmt.Errorf("connect to postgresql: %w", err)
 	}
-	defer dbPool.Close()
-
-	logger.Info("connected to postgresql successfully",
+	defer pool.Close()
+	logger.Info("connected to postgresql",
 		slog.Int("max_conns", int(cfg.Database.MaxConns)),
 		slog.Int("min_conns", int(cfg.Database.MinConns)),
+		slog.Duration("max_conn_idle_time", cfg.Database.MaxConnIdleTime),
+		slog.Duration("max_conn_lifetime", cfg.Database.MaxConnLifetime),
 	)
 
-	handler, err := newHandler(logger, dbPool)
+	handler, err := wiring.APIHandler(logger, pool)
 	if err != nil {
-		return err
+		return fmt.Errorf("wire api handler: %w", err)
 	}
-
 	srv := &http.Server{
 		Addr:         ":" + cfg.Server.Port,
 		Handler:      handler,
@@ -82,7 +66,11 @@ func run() error {
 		WriteTimeout: cfg.Server.WriteTimeout,
 		IdleTimeout:  cfg.Server.IdleTimeout,
 	}
+	return serve(ctx, srv, cfg.Server.ShutdownTimeout, logger)
+}
 
+// serve runs srv until it fails or ctx is cancelled by a signal, then drains it within shutdownTimeout.
+func serve(ctx context.Context, srv *http.Server, shutdownTimeout time.Duration, logger *slog.Logger) error {
 	serverErrors := make(chan error, 1)
 	go func() {
 		logger.Info("http server listening", slog.String("addr", srv.Addr))
@@ -91,53 +79,18 @@ func run() error {
 		}
 	}()
 
-	shutdown := make(chan os.Signal, 1)
-	signal.Notify(shutdown, os.Interrupt, syscall.SIGTERM)
-
 	select {
 	case err := <-serverErrors:
 		return fmt.Errorf("server fatal error: %w", err)
-	case sig := <-shutdown:
-		logger.Info("shutdown signal received, commencing graceful shutdown", slog.String("signal", sig.String()))
-
-		shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), cfg.Server.ShutdownTimeout)
-		defer cancelShutdown()
-
-		if err := srv.Shutdown(shutdownCtx); err != nil {
-			_ = srv.Close()
-			return fmt.Errorf("graceful server shutdown failed: %w", err)
-		}
-
-		logger.Info("server exited gracefully")
+	case <-ctx.Done():
 	}
 
+	logger.Info("shutdown signal received, commencing graceful shutdown")
+	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
+	defer cancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		return errors.Join(fmt.Errorf("graceful server shutdown failed: %w", err), srv.Close())
+	}
+	logger.Info("server exited gracefully")
 	return nil
-}
-
-// newHandler wires the application services behind the HTTP router.
-func newHandler(logger *slog.Logger, dbPool *pgxpool.Pool) (http.Handler, error) {
-	dlqTx, err := postgres.NewDLQTxManager(dbPool)
-	if err != nil {
-		return nil, fmt.Errorf("create dlq transaction manager: %w", err)
-	}
-	dlqReplayer, err := appDLQ.NewReplayService(dlqTx)
-	if err != nil {
-		return nil, fmt.Errorf("create dlq replay service: %w", err)
-	}
-
-	productRepo, err := postgres.NewProductRepository(dbPool)
-	if err != nil {
-		return nil, fmt.Errorf("create product repository: %w", err)
-	}
-	products, err := appProduct.NewService(productRepo)
-	if err != nil {
-		return nil, fmt.Errorf("create product service: %w", err)
-	}
-
-	return httpapi.NewRouter(httpapi.RouterConfig{
-		Logger:      logger,
-		DB:          dbPool,
-		DLQReplayer: dlqReplayer,
-		Products:    products,
-	}), nil
 }

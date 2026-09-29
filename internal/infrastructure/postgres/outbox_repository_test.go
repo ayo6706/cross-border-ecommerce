@@ -12,6 +12,7 @@ import (
 	domainProduct "github.com/ayo6706/cross-border-ecommerce/internal/domain/product"
 	"github.com/ayo6706/cross-border-ecommerce/internal/infrastructure/postgres"
 	"github.com/ayo6706/cross-border-ecommerce/internal/platform/uuid"
+	"github.com/ayo6706/cross-border-ecommerce/internal/testsupport"
 	"github.com/ayo6706/cross-border-ecommerce/migrations"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -72,11 +73,7 @@ func setupLiveOutboxDB(t *testing.T) (*pgxpool.Pool, *postgres.OutboxRepository)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	pool, err := postgres.NewPool(ctx, connStr,
-		postgres.WithConnectTimeout(3*time.Second),
-		postgres.WithMaxConns(20),
-		postgres.WithMinConns(2),
-	)
+	pool, err := postgres.NewPool(ctx, testsupport.PoolConfig(connStr, 20))
 	if err != nil {
 		t.Skipf("skipping live database test: unable to connect to %s: %v", connStr, err)
 		return nil, nil
@@ -143,6 +140,22 @@ func TestOutboxStore_Live(t *testing.T) {
 		// Release with tokenA now affects 0 rows (since already PROCESSED)
 		err = repo.Release(ctx, tokenA, []string{events[0].ID, events[1].ID})
 		require.NoError(t, err)
+	})
+
+	// MarkPublished relies on claim_token implying PENDING (it has no status predicate, so the planner
+	// stays on the primary key); the database enforces that invariant.
+	t.Run("claim_token_only_on_pending_rows", func(t *testing.T) {
+		_, err := pool.Exec(ctx, "TRUNCATE outbox_events CASCADE")
+		require.NoError(t, err)
+
+		for status, processedAt := range map[string]string{"PROCESSED": "now()", "FAILED": "NULL"} {
+			_, err = pool.Exec(ctx, `INSERT INTO outbox_events
+				(aggregate_type, aggregate_id, event_type, payload, status, processed_at, claim_token)
+				VALUES ('product', '1', 'product.changed', '{}', '`+status+`', `+processedAt+`, gen_random_uuid())`)
+			var pgErr *pgconn.PgError
+			require.ErrorAs(t, err, &pgErr, "%s row with a claim token", status)
+			assert.Equal(t, "chk_outbox_claim_pending", pgErr.ConstraintName, "%s: %v", status, err)
+		}
 	})
 
 	// I2: 4 goroutines claiming 500 rows concurrently: disjoint sets that together cover all rows

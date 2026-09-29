@@ -13,6 +13,7 @@ import (
 	"github.com/ayo6706/cross-border-ecommerce/internal/domain/ingestion"
 	"github.com/ayo6706/cross-border-ecommerce/internal/domain/source"
 	"github.com/ayo6706/cross-border-ecommerce/internal/infrastructure/postgres"
+	"github.com/ayo6706/cross-border-ecommerce/internal/testsupport"
 	"github.com/ayo6706/cross-border-ecommerce/migrations"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -40,11 +41,7 @@ func setupLiveRawRecordDB(t *testing.T) (*pgxpool.Pool, *postgres.RawRecordRepos
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	pool, err := postgres.NewPool(ctx, connStr,
-		postgres.WithConnectTimeout(3*time.Second),
-		postgres.WithMaxConns(5),
-		postgres.WithMinConns(1),
-	)
+	pool, err := postgres.NewPool(ctx, testsupport.PoolConfig(connStr, 5))
 	if err != nil {
 		t.Skipf("skipping live database test: unable to connect to %s: %v", connStr, err)
 		return nil, nil, "", ""
@@ -308,7 +305,10 @@ func TestRawRecordRepository_LiveIntegration(t *testing.T) {
 		}
 		defer func() { _ = tx.Rollback(ctx) }()
 
-		txRepo := repo.WithTx(tx)
+		txRepo, err := postgres.NewRawRecordRepository(tx)
+		if err != nil {
+			t.Fatalf("failed to create tx repository: %v", err)
+		}
 		rec, err := ingestion.NewRawRecord(ingestion.RawRecordParams{
 			SourceID:          testSourceID,
 			ExternalProductID: "SKU-ROLLBACK",

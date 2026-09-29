@@ -191,12 +191,13 @@ func TestConsumerConfig_Validate(t *testing.T) {
 			expectedErr: "drain timeout must be strictly positive",
 		},
 		{
+			// The retry window is at least one handler timeout, so the retry-window rule rejects it.
 			name: "claim min idle less than or equal to handler timeout",
 			modify: func(c *ConsumerConfig) {
 				c.ClaimMinIdle = 5 * time.Second
 				c.HandlerTimeout = 10 * time.Second
 			},
-			expectedErr: "claim min idle (5s) must be strictly greater than handler timeout (10s)",
+			expectedErr: "must be strictly less than claim min idle (5s)",
 		},
 		{
 			name: "retry max attempts <= 0",

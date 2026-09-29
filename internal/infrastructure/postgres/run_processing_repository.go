@@ -28,30 +28,15 @@ func NewRunProcessingRepository(db generated.DBTX) (*RunProcessingRepository, er
 	}, nil
 }
 
-func (r *RunProcessingRepository) WithTx(tx pgx.Tx) *RunProcessingRepository {
-	return &RunProcessingRepository{
-		queries: r.queries.WithTx(tx),
-	}
-}
-
-func (r *RunProcessingRepository) SeedPending(ctx context.Context) error {
-	return r.queries.SeedPendingRunProcessing(ctx)
-}
-
 func (r *RunProcessingRepository) ClaimNext(ctx context.Context, claimToken string, leaseDuration time.Duration) (*ingestion.RunProcessing, error) {
 	tokenUUID, err := parseUUID(claimToken)
 	if err != nil {
 		return nil, fmt.Errorf("invalid claim token uuid: %w", err)
 	}
 
-	leaseInterval := pgtype.Interval{
-		Microseconds: leaseDuration.Microseconds(),
-		Valid:        true,
-	}
-
 	row, err := r.queries.ClaimNextRunProcessing(ctx, generated.ClaimNextRunProcessingParams{
 		ClaimToken:    tokenUUID,
-		LeaseDuration: leaseInterval,
+		LeaseDuration: toInterval(leaseDuration),
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -73,15 +58,10 @@ func (r *RunProcessingRepository) ClaimSpecific(ctx context.Context, runID, clai
 		return nil, fmt.Errorf("invalid claim token uuid: %w", err)
 	}
 
-	leaseInterval := pgtype.Interval{
-		Microseconds: leaseDuration.Microseconds(),
-		Valid:        true,
-	}
-
 	row, err := r.queries.ClaimSpecificRunProcessing(ctx, generated.ClaimSpecificRunProcessingParams{
 		RunID:         rUUID,
 		ClaimToken:    tokenUUID,
-		LeaseDuration: leaseInterval,
+		LeaseDuration: toInterval(leaseDuration),
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -117,7 +97,7 @@ func (r *RunProcessingRepository) UpdateProgress(
 ) (*ingestion.RunProcessing, error) {
 	params, err := parseUpdateProgressParams(runID, claimToken, metrics, cursorID, leaseDuration)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("update run processing progress: %w", err)
 	}
 
 	row, err := r.queries.UpdateRunProcessingProgress(ctx, params)
@@ -146,22 +126,14 @@ func parseUpdateProgressParams(
 		return generated.UpdateRunProcessingProgressParams{}, fmt.Errorf("invalid claim token uuid: %w", err)
 	}
 
-	var cUUID pgtype.UUID
-	if cursorID != nil && strings.TrimSpace(*cursorID) != "" {
-		cUUID, err = parseUUID(*cursorID)
-		if err != nil {
-			return generated.UpdateRunProcessingProgressParams{}, fmt.Errorf("invalid cursor uuid: %w", err)
-		}
+	cUUID, err := parseOptionalUUID(cursorID)
+	if err != nil {
+		return generated.UpdateRunProcessingProgressParams{}, fmt.Errorf("invalid cursor uuid: %w", err)
 	}
 
 	counters, err := toRunCounters(metrics)
 	if err != nil {
 		return generated.UpdateRunProcessingProgressParams{}, err
-	}
-
-	leaseInterval := pgtype.Interval{
-		Microseconds: leaseDuration.Microseconds(),
-		Valid:        true,
 	}
 
 	return generated.UpdateRunProcessingProgressParams{
@@ -173,7 +145,7 @@ func parseUpdateProgressParams(
 		ChangedInc:    counters.changed,
 		UnchangedInc:  counters.unchanged,
 		FailedInc:     counters.failed,
-		LeaseDuration: leaseInterval,
+		LeaseDuration: toInterval(leaseDuration),
 	}, nil
 }
 
@@ -283,24 +255,12 @@ func (r *RunProcessingRepository) guardFailure(ctx context.Context, rUUID pgtype
 }
 
 func toDomainRunProcessing(row *generated.IngestionRunProcessing) *ingestion.RunProcessing {
-	var claimToken *string
-	if row.ClaimToken.Valid {
-		v := uuidToString(row.ClaimToken)
-		claimToken = &v
-	}
-
-	var cursorID *string
-	if row.CursorRawRecordID.Valid {
-		v := uuidToString(row.CursorRawRecordID)
-		cursorID = &v
-	}
-
 	return &ingestion.RunProcessing{
 		RunID:             uuidToString(row.RunID),
 		Status:            ingestion.ProcessingStatus(row.Status),
-		ClaimToken:        claimToken,
+		ClaimToken:        uuidPtr(row.ClaimToken),
 		LeaseExpiresAt:    fromTimestamptz(row.LeaseExpiresAt),
-		CursorRawRecordID: cursorID,
+		CursorRawRecordID: uuidPtr(row.CursorRawRecordID),
 		BatchMetrics: ingestion.BatchMetrics{
 			Seen:      int(row.RecordsSeen),
 			New:       int(row.RecordsNew),
