@@ -152,7 +152,9 @@ func TestMigrator_LiveLifecycle(t *testing.T) {
 	indexesAfterUp := indexDefinitions(ctx, t, pool)
 
 	// Step 2: Verify required tables exist
-	requiredTables := []string{"sources", "products", "product_versions", "outbox_events", "ingestion_runs", "raw_records", "schema_migrations", "idempotency_keys", "dlq_messages"}
+	requiredTables := []string{"sources", "products", "product_versions", "outbox_events", "ingestion_runs", "raw_records", "schema_migrations", "idempotency_keys", "dlq_messages",
+		"regulatory_datasets", "tariff_rates", "import_restrictions", "permit_requirements",
+		"sanctions_list", "export_controls", "preferential_agreements"}
 	for _, table := range requiredTables {
 		if !tableExists(ctx, t, pool, table) {
 			t.Fatalf("expected table %s to exist after migration", table)
