@@ -21,6 +21,12 @@ const (
 	StatusCancelled RunStatus = "CANCELLED"
 )
 
+// Processable reports whether a run in this status has records to turn into products. It is the
+// one owner of that rule: UpdateStatus queues exactly these runs, and ProcessRun accepts only them.
+func (s RunStatus) Processable() bool {
+	return s == StatusCompleted || s == StatusPartial
+}
+
 // BatchMetrics is declared once, in the product domain, which owns the outcome categories.
 type BatchMetrics = product.BatchMetrics
 

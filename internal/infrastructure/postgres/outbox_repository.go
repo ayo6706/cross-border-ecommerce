@@ -13,7 +13,6 @@ import (
 	appProduct "github.com/ayo6706/cross-border-ecommerce/internal/application/product"
 	domainProduct "github.com/ayo6706/cross-border-ecommerce/internal/domain/product"
 	"github.com/ayo6706/cross-border-ecommerce/internal/infrastructure/postgres/generated"
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
@@ -34,12 +33,6 @@ func NewOutboxRepository(db generated.DBTX) (*OutboxRepository, error) {
 	return &OutboxRepository{
 		queries: generated.New(db),
 	}, nil
-}
-
-func (r *OutboxRepository) WithTx(tx pgx.Tx) *OutboxRepository {
-	return &OutboxRepository{
-		queries: r.queries.WithTx(tx),
-	}
 }
 
 const (
@@ -130,7 +123,6 @@ func (r *OutboxRepository) CreateReplayEvent(ctx context.Context, e appDLQ.Repla
 	return nil
 }
 
-//nolint:funlen // legacy baseline 2026-09-26: fix in ENG-051
 func (r *OutboxRepository) ClaimBatch(
 	ctx context.Context,
 	claimToken string,
@@ -152,14 +144,9 @@ func (r *OutboxRepository) ClaimBatch(
 		return nil, errors.New("lease duration must be positive")
 	}
 
-	leaseInterval := pgtype.Interval{
-		Microseconds: lease.Microseconds(),
-		Valid:        true,
-	}
-
 	rows, err := r.queries.ClaimOutboxBatch(ctx, generated.ClaimOutboxBatchParams{
 		ClaimToken:    tokenUUID,
-		LeaseDuration: leaseInterval,
+		LeaseDuration: toInterval(lease),
 		BatchSize:     limitInt32,
 	})
 	if err != nil {
@@ -199,13 +186,9 @@ func (r *OutboxRepository) MarkPublished(
 		return 0, fmt.Errorf("invalid claim token: %w", err)
 	}
 
-	uuids := make([]pgtype.UUID, len(ids))
-	for i, id := range ids {
-		u, err := parseUUID(id)
-		if err != nil {
-			return 0, fmt.Errorf("invalid event id %q: %w", id, err)
-		}
-		uuids[i] = u
+	uuids, err := parseUUIDs(ids)
+	if err != nil {
+		return 0, fmt.Errorf("invalid event id: %w", err)
 	}
 
 	affected, err := r.queries.MarkOutboxPublished(ctx, generated.MarkOutboxPublishedParams{
@@ -238,17 +221,12 @@ func (r *OutboxRepository) RecordFailure(
 		return fmt.Errorf("invalid max attempts: %w", err)
 	}
 
-	backoffInterval := pgtype.Interval{
-		Microseconds: backoff.Microseconds(),
-		Valid:        true,
-	}
-
 	affected, err := r.queries.RecordOutboxPublishFailure(ctx, generated.RecordOutboxPublishFailureParams{
 		LastError: pgtype.Text{
 			String: cause,
 			Valid:  cause != "",
 		},
-		Backoff:     backoffInterval,
+		Backoff:     toInterval(backoff),
 		MaxAttempts: maxAttemptsInt32,
 		ID:          eventUUID,
 		ClaimToken:  tokenUUID,
@@ -277,13 +255,9 @@ func (r *OutboxRepository) Release(
 		return fmt.Errorf("invalid claim token: %w", err)
 	}
 
-	uuids := make([]pgtype.UUID, len(ids))
-	for i, id := range ids {
-		u, err := parseUUID(id)
-		if err != nil {
-			return fmt.Errorf("invalid event id %q: %w", id, err)
-		}
-		uuids[i] = u
+	uuids, err := parseUUIDs(ids)
+	if err != nil {
+		return fmt.Errorf("invalid event id: %w", err)
 	}
 
 	_, err = r.queries.ReleaseOutboxClaims(ctx, generated.ReleaseOutboxClaimsParams{

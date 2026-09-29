@@ -322,18 +322,39 @@ func (q *Queries) UpdateIngestionRunProgress(ctx context.Context, arg UpdateInge
 }
 
 const updateIngestionRunStatus = `-- name: UpdateIngestionRunStatus :one
-UPDATE ingestion_runs
-SET 
-    status = $1::varchar,
-    error_summary = $2::text,
-    checkpoint = CASE 
-        WHEN $3::varchar != '' THEN $3::varchar 
-        ELSE checkpoint 
-    END,
-    completed_at = $4::timestamptz,
-    updated_at = $5::timestamptz
-WHERE id = $6::uuid AND status = $7::varchar
-RETURNING 
+WITH updated AS (
+    UPDATE ingestion_runs
+    SET
+        status = $1::varchar,
+        error_summary = $2::text,
+        checkpoint = CASE
+            WHEN $3::varchar != '' THEN $3::varchar
+            ELSE checkpoint
+        END,
+        completed_at = $4::timestamptz,
+        updated_at = $5::timestamptz
+    WHERE id = $6::uuid AND status = $7::varchar
+    RETURNING
+        id,
+        source_id,
+        status,
+        checkpoint,
+        records_seen,
+        records_new,
+        records_changed,
+        records_unchanged,
+        records_failed,
+        error_summary,
+        started_at,
+        completed_at,
+        created_at,
+        updated_at
+), queued AS (
+    INSERT INTO ingestion_run_processing (run_id)
+    SELECT id FROM updated WHERE $8::bool
+    ON CONFLICT (run_id) DO NOTHING
+)
+SELECT
     id,
     source_id,
     status,
@@ -348,19 +369,41 @@ RETURNING
     completed_at,
     created_at,
     updated_at
+FROM updated
 `
 
 type UpdateIngestionRunStatusParams struct {
-	Status         string             `json:"status"`
-	ErrorSummary   string             `json:"error_summary"`
-	Checkpoint     string             `json:"checkpoint"`
-	CompletedAt    pgtype.Timestamptz `json:"completed_at"`
-	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
-	ID             pgtype.UUID        `json:"id"`
-	ExpectedStatus string             `json:"expected_status"`
+	Status          string             `json:"status"`
+	ErrorSummary    string             `json:"error_summary"`
+	Checkpoint      string             `json:"checkpoint"`
+	CompletedAt     pgtype.Timestamptz `json:"completed_at"`
+	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+	ID              pgtype.UUID        `json:"id"`
+	ExpectedStatus  string             `json:"expected_status"`
+	QueueProcessing bool               `json:"queue_processing"`
 }
 
-func (q *Queries) UpdateIngestionRunStatus(ctx context.Context, arg UpdateIngestionRunStatusParams) (IngestionRun, error) {
+type UpdateIngestionRunStatusRow struct {
+	ID               pgtype.UUID        `json:"id"`
+	SourceID         string             `json:"source_id"`
+	Status           string             `json:"status"`
+	Checkpoint       string             `json:"checkpoint"`
+	RecordsSeen      int32              `json:"records_seen"`
+	RecordsNew       int32              `json:"records_new"`
+	RecordsChanged   int32              `json:"records_changed"`
+	RecordsUnchanged int32              `json:"records_unchanged"`
+	RecordsFailed    int32              `json:"records_failed"`
+	ErrorSummary     string             `json:"error_summary"`
+	StartedAt        pgtype.Timestamptz `json:"started_at"`
+	CompletedAt      pgtype.Timestamptz `json:"completed_at"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
+}
+
+// A run that finishes processable (RunStatus.Processable, passed as queue_processing) is queued
+// for product processing in the same statement, so the queue never misses a finished run and the
+// worker never scans for them.
+func (q *Queries) UpdateIngestionRunStatus(ctx context.Context, arg UpdateIngestionRunStatusParams) (UpdateIngestionRunStatusRow, error) {
 	row := q.db.QueryRow(ctx, updateIngestionRunStatus,
 		arg.Status,
 		arg.ErrorSummary,
@@ -369,8 +412,9 @@ func (q *Queries) UpdateIngestionRunStatus(ctx context.Context, arg UpdateIngest
 		arg.UpdatedAt,
 		arg.ID,
 		arg.ExpectedStatus,
+		arg.QueueProcessing,
 	)
-	var i IngestionRun
+	var i UpdateIngestionRunStatusRow
 	err := row.Scan(
 		&i.ID,
 		&i.SourceID,

@@ -22,6 +22,7 @@ import (
 	infraRedis "github.com/ayo6706/cross-border-ecommerce/internal/infrastructure/redis"
 	"github.com/ayo6706/cross-border-ecommerce/internal/platform/uuid"
 	"github.com/ayo6706/cross-border-ecommerce/internal/platform/worker"
+	"github.com/ayo6706/cross-border-ecommerce/internal/testsupport"
 	"github.com/ayo6706/cross-border-ecommerce/migrations"
 	goredis "github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
@@ -1735,11 +1736,7 @@ func TestConsumer_Live(t *testing.T) {
 		pgCtx, pgCancel := context.WithTimeout(ctx, 10*time.Second)
 		defer pgCancel()
 
-		pgPool, err := infraPostgres.NewPool(pgCtx, pgConnStr,
-			infraPostgres.WithConnectTimeout(3*time.Second),
-			infraPostgres.WithMaxConns(10),
-			infraPostgres.WithMinConns(2),
-		)
+		pgPool, err := infraPostgres.NewPool(pgCtx, testsupport.PoolConfig(pgConnStr, 10))
 		require.NoError(t, err)
 		defer pgPool.Close()
 
@@ -1809,7 +1806,10 @@ func TestConsumer_Live(t *testing.T) {
 				return err
 			}
 
-			txRepo := idempotencyRepo.WithTx(tx)
+			txRepo, err := infraPostgres.NewIdempotencyRepository(tx)
+			if err != nil {
+				return err
+			}
 			if err := appIdempotency.CompleteInTx(dbCtx, txRepo); err != nil {
 				return err
 			}

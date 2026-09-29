@@ -16,6 +16,7 @@ import (
 	domainSource "github.com/ayo6706/cross-border-ecommerce/internal/domain/source"
 	"github.com/ayo6706/cross-border-ecommerce/internal/infrastructure/postgres"
 	"github.com/ayo6706/cross-border-ecommerce/internal/platform/uuid"
+	"github.com/ayo6706/cross-border-ecommerce/internal/testsupport"
 	"github.com/ayo6706/cross-border-ecommerce/migrations"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
@@ -86,11 +87,7 @@ func setupLiveTestEnv(t testing.TB) *testEnv {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	pool, err := postgres.NewPool(ctx, connStr,
-		postgres.WithConnectTimeout(3*time.Second),
-		postgres.WithMaxConns(10),
-		postgres.WithMinConns(2),
-	)
+	pool, err := postgres.NewPool(ctx, testsupport.PoolConfig(connStr, 10))
 	if err != nil {
 		t.Skipf("skipping live database test: unable to connect to %s: %v", connStr, err)
 		return nil
@@ -836,51 +833,49 @@ func TestProcessRunRecords_CancelAndResume(t *testing.T) {
 	assert.Equal(t, 10, totalVers)
 }
 
-func TestWorker_ClaimNext_Then_ProcessRun(t *testing.T) {
+func TestProcessNext(t *testing.T) {
 	env := setupLiveTestEnv(t)
 	ctx := context.Background()
 
-	sourceID := "src-worker-flow"
-	createTestSource(t, ctx, env, sourceID)
-	run := createTestRun(t, ctx, env, sourceID)
+	t.Run("nothing_claimable_returns_nil_result", func(t *testing.T) {
+		res, err := env.processor.ProcessNext(ctx, testProcessRunOptions(t))
+		require.NoError(t, err)
+		assert.Nil(t, res)
+	})
 
-	now := time.Now().UTC()
-	var records []*domainIngestion.RawRecord
-	for i := 0; i < 5; i++ {
-		r, _ := domainIngestion.NewRawRecord(domainIngestion.RawRecordParams{
-			SourceID:          domainSource.ID(sourceID),
-			ExternalProductID: fmt.Sprintf("ext-worker-%d", i),
-			Payload:           []byte(fmt.Sprintf(`{"title": "Worker Product %d"}`, i)),
-			IngestionRunID:    run.ID,
-			ReceivedAt:        now,
-		})
-		records = append(records, r)
-	}
-	require.NoError(t, env.rawRepo.SaveBatch(ctx, records))
+	t.Run("claims_and_processes_a_completed_run", func(t *testing.T) {
+		sourceID := "src-worker-flow"
+		createTestSource(t, ctx, env, sourceID)
+		run := createTestRun(t, ctx, env, sourceID)
 
-	_, err := env.processingRepo.EnsureExists(ctx, run.ID)
-	require.NoError(t, err)
+		now := time.Now().UTC()
+		var records []*domainIngestion.RawRecord
+		for i := 0; i < 5; i++ {
+			r, err := domainIngestion.NewRawRecord(domainIngestion.RawRecordParams{
+				SourceID:          domainSource.ID(sourceID),
+				ExternalProductID: fmt.Sprintf("ext-worker-%d", i),
+				Payload:           []byte(fmt.Sprintf(`{"title": "Worker Product %d"}`, i)),
+				IngestionRunID:    run.ID,
+				ReceivedAt:        now,
+			})
+			require.NoError(t, err)
+			records = append(records, r)
+		}
+		require.NoError(t, env.rawRepo.SaveBatch(ctx, records))
 
-	// Worker step 1: Claim next available pending run
-	claimToken, err := uuid.NewString()
-	require.NoError(t, err)
-	claimed, err := env.processingRepo.ClaimNext(ctx, claimToken, 30*time.Second)
-	require.NoError(t, err)
-	require.NotNil(t, claimed)
-	assert.Equal(t, run.ID, claimed.RunID)
-	assert.Equal(t, domainIngestion.ProcessingRunning, claimed.Status)
+		// createTestRun completed the run through UpdateStatus, which queued it for processing.
+		res, err := env.processor.ProcessNext(ctx, testProcessRunOptions(t))
+		require.NoError(t, err)
+		require.NotNil(t, res)
+		assert.Equal(t, run.ID, res.RunID)
+		assert.Equal(t, 5, res.Seen)
+		assert.Equal(t, 5, res.New)
+		assert.Equal(t, domainIngestion.ProcessingCompleted, readRunProcessing(t, env.pool, run.ID).Status)
 
-	// Worker step 2: ProcessRun using the claimed token
-	res, err := env.processor.ProcessRun(ctx, claimed.RunID, testProcessRunOptions(t, func(o *appProduct.ProcessRunOptions) {
-		o.ClaimToken = claimToken
-	}))
-	require.NoError(t, err)
-	assert.Equal(t, 5, res.Seen)
-	assert.Equal(t, 5, res.New)
-
-	// Verify run state is now COMPLETED
-	finalRp := readRunProcessing(t, env.pool, run.ID)
-	assert.Equal(t, domainIngestion.ProcessingCompleted, finalRp.Status)
+		again, err := env.processor.ProcessNext(ctx, testProcessRunOptions(t))
+		require.NoError(t, err)
+		assert.Nil(t, again, "a completed run is not claimed twice")
+	})
 }
 
 func TestProcessRunRecords_FingerprintVersionMismatch(t *testing.T) {

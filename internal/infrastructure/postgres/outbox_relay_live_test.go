@@ -20,6 +20,7 @@ import (
 	"github.com/ayo6706/cross-border-ecommerce/internal/infrastructure/postgres"
 	infraRedis "github.com/ayo6706/cross-border-ecommerce/internal/infrastructure/redis"
 	"github.com/ayo6706/cross-border-ecommerce/internal/platform/uuid"
+	"github.com/ayo6706/cross-border-ecommerce/internal/testsupport"
 	"github.com/ayo6706/cross-border-ecommerce/migrations"
 	"github.com/jackc/pgx/v5/pgxpool"
 	goredis "github.com/redis/go-redis/v9"
@@ -53,11 +54,7 @@ func setupLiveRelayEnv(t *testing.T) (*pgxpool.Pool, *postgres.OutboxRepository,
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	pool, err := postgres.NewPool(ctx, pgURL,
-		postgres.WithConnectTimeout(3*time.Second),
-		postgres.WithMaxConns(20),
-		postgres.WithMinConns(2),
-	)
+	pool, err := postgres.NewPool(ctx, testsupport.PoolConfig(pgURL, 20))
 	if err != nil {
 		t.Skipf("skipping live relay test: unable to connect to Postgres %s: %v", pgURL, err)
 		return nil, nil, nil, nil
@@ -172,8 +169,6 @@ func TestOutboxRelay_Live(t *testing.T) {
 		require.NoError(t, err)
 
 		procRepo, err := postgres.NewRunProcessingRepository(pool)
-		require.NoError(t, err)
-		err = procRepo.SeedPending(ctx)
 		require.NoError(t, err)
 
 		txRunner, err := postgres.NewProductTxManager(pool)
@@ -467,8 +462,6 @@ func TestOutboxRelay_Live(t *testing.T) {
 		require.NoError(t, err)
 
 		procRepo, err := postgres.NewRunProcessingRepository(pool)
-		require.NoError(t, err)
-		err = procRepo.SeedPending(ctx)
 		require.NoError(t, err)
 
 		txRunner, err := postgres.NewProductTxManager(pool)

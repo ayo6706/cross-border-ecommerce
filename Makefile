@@ -1,4 +1,4 @@
-.PHONY: all build test test-race test-integration lint clean run-api run-worker sqlc-generate sqlc-verify db-up db-down migrate-up migrate-down tidy verify
+.PHONY: all build test test-race test-integration perf lint clean run-api run-worker sqlc-generate sqlc-verify db-up db-down migrate-up migrate-down tidy verify
 
 # Go parameters
 GOCMD=go
@@ -32,6 +32,13 @@ test-race:
 
 test-integration:
 	TEST_DATABASE_URL="$(TEST_DATABASE_URL)" TEST_REDIS_URL="$(TEST_REDIS_URL)" $(GOTEST) -v -race -count=1 -p 1 ./... # -p 1: packages share one test DB
+
+# Query-plan suite (tests/performance, build tag perf). Seeds 100k-200k rows per large table into
+# TEST_DATABASE_URL, which it TRUNCATES, then EXPLAINs every statement the worker, relay and API
+# send and fails on a non-index read of a large table. A separate CI job, not a verify gate:
+# plan shape needs scale, and timings are recorded, never asserted.
+perf:
+	TEST_DATABASE_URL="$(TEST_DATABASE_URL)" $(GOTEST) -tags perf -count=1 -v -timeout 30m ./tests/performance/
 
 # Every mandatory gate (the same script CI runs); starts throwaway PostgreSQL/Redis when
 # TEST_DATABASE_URL/TEST_REDIS_URL are unset in the environment.

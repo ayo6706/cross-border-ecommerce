@@ -1,0 +1,1 @@
+-- Nothing to undo: validation only checked existing rows. 000020's down drops the constraint.

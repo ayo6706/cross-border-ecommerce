@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"os"
 	"strconv"
@@ -11,18 +12,19 @@ import (
 
 	"github.com/ayo6706/cross-border-ecommerce/internal/domain/ingestion"
 	"github.com/ayo6706/cross-border-ecommerce/internal/platform/backoff"
+	"github.com/ayo6706/cross-border-ecommerce/internal/platform/logging"
 )
 
 var (
-	ErrInvalidPort         = errors.New("server port must be a valid integer between 1 and 65535")
-	ErrInvalidTimeout      = errors.New("timeout values must be strictly positive")
-	ErrEmptyDatabaseURL    = errors.New("DATABASE_URL is required")
-	ErrEmptyRedisURL       = errors.New("REDIS_URL is required")
-	ErrInvalidPoolLimits   = errors.New("database connection pool minimum cannot exceed maximum")
-	ErrInvalidLogLevel     = errors.New("log level must be one of 'debug', 'info', 'warn', 'error'")
-	ErrInvalidLogFormat    = errors.New("log format must be one of 'json' or 'text'")
-	ErrInvalidStreamConfig = errors.New("invalid stream configuration")
-	ErrInvalidWorkerConfig = errors.New("invalid worker configuration")
+	ErrNilLookup                  = errors.New("config lookup function is nil")
+	ErrInvalidPort                = errors.New("server port must be a valid integer between 1 and 65535")
+	ErrInvalidTimeout             = errors.New("timeout values must be strictly positive")
+	ErrEmptyDatabaseURL           = errors.New("DATABASE_URL is required")
+	ErrEmptyRedisURL              = errors.New("REDIS_URL is required")
+	ErrInvalidPoolLimits          = errors.New("database connection pool minimum cannot exceed maximum")
+	ErrInvalidStreamConfig        = errors.New("invalid stream configuration")
+	ErrInvalidWorkerConfig        = errors.New("invalid worker configuration")
+	ErrInvalidRunProcessingConfig = errors.New("invalid run processing configuration")
 )
 
 type ServerConfig struct {
@@ -33,6 +35,17 @@ type ServerConfig struct {
 	ShutdownTimeout time.Duration
 }
 
+func (s ServerConfig) Validate() error {
+	portNum, err := strconv.Atoi(s.Port)
+	if err != nil || portNum < 1 || portNum > 65535 {
+		return fmt.Errorf("%w: '%s'", ErrInvalidPort, s.Port)
+	}
+	if s.ReadTimeout <= 0 || s.WriteTimeout <= 0 || s.IdleTimeout <= 0 || s.ShutdownTimeout <= 0 {
+		return fmt.Errorf("%w for server configuration", ErrInvalidTimeout)
+	}
+	return nil
+}
+
 type DatabaseConfig struct {
 	URL             string
 	MaxConns        int32
@@ -40,6 +53,19 @@ type DatabaseConfig struct {
 	MaxConnIdleTime time.Duration
 	MaxConnLifetime time.Duration
 	ConnectTimeout  time.Duration
+}
+
+func (d DatabaseConfig) Validate() error {
+	if strings.TrimSpace(d.URL) == "" {
+		return ErrEmptyDatabaseURL
+	}
+	if d.MinConns < 0 || d.MaxConns <= 0 || d.MinConns > d.MaxConns {
+		return fmt.Errorf("%w: min=%d, max=%d", ErrInvalidPoolLimits, d.MinConns, d.MaxConns)
+	}
+	if d.ConnectTimeout <= 0 || d.MaxConnIdleTime <= 0 || d.MaxConnLifetime <= 0 {
+		return fmt.Errorf("%w for database configuration", ErrInvalidTimeout)
+	}
+	return nil
 }
 
 func (d DatabaseConfig) RedactedURL() string {
@@ -80,13 +106,6 @@ func (s StreamConfig) Validate() error {
 	if s.Retention <= 0 || s.ConsumerBlock <= 0 || s.ClaimMinIdle <= 0 || s.ClaimInterval <= 0 || s.HandlerTimeout <= 0 {
 		return fmt.Errorf("%w for stream configuration", ErrInvalidTimeout)
 	}
-	if s.ConsumerBatch <= 0 || s.ConsumerBatch > 1000 {
-		return fmt.Errorf("%w: consumer batch must be between 1 and 1000, got %d", ErrInvalidStreamConfig, s.ConsumerBatch)
-	}
-	if s.ClaimMinIdle <= s.HandlerTimeout {
-		return fmt.Errorf("%w: claim min idle (%v) must be strictly greater than handler timeout (%v)",
-			ErrInvalidStreamConfig, s.ClaimMinIdle, s.HandlerTimeout)
-	}
 	if err := backoff.ValidateRetryPolicy(s.RetryMaxAttempts, s.RetryBaseBackoff, s.RetryMaxBackoff,
 		s.HandlerTimeout, s.ClaimMinIdle); err != nil {
 		return fmt.Errorf("%w: %w", ErrInvalidStreamConfig, err)
@@ -113,6 +132,7 @@ func (w WorkerConfig) Validate() error {
 	return nil
 }
 
+// OutboxConfig is validated by outbox.NewRelay, which owns its bounds.
 type OutboxConfig struct {
 	BatchSize    int
 	PollInterval time.Duration
@@ -133,404 +153,228 @@ func (i IdempotencyConfig) Validate() error {
 	return nil
 }
 
-type LogConfig struct {
-	Level     string
-	Format    string
-	AddSource bool
-}
-
 type AppConfig struct {
 	Environment string
 	ServiceName string
 }
 
-type IngestionConfig struct {
-	ErrorBudgetMaxRate float64
-	ErrorBudgetMinRows int
+// RunProcessingConfig drives product processing of finished runs, by the worker loop and by
+// cmd/ingest. Lease and BatchSize are the defaults of the ingest flags.
+type RunProcessingConfig struct {
+	PollInterval time.Duration
+	Lease        time.Duration
+	BatchSize    int
+	ErrorBudget  ingestion.ErrorBudget
 }
 
-// ErrorBudget builds the run error budget. Its bounds are owned by ingestion.ErrorBudget.
-func (i IngestionConfig) ErrorBudget() (ingestion.ErrorBudget, error) {
-	budget, err := ingestion.NewErrorBudget(i.ErrorBudgetMaxRate, i.ErrorBudgetMinRows)
-	if err != nil {
-		return ingestion.ErrorBudget{}, fmt.Errorf("INGESTION_ERROR_BUDGET_*: %w", err)
+func (r RunProcessingConfig) Validate() error {
+	if r.PollInterval <= 0 || r.Lease <= 0 {
+		return fmt.Errorf("%w for run processing poll interval and lease", ErrInvalidTimeout)
 	}
-	return budget, nil
+	if r.BatchSize <= 0 {
+		return fmt.Errorf("%w: batch size must be strictly positive, got %d",
+			ErrInvalidRunProcessingConfig, r.BatchSize)
+	}
+	if err := r.ErrorBudget.Validate(); err != nil {
+		return fmt.Errorf("INGESTION_ERROR_BUDGET_*: %w", err)
+	}
+	return nil
 }
 
 type Config struct {
-	Server      ServerConfig
-	Database    DatabaseConfig
-	Log         LogConfig
-	App         AppConfig
-	Redis       RedisConfig
-	Stream      StreamConfig
-	Outbox      OutboxConfig
-	Worker      WorkerConfig
-	Idempotency IdempotencyConfig
-	Ingestion   IngestionConfig
+	Server        ServerConfig
+	Database      DatabaseConfig
+	Log           logging.Options
+	App           AppConfig
+	Redis         RedisConfig
+	Stream        StreamConfig
+	Outbox        OutboxConfig
+	Worker        WorkerConfig
+	Idempotency   IdempotencyConfig
+	RunProcessing RunProcessingConfig
 }
 
 func Load() (*Config, error) {
 	return LoadFromLookup(os.Getenv)
 }
 
-//nolint:funlen,gocognit // legacy baseline 2026-09-26: fix in ENG-018
+// LoadFromLookup reads every variable through lookup, reports all malformed ones together, then
+// validates.
 func LoadFromLookup(lookup func(string) string) (*Config, error) {
 	if lookup == nil {
-		lookup = os.Getenv
+		return nil, ErrNilLookup
 	}
-
-	readTimeout, err := getEnvDuration(lookup, "SERVER_READ_TIMEOUT", 10*time.Second)
-	if err != nil {
-		return nil, fmt.Errorf("invalid SERVER_READ_TIMEOUT: %w", err)
-	}
-
-	writeTimeout, err := getEnvDuration(lookup, "SERVER_WRITE_TIMEOUT", 10*time.Second)
-	if err != nil {
-		return nil, fmt.Errorf("invalid SERVER_WRITE_TIMEOUT: %w", err)
-	}
-
-	idleTimeout, err := getEnvDuration(lookup, "SERVER_IDLE_TIMEOUT", 60*time.Second)
-	if err != nil {
-		return nil, fmt.Errorf("invalid SERVER_IDLE_TIMEOUT: %w", err)
-	}
-
-	shutdownTimeout, err := getEnvDuration(lookup, "SERVER_SHUTDOWN_TIMEOUT", 15*time.Second)
-	if err != nil {
-		return nil, fmt.Errorf("invalid SERVER_SHUTDOWN_TIMEOUT: %w", err)
-	}
-
-	maxConns, err := getEnvInt32(lookup, "DB_MAX_CONNS", 25)
-	if err != nil {
-		return nil, fmt.Errorf("invalid DB_MAX_CONNS: %w", err)
-	}
-
-	minConns, err := getEnvInt32(lookup, "DB_MIN_CONNS", 5)
-	if err != nil {
-		return nil, fmt.Errorf("invalid DB_MIN_CONNS: %w", err)
-	}
-
-	maxConnIdleTime, err := getEnvDuration(lookup, "DB_MAX_CONN_IDLE_TIME", 15*time.Minute)
-	if err != nil {
-		return nil, fmt.Errorf("invalid DB_MAX_CONN_IDLE_TIME: %w", err)
-	}
-
-	maxConnLifetime, err := getEnvDuration(lookup, "DB_MAX_CONN_LIFETIME", 1*time.Hour)
-	if err != nil {
-		return nil, fmt.Errorf("invalid DB_MAX_CONN_LIFETIME: %w", err)
-	}
-
-	connectTimeout, err := getEnvDuration(lookup, "DB_CONNECT_TIMEOUT", 5*time.Second)
-	if err != nil {
-		return nil, fmt.Errorf("invalid DB_CONNECT_TIMEOUT: %w", err)
-	}
-
-	outboxBatchSize, err := getEnvInt(lookup, "OUTBOX_BATCH_SIZE", 100)
-	if err != nil {
-		return nil, fmt.Errorf("invalid OUTBOX_BATCH_SIZE: %w", err)
-	}
-
-	outboxPollInterval, err := getEnvDuration(lookup, "OUTBOX_POLL_INTERVAL", 500*time.Millisecond)
-	if err != nil {
-		return nil, fmt.Errorf("invalid OUTBOX_POLL_INTERVAL: %w", err)
-	}
-
-	outboxLease, err := getEnvDuration(lookup, "OUTBOX_LEASE", 30*time.Second)
-	if err != nil {
-		return nil, fmt.Errorf("invalid OUTBOX_LEASE: %w", err)
-	}
-
-	outboxBaseBackoff, err := getEnvDuration(lookup, "OUTBOX_BASE_BACKOFF", 1*time.Second)
-	if err != nil {
-		return nil, fmt.Errorf("invalid OUTBOX_BASE_BACKOFF: %w", err)
-	}
-
-	outboxMaxBackoff, err := getEnvDuration(lookup, "OUTBOX_MAX_BACKOFF", 5*time.Minute)
-	if err != nil {
-		return nil, fmt.Errorf("invalid OUTBOX_MAX_BACKOFF: %w", err)
-	}
-
-	outboxMaxAttempts, err := getEnvInt(lookup, "OUTBOX_MAX_ATTEMPTS", 10)
-	if err != nil {
-		return nil, fmt.Errorf("invalid OUTBOX_MAX_ATTEMPTS: %w", err)
-	}
-
-	streamRetention, err := getEnvDuration(lookup, "STREAM_RETENTION", 168*time.Hour)
-	if err != nil {
-		return nil, fmt.Errorf("invalid STREAM_RETENTION: %w", err)
-	}
-
-	streamConsumerBlock, err := getEnvDuration(lookup, "STREAM_CONSUMER_BLOCK", 2*time.Second)
-	if err != nil {
-		return nil, fmt.Errorf("invalid STREAM_CONSUMER_BLOCK: %w", err)
-	}
-
-	streamClaimMinIdle, err := getEnvDuration(lookup, "STREAM_CLAIM_MIN_IDLE", 60*time.Second)
-	if err != nil {
-		return nil, fmt.Errorf("invalid STREAM_CLAIM_MIN_IDLE: %w", err)
-	}
-
-	streamClaimInterval, err := getEnvDuration(lookup, "STREAM_CLAIM_INTERVAL", 10*time.Second)
-	if err != nil {
-		return nil, fmt.Errorf("invalid STREAM_CLAIM_INTERVAL: %w", err)
-	}
-
-	streamConsumerBatch, err := getEnvInt(lookup, "STREAM_CONSUMER_BATCH", 10)
-	if err != nil {
-		return nil, fmt.Errorf("invalid STREAM_CONSUMER_BATCH: %w", err)
-	}
-
-	streamHandlerTimeout, err := getEnvDuration(lookup, "STREAM_HANDLER_TIMEOUT", 5*time.Second)
-	if err != nil {
-		return nil, fmt.Errorf("invalid STREAM_HANDLER_TIMEOUT: %w", err)
-	}
-
-	streamRetryMaxAttempts, err := getEnvInt(lookup, "STREAM_RETRY_MAX_ATTEMPTS", 5)
-	if err != nil {
-		return nil, fmt.Errorf("invalid STREAM_RETRY_MAX_ATTEMPTS: %w", err)
-	}
-
-	streamRetryBaseBackoff, err := getEnvDuration(lookup, "STREAM_RETRY_BASE_BACKOFF", 200*time.Millisecond)
-	if err != nil {
-		return nil, fmt.Errorf("invalid STREAM_RETRY_BASE_BACKOFF: %w", err)
-	}
-
-	streamRetryMaxBackoff, err := getEnvDuration(lookup, "STREAM_RETRY_MAX_BACKOFF", 2*time.Second)
-	if err != nil {
-		return nil, fmt.Errorf("invalid STREAM_RETRY_MAX_BACKOFF: %w", err)
-	}
-
-	workerConcurrency, err := getEnvInt(lookup, "WORKER_CONCURRENCY", 10)
-	if err != nil {
-		return nil, fmt.Errorf("invalid WORKER_CONCURRENCY: %w", err)
-	}
-
-	workerQueueSize, err := getEnvInt(lookup, "WORKER_QUEUE_SIZE", 10)
-	if err != nil {
-		return nil, fmt.Errorf("invalid WORKER_QUEUE_SIZE: %w", err)
-	}
-
-	workerDrainTimeout, err := getEnvDuration(lookup, "WORKER_DRAIN_TIMEOUT", 10*time.Second)
-	if err != nil {
-		return nil, fmt.Errorf("invalid WORKER_DRAIN_TIMEOUT: %w", err)
-	}
-
-	addSource, err := getEnvBool(lookup, "LOG_ADD_SOURCE", false)
-	if err != nil {
-		return nil, fmt.Errorf("invalid LOG_ADD_SOURCE: %w", err)
-	}
-
-	appEnv := getEnvString(lookup, "APP_ENV", "development")
-
-	logLevel := strings.ToLower(strings.TrimSpace(getEnvString(lookup, "LOG_LEVEL", "info")))
-	logFormat := strings.ToLower(strings.TrimSpace(getEnvString(lookup, "LOG_FORMAT", "json")))
-
-	idempotencyLeaseTTL, err := getEnvDuration(lookup, "IDEMPOTENCY_LEASE_TTL", 30*time.Second)
-	if err != nil {
-		return nil, fmt.Errorf("invalid IDEMPOTENCY_LEASE_TTL: %w", err)
-	}
-
-	errorBudgetMaxRate, err := getEnvFloat64(lookup, "INGESTION_ERROR_BUDGET_MAX_RATE", 0.05)
-	if err != nil {
-		return nil, fmt.Errorf("invalid INGESTION_ERROR_BUDGET_MAX_RATE: %w", err)
-	}
-
-	errorBudgetMinRows, err := getEnvInt(lookup, "INGESTION_ERROR_BUDGET_MIN_ROWS", 100)
-	if err != nil {
-		return nil, fmt.Errorf("invalid INGESTION_ERROR_BUDGET_MIN_ROWS: %w", err)
-	}
-
+	e := &env{lookup: lookup}
 	cfg := &Config{
-		Server: ServerConfig{
-			Port:            getEnvString(lookup, "PORT", "8080"),
-			ReadTimeout:     readTimeout,
-			WriteTimeout:    writeTimeout,
-			IdleTimeout:     idleTimeout,
-			ShutdownTimeout: shutdownTimeout,
-		},
-		Database: DatabaseConfig{
-			URL:             getEnvString(lookup, "DATABASE_URL", ""),
-			MaxConns:        maxConns,
-			MinConns:        minConns,
-			MaxConnIdleTime: maxConnIdleTime,
-			MaxConnLifetime: maxConnLifetime,
-			ConnectTimeout:  connectTimeout,
-		},
-		Log: LogConfig{
-			Level:     logLevel,
-			Format:    logFormat,
-			AddSource: addSource,
-		},
-		App: AppConfig{
-			Environment: appEnv,
-			ServiceName: getEnvString(lookup, "SERVICE_NAME", "cross-border-api"),
-		},
-		Redis: RedisConfig{
-			URL: getEnvString(lookup, "REDIS_URL", ""),
-		},
-		Stream: StreamConfig{
-			Retention:        streamRetention,
-			ConsumerBlock:    streamConsumerBlock,
-			ClaimMinIdle:     streamClaimMinIdle,
-			ClaimInterval:    streamClaimInterval,
-			ConsumerBatch:    streamConsumerBatch,
-			HandlerTimeout:   streamHandlerTimeout,
-			RetryMaxAttempts: streamRetryMaxAttempts,
-			RetryBaseBackoff: streamRetryBaseBackoff,
-			RetryMaxBackoff:  streamRetryMaxBackoff,
-		},
-		Worker: WorkerConfig{
-			Concurrency:  workerConcurrency,
-			QueueSize:    workerQueueSize,
-			DrainTimeout: workerDrainTimeout,
-		},
-		Idempotency: IdempotencyConfig{
-			LeaseTTL: idempotencyLeaseTTL,
-		},
-		Ingestion: IngestionConfig{
-			ErrorBudgetMaxRate: errorBudgetMaxRate,
-			ErrorBudgetMinRows: errorBudgetMinRows,
-		},
-		Outbox: OutboxConfig{
-			BatchSize:    outboxBatchSize,
-			PollInterval: outboxPollInterval,
-			Lease:        outboxLease,
-			BaseBackoff:  outboxBaseBackoff,
-			MaxBackoff:   outboxMaxBackoff,
-			MaxAttempts:  outboxMaxAttempts,
-		},
+		Server:        loadServer(e),
+		Database:      loadDatabase(e),
+		Log:           loadLog(e),
+		App:           AppConfig{Environment: e.str("APP_ENV", "development"), ServiceName: e.str("SERVICE_NAME", "cross-border-api")},
+		Redis:         RedisConfig{URL: e.str("REDIS_URL", "")},
+		Stream:        loadStream(e),
+		Outbox:        loadOutbox(e),
+		Worker:        loadWorker(e),
+		Idempotency:   IdempotencyConfig{LeaseTTL: e.duration("IDEMPOTENCY_LEASE_TTL", 30*time.Second)},
+		RunProcessing: loadRunProcessing(e),
 	}
-
+	if err := errors.Join(e.errs...); err != nil {
+		return nil, err
+	}
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("validate config: %w", err)
 	}
-
 	return cfg, nil
 }
 
-//nolint:funlen // legacy baseline 2026-09-26: fix in ENG-018
+// LoadDatabase reads and validates only DATABASE_URL and DB_*, for a binary that needs nothing else
+// (cmd/migrate): an unrelated invalid variable such as PORT must not block a migration.
+func LoadDatabase(lookup func(string) string) (DatabaseConfig, error) {
+	if lookup == nil {
+		return DatabaseConfig{}, ErrNilLookup
+	}
+	e := &env{lookup: lookup}
+	db := loadDatabase(e)
+	if err := errors.Join(e.errs...); err != nil {
+		return DatabaseConfig{}, err
+	}
+	if err := db.Validate(); err != nil {
+		return DatabaseConfig{}, fmt.Errorf("validate database config: %w", err)
+	}
+	return db, nil
+}
+
+// Validate reports every invalid section, not only the first.
 func (c *Config) Validate() error {
-	portNum, err := strconv.Atoi(c.Server.Port)
-	if err != nil || portNum < 1 || portNum > 65535 {
-		return fmt.Errorf("%w: '%s'", ErrInvalidPort, c.Server.Port)
-	}
+	return errors.Join(
+		c.Server.Validate(),
+		c.Database.Validate(),
+		c.Stream.Validate(),
+		c.Worker.Validate(),
+		c.Idempotency.Validate(),
+		c.RunProcessing.Validate(),
+		c.validateIdempotencyLease(),
+	)
+}
 
-	if c.Server.ReadTimeout <= 0 || c.Server.WriteTimeout <= 0 || c.Server.IdleTimeout <= 0 || c.Server.ShutdownTimeout <= 0 {
-		return fmt.Errorf("%w for server configuration", ErrInvalidTimeout)
-	}
-
-	if strings.TrimSpace(c.Database.URL) == "" {
-		return ErrEmptyDatabaseURL
-	}
-
-	if c.Database.MinConns < 0 || c.Database.MaxConns <= 0 || c.Database.MinConns > c.Database.MaxConns {
-		return fmt.Errorf("%w: min=%d, max=%d", ErrInvalidPoolLimits, c.Database.MinConns, c.Database.MaxConns)
-	}
-
-	if c.Database.ConnectTimeout <= 0 || c.Database.MaxConnIdleTime <= 0 || c.Database.MaxConnLifetime <= 0 {
-		return fmt.Errorf("%w for database configuration", ErrInvalidTimeout)
-	}
-
-	switch strings.ToLower(strings.TrimSpace(c.Log.Level)) {
-	case "debug", "info", "warn", "error":
-	default:
-		return fmt.Errorf("%w: '%s'", ErrInvalidLogLevel, c.Log.Level)
-	}
-
-	switch strings.ToLower(strings.TrimSpace(c.Log.Format)) {
-	case "json", "text":
-	default:
-		return fmt.Errorf("%w: '%s'", ErrInvalidLogFormat, c.Log.Format)
-	}
-
-	if err := c.Stream.Validate(); err != nil {
-		return err
-	}
-
-	if err := c.Worker.Validate(); err != nil {
-		return err
-	}
-
-	if err := c.Idempotency.Validate(); err != nil {
-		return err
-	}
-
-	if _, err := c.Ingestion.ErrorBudget(); err != nil {
-		return err
-	}
-
+// validateIdempotencyLease keeps a claim alive longer than the handler it protects.
+func (c *Config) validateIdempotencyLease() error {
 	if c.Idempotency.LeaseTTL <= c.Stream.HandlerTimeout {
 		return fmt.Errorf("idempotency lease TTL (%v) must be strictly greater than stream handler timeout (%v)",
 			c.Idempotency.LeaseTTL, c.Stream.HandlerTimeout)
 	}
-
 	return nil
 }
 
-func getEnvString(lookup func(string) string, key, defaultVal string) string {
-	if val := strings.TrimSpace(lookup(key)); val != "" {
-		return val
+func loadServer(e *env) ServerConfig {
+	return ServerConfig{
+		Port:            e.str("PORT", "8080"),
+		ReadTimeout:     e.duration("SERVER_READ_TIMEOUT", 10*time.Second),
+		WriteTimeout:    e.duration("SERVER_WRITE_TIMEOUT", 10*time.Second),
+		IdleTimeout:     e.duration("SERVER_IDLE_TIMEOUT", 60*time.Second),
+		ShutdownTimeout: e.duration("SERVER_SHUTDOWN_TIMEOUT", 15*time.Second),
 	}
-	return defaultVal
 }
 
-func getEnvDuration(lookup func(string) string, key string, defaultVal time.Duration) (time.Duration, error) {
-	val := strings.TrimSpace(lookup(key))
-	if val == "" {
-		return defaultVal, nil
+func loadDatabase(e *env) DatabaseConfig {
+	return DatabaseConfig{
+		URL:             e.str("DATABASE_URL", ""),
+		MaxConns:        read(e, "DB_MAX_CONNS", int32(25), parseInt32),
+		MinConns:        read(e, "DB_MIN_CONNS", int32(5), parseInt32),
+		MaxConnIdleTime: e.duration("DB_MAX_CONN_IDLE_TIME", 15*time.Minute),
+		MaxConnLifetime: e.duration("DB_MAX_CONN_LIFETIME", time.Hour),
+		ConnectTimeout:  e.duration("DB_CONNECT_TIMEOUT", 5*time.Second),
 	}
-	d, err := time.ParseDuration(val)
-	if err != nil {
-		return 0, fmt.Errorf("parse duration '%s': %w", val, err)
-	}
-	return d, nil
 }
 
-func getEnvInt(lookup func(string) string, key string, defaultVal int) (int, error) {
-	val := strings.TrimSpace(lookup(key))
-	if val == "" {
-		return defaultVal, nil
+func loadLog(e *env) logging.Options {
+	return logging.Options{
+		Level:     read(e, "LOG_LEVEL", slog.LevelInfo, logging.ParseLevel),
+		Format:    read(e, "LOG_FORMAT", logging.FormatJSON, logging.ParseFormat),
+		AddSource: read(e, "LOG_ADD_SOURCE", false, strconv.ParseBool),
 	}
-	i, err := strconv.Atoi(val)
-	if err != nil {
-		return 0, fmt.Errorf("parse int '%s': %w", val, err)
-	}
-	return i, nil
 }
 
-func getEnvInt32(lookup func(string) string, key string, defaultVal int32) (int32, error) {
-	val := strings.TrimSpace(lookup(key))
-	if val == "" {
-		return defaultVal, nil
+func loadStream(e *env) StreamConfig {
+	return StreamConfig{
+		Retention:        e.duration("STREAM_RETENTION", 168*time.Hour),
+		ConsumerBlock:    e.duration("STREAM_CONSUMER_BLOCK", 2*time.Second),
+		ClaimMinIdle:     e.duration("STREAM_CLAIM_MIN_IDLE", 60*time.Second),
+		ClaimInterval:    e.duration("STREAM_CLAIM_INTERVAL", 10*time.Second),
+		ConsumerBatch:    e.int("STREAM_CONSUMER_BATCH", 10),
+		HandlerTimeout:   e.duration("STREAM_HANDLER_TIMEOUT", 5*time.Second),
+		RetryMaxAttempts: e.int("STREAM_RETRY_MAX_ATTEMPTS", 5),
+		RetryBaseBackoff: e.duration("STREAM_RETRY_BASE_BACKOFF", 200*time.Millisecond),
+		RetryMaxBackoff:  e.duration("STREAM_RETRY_MAX_BACKOFF", 2*time.Second),
 	}
-	i, err := strconv.ParseInt(val, 10, 32)
-	if err != nil {
-		return 0, fmt.Errorf("parse int32 '%s': %w", val, err)
-	}
-	return int32(i), nil
 }
 
-func getEnvBool(lookup func(string) string, key string, defaultVal bool) (bool, error) {
-	val := strings.TrimSpace(lookup(key))
-	if val == "" {
-		return defaultVal, nil
+func loadOutbox(e *env) OutboxConfig {
+	return OutboxConfig{
+		BatchSize:    e.int("OUTBOX_BATCH_SIZE", 100),
+		PollInterval: e.duration("OUTBOX_POLL_INTERVAL", 500*time.Millisecond),
+		Lease:        e.duration("OUTBOX_LEASE", 30*time.Second),
+		BaseBackoff:  e.duration("OUTBOX_BASE_BACKOFF", time.Second),
+		MaxBackoff:   e.duration("OUTBOX_MAX_BACKOFF", 5*time.Minute),
+		MaxAttempts:  e.int("OUTBOX_MAX_ATTEMPTS", 10),
 	}
-	b, err := strconv.ParseBool(val)
-	if err != nil {
-		return false, fmt.Errorf("parse bool '%s': %w", val, err)
-	}
-	return b, nil
 }
 
-func getEnvFloat64(lookup func(string) string, key string, defaultVal float64) (float64, error) {
-	val := strings.TrimSpace(lookup(key))
-	if val == "" {
-		return defaultVal, nil
+func loadWorker(e *env) WorkerConfig {
+	return WorkerConfig{
+		Concurrency:  e.int("WORKER_CONCURRENCY", 10),
+		QueueSize:    e.int("WORKER_QUEUE_SIZE", 10),
+		DrainTimeout: e.duration("WORKER_DRAIN_TIMEOUT", 10*time.Second),
 	}
-	f, err := strconv.ParseFloat(val, 64)
+}
+
+func loadRunProcessing(e *env) RunProcessingConfig {
+	return RunProcessingConfig{
+		PollInterval: e.duration("RUN_PROCESSING_POLL_INTERVAL", 2*time.Second),
+		Lease:        e.duration("RUN_PROCESSING_LEASE", 30*time.Second),
+		BatchSize:    e.int("RUN_PROCESSING_BATCH_SIZE", 500),
+		ErrorBudget: ingestion.ErrorBudget{
+			MaxErrorRate:  read(e, "INGESTION_ERROR_BUDGET_MAX_RATE", 0.05, parseFloat64),
+			MinSampleRows: e.int("INGESTION_ERROR_BUDGET_MIN_ROWS", 100),
+		},
+	}
+}
+
+type env struct {
+	lookup func(string) string
+	errs   []error
+}
+
+// read returns def when key is unset or blank, and the parsed value otherwise. A value that does
+// not parse is recorded as an error, never replaced by the default.
+func read[T any](e *env, key string, def T, parse func(string) (T, error)) T {
+	raw := strings.TrimSpace(e.lookup(key))
+	if raw == "" {
+		return def
+	}
+	v, err := parse(raw)
 	if err != nil {
-		return 0, fmt.Errorf("parse float64 '%s': %w", val, err)
+		e.errs = append(e.errs, fmt.Errorf("invalid %s: %w", key, err))
 	}
-	return f, nil
+	return v
+}
+
+func (e *env) str(key, def string) string {
+	return read(e, key, def, func(s string) (string, error) { return s, nil })
+}
+
+func (e *env) duration(key string, def time.Duration) time.Duration {
+	return read(e, key, def, time.ParseDuration)
+}
+
+func (e *env) int(key string, def int) int {
+	return read(e, key, def, strconv.Atoi)
+}
+
+func parseInt32(s string) (int32, error) {
+	i, err := strconv.ParseInt(s, 10, 32)
+	return int32(i), err
+}
+
+func parseFloat64(s string) (float64, error) {
+	return strconv.ParseFloat(s, 64)
 }

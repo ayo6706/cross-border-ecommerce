@@ -11,12 +11,12 @@ import (
 
 	appOutbox "github.com/ayo6706/cross-border-ecommerce/internal/application/outbox"
 	appProduct "github.com/ayo6706/cross-border-ecommerce/internal/application/product"
-	"github.com/ayo6706/cross-border-ecommerce/internal/domain/ingestion"
 	"github.com/ayo6706/cross-border-ecommerce/internal/infrastructure/postgres"
 	"github.com/ayo6706/cross-border-ecommerce/internal/infrastructure/redis"
 	"github.com/ayo6706/cross-border-ecommerce/internal/platform/config"
 	"github.com/ayo6706/cross-border-ecommerce/internal/platform/logging"
-	"github.com/ayo6706/cross-border-ecommerce/internal/platform/uuid"
+	"github.com/ayo6706/cross-border-ecommerce/internal/wiring"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -27,22 +27,16 @@ func main() {
 	}
 }
 
-//nolint:funlen // legacy baseline 2026-09-26: fix in ENG-018
 func run() error {
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("load configuration: %w", err)
 	}
-
 	if err := cfg.Redis.Validate(); err != nil {
 		return fmt.Errorf("validate redis configuration: %w", err)
 	}
 
-	logger := logging.NewLogger(os.Stdout, logging.Options{
-		Level:     cfg.Log.Level,
-		Format:    cfg.Log.Format,
-		AddSource: cfg.Log.AddSource,
-	})
+	logger := logging.NewLogger(os.Stdout, cfg.Log)
 	slog.SetDefault(logger)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -53,58 +47,42 @@ func run() error {
 		slog.String("environment", cfg.App.Environment),
 	)
 
-	pool, err := postgres.NewPool(
-		ctx,
-		cfg.Database.URL,
-		postgres.WithMaxConns(cfg.Database.MaxConns),
-		postgres.WithMinConns(cfg.Database.MinConns),
-	)
+	pool, err := postgres.NewPool(ctx, cfg.Database)
 	if err != nil {
 		return fmt.Errorf("connect to database: %w", err)
 	}
 	defer pool.Close()
 
-	redisPub, err := redis.NewPublisher(ctx, cfg.Redis.URL, redis.WithRetention(cfg.Stream.Retention))
+	publisher, err := redis.NewPublisher(ctx, cfg.Redis.URL, redis.WithRetention(cfg.Stream.Retention))
 	if err != nil {
 		return fmt.Errorf("connect to redis: %w", err)
 	}
 	defer func() {
-		if err := redisPub.Close(); err != nil {
+		if err := publisher.Close(); err != nil {
 			logger.Error("close redis publisher", slog.Any("error", err))
 		}
 	}()
 
-	runRepo, err := postgres.NewIngestionRepository(pool)
-	if err != nil {
+	if err := serve(ctx, cfg, pool, publisher, logger); err != nil {
 		return err
 	}
-	sourceRepo, err := postgres.NewSourceRepository(pool)
+	logger.Info("worker daemon stopped gracefully")
+	return nil
+}
+
+// serve runs the run-processing loop and the outbox relay until ctx is cancelled or the relay fails.
+func serve(ctx context.Context, cfg *config.Config, pool *pgxpool.Pool, publisher appOutbox.Publisher,
+	logger *slog.Logger,
+) error {
+	processor, err := wiring.RunProcessor(pool)
 	if err != nil {
-		return err
-	}
-	rawRepo, err := postgres.NewRawRecordRepository(pool)
-	if err != nil {
-		return err
-	}
-	processingRepo, err := postgres.NewRunProcessingRepository(pool)
-	if err != nil {
-		return err
-	}
-	txRunner, err := postgres.NewProductTxManager(pool)
-	if err != nil {
-		return err
+		return fmt.Errorf("wire run processor: %w", err)
 	}
 	outboxRepo, err := postgres.NewOutboxRepository(pool)
 	if err != nil {
-		return err
+		return fmt.Errorf("create outbox repository: %w", err)
 	}
-
-	processor, err := appProduct.NewRunProcessor(runRepo, sourceRepo, rawRepo, processingRepo, txRunner)
-	if err != nil {
-		return fmt.Errorf("initialize processor: %w", err)
-	}
-
-	relay, err := appOutbox.NewRelay(outboxRepo, redisPub, appOutbox.RelayConfig{
+	relay, err := appOutbox.NewRelay(outboxRepo, publisher, appOutbox.RelayConfig{
 		BatchSize:    cfg.Outbox.BatchSize,
 		PollInterval: cfg.Outbox.PollInterval,
 		Lease:        cfg.Outbox.Lease,
@@ -116,98 +94,50 @@ func run() error {
 		return fmt.Errorf("initialize outbox relay: %w", err)
 	}
 
-	errorBudget, err := cfg.Ingestion.ErrorBudget()
-	if err != nil {
-		return err
-	}
-
 	g, gCtx := errgroup.WithContext(ctx)
-
 	g.Go(func() error {
-		runProcessingLoop(gCtx, processingRepo, processor, errorBudget, logger)
+		runProcessingLoop(gCtx, processor, cfg.RunProcessing, logger)
 		return nil
 	})
-
 	g.Go(func() error {
 		return relay.Run(gCtx)
 	})
-
 	if err := g.Wait(); err != nil {
 		return fmt.Errorf("worker group execution error: %w", err)
 	}
-
-	logger.Info("worker daemon stopped gracefully")
 	return nil
 }
 
-//nolint:funlen,gocognit // legacy baseline 2026-09-26: fix in ENG-018
-func runProcessingLoop(
-	ctx context.Context,
-	processingRepo ingestion.RunProcessingRepository,
-	processor *appProduct.RunProcessor,
-	errorBudget ingestion.ErrorBudget,
+// runProcessingLoop takes one processing step every poll interval until ctx is cancelled. A failed
+// step is logged and retried on the next tick; the claimed run's lease lets another worker take over.
+func runProcessingLoop(ctx context.Context, processor *appProduct.RunProcessor, cfg config.RunProcessingConfig,
 	logger *slog.Logger,
 ) {
-	pollTicker := time.NewTicker(2 * time.Second)
-	defer pollTicker.Stop()
-
+	ticker := time.NewTicker(cfg.PollInterval)
+	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-pollTicker.C:
-			if err := processingRepo.SeedPending(ctx); err != nil {
-				if ctx.Err() == nil {
-					logger.Error("failed to seed pending run processing", slog.Any("error", err))
-				}
-				continue
-			}
-
-			claimToken, err := uuid.NewString()
-			if err != nil {
-				logger.Error("failed to generate claim token for run processing", slog.Any("error", err))
-				continue
-			}
-
-			claimed, err := processingRepo.ClaimNext(ctx, claimToken, 30*time.Second)
-			if err != nil {
-				if ctx.Err() == nil {
-					logger.Error("failed to claim run processing", slog.Any("error", err))
-				}
-				continue
-			}
-			if claimed == nil {
-				continue
-			}
-
-			logger.Info("claimed run processing job",
-				slog.String("run_id", claimed.RunID),
-				slog.String("claim_token", claimToken),
-			)
-
-			result, err := processor.ProcessRun(ctx, claimed.RunID, appProduct.ProcessRunOptions{
-				ClaimToken:    claimToken,
-				LeaseDuration: 30 * time.Second,
-				BatchSize:     500,
-				ErrorBudget:   errorBudget,
-			})
-			if err != nil {
-				if ctx.Err() == nil {
-					logger.Error("run processing failed",
-						slog.String("run_id", claimed.RunID),
-						slog.Any("error", err),
-					)
-				}
-			} else {
-				logger.Info("completed run processing job",
-					slog.String("run_id", result.RunID),
-					slog.Int("seen", result.Seen),
-					slog.Int("new", result.New),
-					slog.Int("changed", result.Changed),
-					slog.Int("unchanged", result.Unchanged),
-					slog.Int("failed", result.Failed),
-				)
-			}
+		case <-ticker.C:
+			processNext(ctx, processor, cfg, logger)
 		}
+	}
+}
+
+func processNext(ctx context.Context, processor *appProduct.RunProcessor, cfg config.RunProcessingConfig,
+	logger *slog.Logger,
+) {
+	opts, err := wiring.ProcessRunOptions(cfg, false)
+	if err != nil {
+		logger.Error("build run processing options", slog.Any("error", err))
+		return
+	}
+	result, err := processor.ProcessNext(ctx, opts)
+	switch {
+	case err != nil && ctx.Err() == nil:
+		logger.Error("run processing step failed", slog.Any("error", err))
+	case result != nil:
+		logger.Info("completed run processing job", slog.Any("result", result))
 	}
 }

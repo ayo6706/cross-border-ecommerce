@@ -15,18 +15,6 @@ type ErrorBudget struct {
 	MinSampleRows int
 }
 
-// NewErrorBudget validates and creates an ErrorBudget.
-func NewErrorBudget(maxErrorRate float64, minSampleRows int) (ErrorBudget, error) {
-	b := ErrorBudget{
-		MaxErrorRate:  maxErrorRate,
-		MinSampleRows: minSampleRows,
-	}
-	if err := b.Validate(); err != nil {
-		return ErrorBudget{}, err
-	}
-	return b, nil
-}
-
 // Validate checks that configuration values are strictly positive and within bounds.
 func (b ErrorBudget) Validate() error {
 	if b.MaxErrorRate <= 0 || b.MaxErrorRate >= 1.0 || b.MinSampleRows <= 0 {

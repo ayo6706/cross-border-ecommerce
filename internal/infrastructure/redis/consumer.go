@@ -14,6 +14,7 @@ import (
 	appDLQ "github.com/ayo6706/cross-border-ecommerce/internal/application/dlq"
 	appMessaging "github.com/ayo6706/cross-border-ecommerce/internal/application/messaging"
 	"github.com/ayo6706/cross-border-ecommerce/internal/platform/backoff"
+	"github.com/ayo6706/cross-border-ecommerce/internal/platform/cleanup"
 	"github.com/ayo6706/cross-border-ecommerce/internal/platform/uuid"
 	"github.com/ayo6706/cross-border-ecommerce/internal/platform/worker"
 	goredis "github.com/redis/go-redis/v9"
@@ -30,6 +31,9 @@ var (
 // dlq_messages. Names are validated rather than truncated: a truncated group would make a
 // replay target a group that does not exist.
 const maxNameLen = 128
+
+// maxReadBatch bounds the COUNT of one XREADGROUP or XAUTOCLAIM call (BatchSize, ClaimBatchSize).
+const maxReadBatch = 1000
 
 type ConsumerConfig struct {
 	Stream           string
@@ -89,8 +93,8 @@ func (c ConsumerConfig) Validate() error {
 			return fmt.Errorf("%w: %s must be at most %d bytes, got %d", ErrInvalidConsumerConfig, f.name, maxNameLen, len(f.value))
 		}
 	}
-	if c.BatchSize <= 0 || c.BatchSize > 1000 {
-		return fmt.Errorf("%w: batch size must be between 1 and 1000, got %d", ErrInvalidConsumerConfig, c.BatchSize)
+	if c.BatchSize <= 0 || c.BatchSize > maxReadBatch {
+		return fmt.Errorf("%w: batch size must be between 1 and %d, got %d", ErrInvalidConsumerConfig, maxReadBatch, c.BatchSize)
 	}
 	if c.BlockDuration <= 0 {
 		return fmt.Errorf("%w: block duration must be strictly positive", ErrInvalidConsumerConfig)
@@ -101,8 +105,9 @@ func (c ConsumerConfig) Validate() error {
 	if c.ClaimInterval <= 0 {
 		return fmt.Errorf("%w: claim interval must be strictly positive", ErrInvalidConsumerConfig)
 	}
-	if c.ClaimBatchSize <= 0 || c.ClaimBatchSize > 1000 {
-		return fmt.Errorf("%w: claim batch size must be between 1 and 1000, got %d", ErrInvalidConsumerConfig, c.ClaimBatchSize)
+	if c.ClaimBatchSize <= 0 || c.ClaimBatchSize > maxReadBatch {
+		return fmt.Errorf("%w: claim batch size must be between 1 and %d, got %d",
+			ErrInvalidConsumerConfig, maxReadBatch, c.ClaimBatchSize)
 	}
 	if c.BaseBackoff <= 0 {
 		return fmt.Errorf("%w: base backoff must be strictly positive", ErrInvalidConsumerConfig)
@@ -121,10 +126,6 @@ func (c ConsumerConfig) Validate() error {
 	}
 	if c.DrainTimeout <= 0 {
 		return fmt.Errorf("%w: drain timeout must be strictly positive", ErrInvalidConsumerConfig)
-	}
-	if c.ClaimMinIdle <= c.HandlerTimeout {
-		return fmt.Errorf("%w: claim min idle (%v) must be strictly greater than handler timeout (%v)",
-			ErrInvalidConsumerConfig, c.ClaimMinIdle, c.HandlerTimeout)
 	}
 	if c.DLQStore == nil {
 		return fmt.Errorf("%w: dlq store cannot be nil", ErrInvalidConsumerConfig)
@@ -338,7 +339,7 @@ func (c *Consumer) runHandlerWithStack(ctx context.Context, handler appMessaging
 }
 
 func (c *Consumer) ack(ctx context.Context, streamID, eventID string) {
-	ackCtx, ackCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	ackCtx, ackCancel := cleanup.Context(ctx)
 	defer ackCancel()
 
 	if ackErr := c.client.XAck(ackCtx, c.cfg.Stream, c.cfg.Group, streamID).Err(); ackErr != nil {
@@ -359,7 +360,7 @@ func (c *Consumer) deadLetterAndAck(ctx context.Context, rawMsg goredis.XMessage
 	rec.ConsumerGroup = c.cfg.Group
 	rec.ConsumerName = c.cfg.ConsumerName
 
-	dlqCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	dlqCtx, cancel := cleanup.Context(ctx)
 	defer cancel()
 
 	if err := c.cfg.DLQStore.Insert(dlqCtx, rec); err != nil {

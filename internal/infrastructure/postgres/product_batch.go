@@ -55,7 +55,7 @@ func copyRows[T, P any](
 	for i, row := range rows {
 		p, err := toParams(row)
 		if err != nil {
-			return err
+			return fmt.Errorf("%s row %d: %w", table, i, err)
 		}
 		params[i] = p
 	}
@@ -266,10 +266,14 @@ func (p *planIDs) required(field, s string) pgtype.UUID {
 }
 
 func (p *planIDs) optional(field string, s *string) pgtype.UUID {
-	if s == nil || strings.TrimSpace(*s) == "" {
+	if p.err != nil {
 		return pgtype.UUID{}
 	}
-	return p.required(field, *s)
+	u, err := parseOptionalUUID(s)
+	if err != nil {
+		p.err = fmt.Errorf("%w: invalid %s: %w", product.ErrInvalidProductState, field, err)
+	}
+	return u
 }
 
 func sortedByKey[T any](rows []T, key func(T) string) []T {

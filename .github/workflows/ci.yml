@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [main]
 
+# Both jobs only check out code and run tests: the token needs read access and nothing else.
+permissions:
+  contents: read
+
 jobs:
   test:
     name: Test & Lint
@@ -61,3 +65,39 @@ jobs:
           TEST_REDIS_URL: redis://localhost:6379/15
           VERIFY_RACE: "1"
         run: ./scripts/verify.sh
+
+  query-plans:
+    # tests/performance: EXPLAIN (ANALYZE, BUFFERS) of every statement the worker, relay and API
+    # send, on a dataset seeded at scale. Separate from the verify gate: plan shape needs scale.
+    name: Query plans at scale
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgrespassword
+          POSTGRES_DB: crossborder_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+          cache: true
+
+      - name: Query plan suite
+        env:
+          TEST_DATABASE_URL: postgres://postgres:postgrespassword@localhost:5432/crossborder_test?sslmode=disable
+        run: make perf

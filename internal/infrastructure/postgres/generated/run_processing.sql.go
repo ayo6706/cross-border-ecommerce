@@ -27,7 +27,14 @@ SET status = 'RUNNING',
     updated_at = NOW()
 FROM candidate
 WHERE ingestion_run_processing.run_id = candidate.run_id
-RETURNING ingestion_run_processing.run_id, ingestion_run_processing.status, ingestion_run_processing.claim_token, ingestion_run_processing.lease_expires_at, ingestion_run_processing.cursor_raw_record_id, ingestion_run_processing.records_seen, ingestion_run_processing.records_new, ingestion_run_processing.records_changed, ingestion_run_processing.records_unchanged, ingestion_run_processing.records_failed, ingestion_run_processing.error_summary, ingestion_run_processing.started_at, ingestion_run_processing.completed_at, ingestion_run_processing.created_at, ingestion_run_processing.updated_at
+RETURNING ingestion_run_processing.run_id, ingestion_run_processing.status,
+    ingestion_run_processing.claim_token, ingestion_run_processing.lease_expires_at,
+    ingestion_run_processing.cursor_raw_record_id, ingestion_run_processing.records_seen,
+    ingestion_run_processing.records_new, ingestion_run_processing.records_changed,
+    ingestion_run_processing.records_unchanged, ingestion_run_processing.records_failed,
+    ingestion_run_processing.error_summary, ingestion_run_processing.started_at,
+    ingestion_run_processing.completed_at, ingestion_run_processing.created_at,
+    ingestion_run_processing.updated_at
 `
 
 type ClaimNextRunProcessingParams struct {
@@ -67,7 +74,9 @@ SET status = 'RUNNING',
     updated_at = NOW()
 WHERE run_id = $3::uuid
   AND (status = 'PENDING' OR status = 'FAILED' OR status = 'COMPLETED' OR lease_expires_at < NOW() OR claim_token = $1::uuid)
-RETURNING run_id, status, claim_token, lease_expires_at, cursor_raw_record_id, records_seen, records_new, records_changed, records_unchanged, records_failed, error_summary, started_at, completed_at, created_at, updated_at
+RETURNING run_id, status, claim_token, lease_expires_at, cursor_raw_record_id, records_seen, records_new,
+    records_changed, records_unchanged, records_failed, error_summary, started_at, completed_at,
+    created_at, updated_at
 `
 
 type ClaimSpecificRunProcessingParams struct {
@@ -107,7 +116,9 @@ SET status = 'COMPLETED',
     completed_at = NOW(),
     updated_at = NOW()
 WHERE run_id = $1::uuid AND claim_token = $2::uuid
-RETURNING run_id, status, claim_token, lease_expires_at, cursor_raw_record_id, records_seen, records_new, records_changed, records_unchanged, records_failed, error_summary, started_at, completed_at, created_at, updated_at
+RETURNING run_id, status, claim_token, lease_expires_at, cursor_raw_record_id, records_seen, records_new,
+    records_changed, records_unchanged, records_failed, error_summary, started_at, completed_at,
+    created_at, updated_at
 `
 
 type CompleteRunProcessingParams struct {
@@ -142,7 +153,9 @@ const ensureRunProcessingExists = `-- name: EnsureRunProcessingExists :one
 INSERT INTO ingestion_run_processing (run_id)
 VALUES ($1)
 ON CONFLICT (run_id) DO UPDATE SET updated_at = NOW()
-RETURNING run_id, status, claim_token, lease_expires_at, cursor_raw_record_id, records_seen, records_new, records_changed, records_unchanged, records_failed, error_summary, started_at, completed_at, created_at, updated_at
+RETURNING run_id, status, claim_token, lease_expires_at, cursor_raw_record_id, records_seen, records_new,
+    records_changed, records_unchanged, records_failed, error_summary, started_at, completed_at,
+    created_at, updated_at
 `
 
 func (q *Queries) EnsureRunProcessingExists(ctx context.Context, runID pgtype.UUID) (IngestionRunProcessing, error) {
@@ -177,7 +190,9 @@ SET status = 'FAILED',
     completed_at = NOW(),
     updated_at = NOW()
 WHERE run_id = $2::uuid AND (claim_token = $3::uuid OR $3::uuid IS NULL)
-RETURNING run_id, status, claim_token, lease_expires_at, cursor_raw_record_id, records_seen, records_new, records_changed, records_unchanged, records_failed, error_summary, started_at, completed_at, created_at, updated_at
+RETURNING run_id, status, claim_token, lease_expires_at, cursor_raw_record_id, records_seen, records_new,
+    records_changed, records_unchanged, records_failed, error_summary, started_at, completed_at,
+    created_at, updated_at
 `
 
 type FailRunProcessingParams struct {
@@ -210,7 +225,10 @@ func (q *Queries) FailRunProcessing(ctx context.Context, arg FailRunProcessingPa
 }
 
 const getRunProcessingByID = `-- name: GetRunProcessingByID :one
-SELECT run_id, status, claim_token, lease_expires_at, cursor_raw_record_id, records_seen, records_new, records_changed, records_unchanged, records_failed, error_summary, started_at, completed_at, created_at, updated_at FROM ingestion_run_processing WHERE run_id = $1
+SELECT run_id, status, claim_token, lease_expires_at, cursor_raw_record_id, records_seen, records_new,
+    records_changed, records_unchanged, records_failed, error_summary, started_at, completed_at,
+    created_at, updated_at
+FROM ingestion_run_processing WHERE run_id = $1
 `
 
 func (q *Queries) GetRunProcessingByID(ctx context.Context, runID pgtype.UUID) (IngestionRunProcessing, error) {
@@ -243,7 +261,9 @@ SET status = 'PENDING',
     lease_expires_at = NULL,
     updated_at = NOW()
 WHERE run_id = $1::uuid AND claim_token = $2::uuid
-RETURNING run_id, status, claim_token, lease_expires_at, cursor_raw_record_id, records_seen, records_new, records_changed, records_unchanged, records_failed, error_summary, started_at, completed_at, created_at, updated_at
+RETURNING run_id, status, claim_token, lease_expires_at, cursor_raw_record_id, records_seen, records_new,
+    records_changed, records_unchanged, records_failed, error_summary, started_at, completed_at,
+    created_at, updated_at
 `
 
 type ReleaseRunProcessingClaimParams struct {
@@ -291,7 +311,9 @@ SET status = 'PENDING',
     updated_at = NOW()
 WHERE run_id = $1::uuid
   AND (status = 'PENDING' OR status = 'FAILED' OR status = 'COMPLETED' OR lease_expires_at < NOW())
-RETURNING run_id, status, claim_token, lease_expires_at, cursor_raw_record_id, records_seen, records_new, records_changed, records_unchanged, records_failed, error_summary, started_at, completed_at, created_at, updated_at
+RETURNING run_id, status, claim_token, lease_expires_at, cursor_raw_record_id, records_seen, records_new,
+    records_changed, records_unchanged, records_failed, error_summary, started_at, completed_at,
+    created_at, updated_at
 `
 
 func (q *Queries) ResetRunProcessingFromStart(ctx context.Context, runID pgtype.UUID) (IngestionRunProcessing, error) {
@@ -317,21 +339,6 @@ func (q *Queries) ResetRunProcessingFromStart(ctx context.Context, runID pgtype.
 	return i, err
 }
 
-const seedPendingRunProcessing = `-- name: SeedPendingRunProcessing :exec
-INSERT INTO ingestion_run_processing (run_id)
-SELECT id FROM ingestion_runs r
-WHERE (status = 'COMPLETED' OR status = 'PARTIAL')
-  AND NOT EXISTS (
-      SELECT 1 FROM ingestion_run_processing p WHERE p.run_id = r.id
-  )
-ON CONFLICT (run_id) DO NOTHING
-`
-
-func (q *Queries) SeedPendingRunProcessing(ctx context.Context) error {
-	_, err := q.db.Exec(ctx, seedPendingRunProcessing)
-	return err
-}
-
 const updateRunProcessingProgress = `-- name: UpdateRunProcessingProgress :one
 UPDATE ingestion_run_processing
 SET cursor_raw_record_id = $1::uuid,
@@ -343,7 +350,9 @@ SET cursor_raw_record_id = $1::uuid,
     lease_expires_at = NOW() + $7::interval,
     updated_at = NOW()
 WHERE run_id = $8::uuid AND status = 'RUNNING' AND claim_token = $9::uuid
-RETURNING run_id, status, claim_token, lease_expires_at, cursor_raw_record_id, records_seen, records_new, records_changed, records_unchanged, records_failed, error_summary, started_at, completed_at, created_at, updated_at
+RETURNING run_id, status, claim_token, lease_expires_at, cursor_raw_record_id, records_seen, records_new,
+    records_changed, records_unchanged, records_failed, error_summary, started_at, completed_at,
+    created_at, updated_at
 `
 
 type UpdateRunProcessingProgressParams struct {

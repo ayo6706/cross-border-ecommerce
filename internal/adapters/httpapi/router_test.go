@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -51,7 +52,7 @@ func TestRouter_LoggingAndPanicRecovery(t *testing.T) {
 	t.Parallel()
 
 	var logBuf bytes.Buffer
-	opts := logging.Options{Level: "info", Format: "json"}
+	opts := logging.Options{Level: slog.LevelInfo, Format: logging.FormatJSON}
 	logger := logging.NewLogger(&logBuf, opts)
 
 	router := httpapi.NewRouter(httpapi.RouterConfig{
@@ -91,7 +92,7 @@ func TestPanicRecovery(t *testing.T) {
 	t.Parallel()
 
 	var logBuf bytes.Buffer
-	opts := logging.Options{Level: "info", Format: "json"}
+	opts := logging.Options{Level: slog.LevelInfo, Format: logging.FormatJSON}
 	logger := logging.NewLogger(&logBuf, opts)
 
 	panickingPinger := &panickingPingerMock{}

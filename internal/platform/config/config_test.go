@@ -2,11 +2,14 @@ package config_test
 
 import (
 	"errors"
+	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/ayo6706/cross-border-ecommerce/internal/domain/ingestion"
 	"github.com/ayo6706/cross-border-ecommerce/internal/platform/config"
+	"github.com/ayo6706/cross-border-ecommerce/internal/platform/logging"
 )
 
 func TestLoad_Defaults(t *testing.T) {
@@ -49,10 +52,10 @@ func TestLoad_Defaults(t *testing.T) {
 		t.Errorf("expected default ConnectTimeout 5s, got %v", cfg.Database.ConnectTimeout)
 	}
 
-	if cfg.Log.Level != "info" {
+	if cfg.Log.Level != slog.LevelInfo {
 		t.Errorf("expected default Log Level info, got %s", cfg.Log.Level)
 	}
-	if cfg.Log.Format != "json" {
+	if cfg.Log.Format != logging.FormatJSON {
 		t.Errorf("expected default Log Format json, got %s", cfg.Log.Format)
 	}
 	if cfg.Log.AddSource {
@@ -123,48 +126,60 @@ func TestLoad_Defaults(t *testing.T) {
 	if cfg.Outbox.MaxAttempts != 10 {
 		t.Errorf("expected default Outbox MaxAttempts 10, got %d", cfg.Outbox.MaxAttempts)
 	}
+	wantRunProcessing := config.RunProcessingConfig{
+		PollInterval: 2 * time.Second,
+		Lease:        30 * time.Second,
+		BatchSize:    500,
+		ErrorBudget:  ingestion.ErrorBudget{MaxErrorRate: 0.05, MinSampleRows: 100},
+	}
+	if cfg.RunProcessing != wantRunProcessing {
+		t.Errorf("RunProcessing defaults = %+v, want %+v", cfg.RunProcessing, wantRunProcessing)
+	}
 }
 
 func TestLoad_CustomOverrides(t *testing.T) {
 	t.Parallel()
 
 	env := map[string]string{
-		"PORT":                      "9000",
-		"SERVER_READ_TIMEOUT":       "5s",
-		"SERVER_WRITE_TIMEOUT":      "5s",
-		"SERVER_IDLE_TIMEOUT":       "30s",
-		"SERVER_SHUTDOWN_TIMEOUT":   "10s",
-		"DATABASE_URL":              "postgres://user:pass@dbhost:5432/testdb",
-		"DB_MAX_CONNS":              "50",
-		"DB_MIN_CONNS":              "10",
-		"DB_MAX_CONN_IDLE_TIME":     "10m",
-		"DB_MAX_CONN_LIFETIME":      "30m",
-		"DB_CONNECT_TIMEOUT":        "3s",
-		"LOG_LEVEL":                 "DEBUG",
-		"LOG_FORMAT":                "TEXT",
-		"LOG_ADD_SOURCE":            "true",
-		"APP_ENV":                   "production",
-		"SERVICE_NAME":              "trade-api",
-		"REDIS_URL":                 "redis://redis.internal:6379",
-		"STREAM_RETENTION":          "72h",
-		"STREAM_CONSUMER_BLOCK":     "5s",
-		"STREAM_CLAIM_MIN_IDLE":     "5m",
-		"STREAM_CLAIM_INTERVAL":     "15s",
-		"STREAM_CONSUMER_BATCH":     "25",
-		"STREAM_HANDLER_TIMEOUT":    "45s",
-		"STREAM_RETRY_MAX_ATTEMPTS": "3",
-		"STREAM_RETRY_BASE_BACKOFF": "100ms",
-		"STREAM_RETRY_MAX_BACKOFF":  "1s",
-		"IDEMPOTENCY_LEASE_TTL":     "60s",
-		"WORKER_CONCURRENCY":        "30",
-		"WORKER_QUEUE_SIZE":         "50",
-		"WORKER_DRAIN_TIMEOUT":      "20s",
-		"OUTBOX_BATCH_SIZE":         "200",
-		"OUTBOX_POLL_INTERVAL":      "1s",
-		"OUTBOX_LEASE":              "45s",
-		"OUTBOX_BASE_BACKOFF":       "2s",
-		"OUTBOX_MAX_BACKOFF":        "10m",
-		"OUTBOX_MAX_ATTEMPTS":       "20",
+		"PORT":                         "9000",
+		"SERVER_READ_TIMEOUT":          "5s",
+		"SERVER_WRITE_TIMEOUT":         "5s",
+		"SERVER_IDLE_TIMEOUT":          "30s",
+		"SERVER_SHUTDOWN_TIMEOUT":      "10s",
+		"DATABASE_URL":                 "postgres://user:pass@dbhost:5432/testdb",
+		"DB_MAX_CONNS":                 "50",
+		"DB_MIN_CONNS":                 "10",
+		"DB_MAX_CONN_IDLE_TIME":        "10m",
+		"DB_MAX_CONN_LIFETIME":         "30m",
+		"DB_CONNECT_TIMEOUT":           "3s",
+		"LOG_LEVEL":                    "DEBUG",
+		"LOG_FORMAT":                   "TEXT",
+		"LOG_ADD_SOURCE":               "true",
+		"APP_ENV":                      "production",
+		"SERVICE_NAME":                 "trade-api",
+		"REDIS_URL":                    "redis://redis.internal:6379",
+		"STREAM_RETENTION":             "72h",
+		"STREAM_CONSUMER_BLOCK":        "5s",
+		"STREAM_CLAIM_MIN_IDLE":        "5m",
+		"STREAM_CLAIM_INTERVAL":        "15s",
+		"STREAM_CONSUMER_BATCH":        "25",
+		"STREAM_HANDLER_TIMEOUT":       "45s",
+		"STREAM_RETRY_MAX_ATTEMPTS":    "3",
+		"STREAM_RETRY_BASE_BACKOFF":    "100ms",
+		"STREAM_RETRY_MAX_BACKOFF":     "1s",
+		"IDEMPOTENCY_LEASE_TTL":        "60s",
+		"WORKER_CONCURRENCY":           "30",
+		"WORKER_QUEUE_SIZE":            "50",
+		"WORKER_DRAIN_TIMEOUT":         "20s",
+		"OUTBOX_BATCH_SIZE":            "200",
+		"OUTBOX_POLL_INTERVAL":         "1s",
+		"OUTBOX_LEASE":                 "45s",
+		"OUTBOX_BASE_BACKOFF":          "2s",
+		"OUTBOX_MAX_BACKOFF":           "10m",
+		"OUTBOX_MAX_ATTEMPTS":          "20",
+		"RUN_PROCESSING_POLL_INTERVAL": "5s",
+		"RUN_PROCESSING_LEASE":         "2m",
+		"RUN_PROCESSING_BATCH_SIZE":    "250",
 	}
 
 	cfg, err := config.LoadFromLookup(func(k string) string {
@@ -183,10 +198,10 @@ func TestLoad_CustomOverrides(t *testing.T) {
 	if cfg.Database.MaxConns != 50 {
 		t.Errorf("expected MaxConns 50, got %d", cfg.Database.MaxConns)
 	}
-	if cfg.Log.Level != "debug" {
+	if cfg.Log.Level != slog.LevelDebug {
 		t.Errorf("expected normalized Log Level debug, got %s", cfg.Log.Level)
 	}
-	if cfg.Log.Format != "text" {
+	if cfg.Log.Format != logging.FormatText {
 		t.Errorf("expected normalized Log Format text, got %s", cfg.Log.Format)
 	}
 	if !cfg.Log.AddSource {
@@ -255,6 +270,10 @@ func TestLoad_CustomOverrides(t *testing.T) {
 	if cfg.Idempotency.LeaseTTL != 60*time.Second {
 		t.Errorf("expected Idempotency LeaseTTL 60s, got %v", cfg.Idempotency.LeaseTTL)
 	}
+	if cfg.RunProcessing.PollInterval != 5*time.Second || cfg.RunProcessing.Lease != 2*time.Minute ||
+		cfg.RunProcessing.BatchSize != 250 {
+		t.Errorf("RunProcessing = %+v, want poll 5s, lease 2m, batch 250", cfg.RunProcessing)
+	}
 }
 
 func TestConfig_ValidationFailures(t *testing.T) {
@@ -316,20 +335,6 @@ func TestConfig_ValidationFailures(t *testing.T) {
 			expectedErr: config.ErrInvalidTimeout,
 		},
 		{
-			name: "invalid log level",
-			modify: func(c *config.Config) {
-				c.Log.Level = "verbose"
-			},
-			expectedErr: config.ErrInvalidLogLevel,
-		},
-		{
-			name: "invalid log format",
-			modify: func(c *config.Config) {
-				c.Log.Format = "xml"
-			},
-			expectedErr: config.ErrInvalidLogFormat,
-		},
-		{
 			name: "negative stream retention",
 			modify: func(c *config.Config) {
 				c.Stream.Retention = 0
@@ -358,20 +363,6 @@ func TestConfig_ValidationFailures(t *testing.T) {
 			expectedErr: config.ErrInvalidTimeout,
 		},
 		{
-			name: "stream consumer batch zero",
-			modify: func(c *config.Config) {
-				c.Stream.ConsumerBatch = 0
-			},
-			expectedErr: config.ErrInvalidStreamConfig,
-		},
-		{
-			name: "stream consumer batch exceeds 1000",
-			modify: func(c *config.Config) {
-				c.Stream.ConsumerBatch = 1001
-			},
-			expectedErr: config.ErrInvalidStreamConfig,
-		},
-		{
 			name: "stream claim interval zero",
 			modify: func(c *config.Config) {
 				c.Stream.ClaimInterval = 0
@@ -379,12 +370,34 @@ func TestConfig_ValidationFailures(t *testing.T) {
 			expectedErr: config.ErrInvalidTimeout,
 		},
 		{
+			// Rejected by the retry-window rule: the window is at least one handler timeout.
 			name: "stream claim min idle less than or equal to handler timeout",
 			modify: func(c *config.Config) {
 				c.Stream.ClaimMinIdle = 5 * time.Second
 				c.Stream.HandlerTimeout = 10 * time.Second
 			},
 			expectedErr: config.ErrInvalidStreamConfig,
+		},
+		{
+			name: "run processing poll interval zero",
+			modify: func(c *config.Config) {
+				c.RunProcessing.PollInterval = 0
+			},
+			expectedErr: config.ErrInvalidTimeout,
+		},
+		{
+			name: "run processing lease zero",
+			modify: func(c *config.Config) {
+				c.RunProcessing.Lease = 0
+			},
+			expectedErr: config.ErrInvalidTimeout,
+		},
+		{
+			name: "run processing batch size zero",
+			modify: func(c *config.Config) {
+				c.RunProcessing.BatchSize = 0
+			},
+			expectedErr: config.ErrInvalidRunProcessingConfig,
 		},
 		{
 			name: "stream retry max attempts zero",
@@ -456,9 +469,24 @@ func TestLoad_InvalidEnvironmentValues(t *testing.T) {
 	t.Parallel()
 
 	invalidEnvTests := []struct {
-		name string
-		env  map[string]string
+		name    string
+		env     map[string]string
+		wantErr error // nil: any error
 	}{
+		{
+			name:    "unknown log level never falls back to info",
+			env:     map[string]string{"LOG_LEVEL": "verbose"},
+			wantErr: logging.ErrInvalidLevel,
+		},
+		{
+			name:    "unknown log format",
+			env:     map[string]string{"LOG_FORMAT": "xml"},
+			wantErr: logging.ErrInvalidFormat,
+		},
+		{
+			name: "malformed run processing batch size",
+			env:  map[string]string{"RUN_PROCESSING_BATCH_SIZE": "lots"},
+		},
 		{
 			name: "malformed read timeout",
 			env:  map[string]string{"SERVER_READ_TIMEOUT": "invalid-time"},
@@ -497,7 +525,65 @@ func TestLoad_InvalidEnvironmentValues(t *testing.T) {
 			if err == nil {
 				t.Fatalf("expected error for invalid env %s, got nil", tc.name)
 			}
+			if tc.wantErr != nil && !errors.Is(err, tc.wantErr) {
+				t.Fatalf("expected error wrapping %v, got %v", tc.wantErr, err)
+			}
 		})
+	}
+}
+
+func TestLoad_ReportsEveryMalformedVariable(t *testing.T) {
+	t.Parallel()
+
+	_, err := config.LoadFromLookup(func(k string) string {
+		return map[string]string{
+			"DATABASE_URL":        "postgres://user:pass@dbhost:5432/testdb",
+			"SERVER_READ_TIMEOUT": "soon",
+			"DB_MAX_CONNS":        "many",
+		}[k]
+	})
+	if err == nil {
+		t.Fatal("expected an error, got nil")
+	}
+	for _, key := range []string{"SERVER_READ_TIMEOUT", "DB_MAX_CONNS"} {
+		if !strings.Contains(err.Error(), key) {
+			t.Errorf("error does not name %s: %v", key, err)
+		}
+	}
+}
+
+func TestLoadDatabase_IgnoresOtherSections(t *testing.T) {
+	t.Parallel()
+
+	db, err := config.LoadDatabase(func(k string) string {
+		return map[string]string{
+			"DATABASE_URL": "postgres://user:pass@dbhost:5432/testdb",
+			"DB_MAX_CONNS": "3",
+			"DB_MIN_CONNS": "1",
+			"PORT":         "not-a-port",
+			"LOG_LEVEL":    "verbose",
+		}[k]
+	})
+	if err != nil {
+		t.Fatalf("an invalid PORT or LOG_LEVEL must not block migrations: %v", err)
+	}
+	if db.MaxConns != 3 || db.MinConns != 1 || db.ConnectTimeout != 5*time.Second {
+		t.Fatalf("database config = %+v; want the DB_* values and defaults", db)
+	}
+
+	if _, err := config.LoadDatabase(func(string) string { return "" }); !errors.Is(err, config.ErrEmptyDatabaseURL) {
+		t.Fatalf("missing DATABASE_URL: error = %v; want ErrEmptyDatabaseURL", err)
+	}
+	if _, err := config.LoadDatabase(nil); !errors.Is(err, config.ErrNilLookup) {
+		t.Fatalf("nil lookup: error = %v; want ErrNilLookup", err)
+	}
+}
+
+func TestLoadFromLookup_NilLookupFails(t *testing.T) {
+	t.Parallel()
+
+	if _, err := config.LoadFromLookup(nil); !errors.Is(err, config.ErrNilLookup) {
+		t.Fatalf("LoadFromLookup(nil) error = %v; want ErrNilLookup, not a silent read of the environment", err)
 	}
 }
 
@@ -652,10 +738,7 @@ func TestLoad_IngestionErrorBudget(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		budget, err := cfg.Ingestion.ErrorBudget()
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
+		budget := cfg.RunProcessing.ErrorBudget
 		if budget != (ingestion.ErrorBudget{MaxErrorRate: 0.05, MinSampleRows: 100}) {
 			t.Fatalf("default budget = %+v, want 5%% over at least 100 rows", budget)
 		}
@@ -670,10 +753,7 @@ func TestLoad_IngestionErrorBudget(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		budget, err := cfg.Ingestion.ErrorBudget()
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
+		budget := cfg.RunProcessing.ErrorBudget
 		if budget != (ingestion.ErrorBudget{MaxErrorRate: 0.2, MinSampleRows: 10}) {
 			t.Fatalf("budget = %+v, want the configured values", budget)
 		}

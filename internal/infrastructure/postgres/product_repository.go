@@ -123,12 +123,6 @@ func (r *ProductRepository) FindSnapshotsByIdentities(ctx context.Context, ident
 	results := make(map[string]*product.Snapshot, len(rows))
 	for i := range rows {
 		row := &rows[i]
-		var currentVersionID *string
-		if row.CurrentVersionID.Valid {
-			v := uuidToString(row.CurrentVersionID)
-			currentVersionID = &v
-		}
-
 		var storedVersion *product.ProductVersion
 		if row.VersionID.Valid {
 			var attrs map[string]string
@@ -137,12 +131,6 @@ func (r *ProductRepository) FindSnapshotsByIdentities(ctx context.Context, ident
 					return nil, fmt.Errorf("unmarshal version attributes for version %s: %w", uuidToString(row.VersionID), err)
 				}
 			}
-			var runID *string
-			if row.VersionIngestionRunID.Valid {
-				rID := uuidToString(row.VersionIngestionRunID)
-				runID = &rID
-			}
-
 			storedVersion = &product.ProductVersion{
 				ID:             uuidToString(row.VersionID),
 				ProductID:      product.ID(uuidToString(row.ProductID)),
@@ -153,7 +141,7 @@ func (r *ProductRepository) FindSnapshotsByIdentities(ctx context.Context, ident
 				Brand:          row.VersionBrand.String,
 				OriginCountry:  row.VersionOriginCountry.String,
 				Attributes:     attrs,
-				IngestionRunID: runID,
+				IngestionRunID: uuidPtr(row.VersionIngestionRunID),
 				CreatedAt:      row.VersionCreatedAt.Time.UTC(),
 			}
 		}
@@ -161,7 +149,7 @@ func (r *ProductRepository) FindSnapshotsByIdentities(ctx context.Context, ident
 		snap := &product.Snapshot{
 			ProductSourceID:      uuidToString(row.ProductSourceID),
 			ProductID:            product.ID(uuidToString(row.ProductID)),
-			CurrentVersionID:     currentVersionID,
+			CurrentVersionID:     uuidPtr(row.CurrentVersionID),
 			CurrentFingerprint:   row.CurrentFingerprint,
 			LastSourceUpdatedAt:  fromTimestamptz(row.LastSourceUpdatedAt),
 			LastReceivedAt:       row.LastReceivedAt.Time.UTC(),
@@ -196,12 +184,6 @@ func mapPostgresError(err error) error {
 }
 
 func toDomainProduct(row *generated.Product) *product.Product {
-	var currentVersionID *string
-	if row.CurrentVersionID.Valid {
-		v := uuidToString(row.CurrentVersionID)
-		currentVersionID = &v
-	}
-
 	return &product.Product{
 		ID:                 product.ID(uuidToString(row.ID)),
 		CanonicalName:      row.CanonicalName,
@@ -209,7 +191,7 @@ func toDomainProduct(row *generated.Product) *product.Product {
 		Brand:              row.Brand,
 		OriginCountry:      row.OriginCountry,
 		Status:             product.Status(row.Status),
-		CurrentVersionID:   currentVersionID,
+		CurrentVersionID:   uuidPtr(row.CurrentVersionID),
 		CurrentFingerprint: row.CurrentFingerprint,
 		CreatedAt:          row.CreatedAt.Time.UTC(),
 		UpdatedAt:          row.UpdatedAt.Time.UTC(),

@@ -1,12 +1,3 @@
--- name: SeedPendingRunProcessing :exec
-INSERT INTO ingestion_run_processing (run_id)
-SELECT id FROM ingestion_runs r
-WHERE (status = 'COMPLETED' OR status = 'PARTIAL')
-  AND NOT EXISTS (
-      SELECT 1 FROM ingestion_run_processing p WHERE p.run_id = r.id
-  )
-ON CONFLICT (run_id) DO NOTHING;
-
 -- name: ClaimNextRunProcessing :one
 WITH candidate AS (
     SELECT run_id FROM ingestion_run_processing
@@ -23,7 +14,14 @@ SET status = 'RUNNING',
     updated_at = NOW()
 FROM candidate
 WHERE ingestion_run_processing.run_id = candidate.run_id
-RETURNING ingestion_run_processing.*;
+RETURNING ingestion_run_processing.run_id, ingestion_run_processing.status,
+    ingestion_run_processing.claim_token, ingestion_run_processing.lease_expires_at,
+    ingestion_run_processing.cursor_raw_record_id, ingestion_run_processing.records_seen,
+    ingestion_run_processing.records_new, ingestion_run_processing.records_changed,
+    ingestion_run_processing.records_unchanged, ingestion_run_processing.records_failed,
+    ingestion_run_processing.error_summary, ingestion_run_processing.started_at,
+    ingestion_run_processing.completed_at, ingestion_run_processing.created_at,
+    ingestion_run_processing.updated_at;
 
 -- name: ClaimSpecificRunProcessing :one
 UPDATE ingestion_run_processing
@@ -34,16 +32,23 @@ SET status = 'RUNNING',
     updated_at = NOW()
 WHERE run_id = @run_id::uuid
   AND (status = 'PENDING' OR status = 'FAILED' OR status = 'COMPLETED' OR lease_expires_at < NOW() OR claim_token = @claim_token::uuid)
-RETURNING *;
+RETURNING run_id, status, claim_token, lease_expires_at, cursor_raw_record_id, records_seen, records_new,
+    records_changed, records_unchanged, records_failed, error_summary, started_at, completed_at,
+    created_at, updated_at;
 
 -- name: GetRunProcessingByID :one
-SELECT * FROM ingestion_run_processing WHERE run_id = $1;
+SELECT run_id, status, claim_token, lease_expires_at, cursor_raw_record_id, records_seen, records_new,
+    records_changed, records_unchanged, records_failed, error_summary, started_at, completed_at,
+    created_at, updated_at
+FROM ingestion_run_processing WHERE run_id = $1;
 
 -- name: EnsureRunProcessingExists :one
 INSERT INTO ingestion_run_processing (run_id)
 VALUES ($1)
 ON CONFLICT (run_id) DO UPDATE SET updated_at = NOW()
-RETURNING *;
+RETURNING run_id, status, claim_token, lease_expires_at, cursor_raw_record_id, records_seen, records_new,
+    records_changed, records_unchanged, records_failed, error_summary, started_at, completed_at,
+    created_at, updated_at;
 
 -- name: UpdateRunProcessingProgress :one
 UPDATE ingestion_run_processing
@@ -56,7 +61,9 @@ SET cursor_raw_record_id = @cursor_id::uuid,
     lease_expires_at = NOW() + @lease_duration::interval,
     updated_at = NOW()
 WHERE run_id = @run_id::uuid AND status = 'RUNNING' AND claim_token = @claim_token::uuid
-RETURNING *;
+RETURNING run_id, status, claim_token, lease_expires_at, cursor_raw_record_id, records_seen, records_new,
+    records_changed, records_unchanged, records_failed, error_summary, started_at, completed_at,
+    created_at, updated_at;
 
 -- name: ReleaseRunProcessingClaim :one
 UPDATE ingestion_run_processing
@@ -65,7 +72,9 @@ SET status = 'PENDING',
     lease_expires_at = NULL,
     updated_at = NOW()
 WHERE run_id = @run_id::uuid AND claim_token = @claim_token::uuid
-RETURNING *;
+RETURNING run_id, status, claim_token, lease_expires_at, cursor_raw_record_id, records_seen, records_new,
+    records_changed, records_unchanged, records_failed, error_summary, started_at, completed_at,
+    created_at, updated_at;
 
 -- name: CompleteRunProcessing :one
 UPDATE ingestion_run_processing
@@ -75,7 +84,9 @@ SET status = 'COMPLETED',
     completed_at = NOW(),
     updated_at = NOW()
 WHERE run_id = @run_id::uuid AND claim_token = @claim_token::uuid
-RETURNING *;
+RETURNING run_id, status, claim_token, lease_expires_at, cursor_raw_record_id, records_seen, records_new,
+    records_changed, records_unchanged, records_failed, error_summary, started_at, completed_at,
+    created_at, updated_at;
 
 -- name: FailRunProcessing :one
 UPDATE ingestion_run_processing
@@ -86,7 +97,9 @@ SET status = 'FAILED',
     completed_at = NOW(),
     updated_at = NOW()
 WHERE run_id = @run_id::uuid AND (claim_token = @claim_token::uuid OR @claim_token::uuid IS NULL)
-RETURNING *;
+RETURNING run_id, status, claim_token, lease_expires_at, cursor_raw_record_id, records_seen, records_new,
+    records_changed, records_unchanged, records_failed, error_summary, started_at, completed_at,
+    created_at, updated_at;
 
 -- name: ResetRunProcessingFromStart :one
 UPDATE ingestion_run_processing
@@ -105,4 +118,6 @@ SET status = 'PENDING',
     updated_at = NOW()
 WHERE run_id = @run_id::uuid
   AND (status = 'PENDING' OR status = 'FAILED' OR status = 'COMPLETED' OR lease_expires_at < NOW())
-RETURNING *;
+RETURNING run_id, status, claim_token, lease_expires_at, cursor_raw_record_id, records_seen, records_new,
+    records_changed, records_unchanged, records_failed, error_summary, started_at, completed_at,
+    created_at, updated_at;

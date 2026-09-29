@@ -132,7 +132,6 @@ SET status = 'PROCESSED',
     last_error = NULL
 WHERE id = ANY($1::uuid[])
   AND claim_token = $2::uuid
-  AND status = 'PENDING'
 `
 
 type MarkOutboxPublishedParams struct {
@@ -140,6 +139,9 @@ type MarkOutboxPublishedParams struct {
 	ClaimToken pgtype.UUID   `json:"claim_token"`
 }
 
+// A matching claim token implies status = 'PENDING' (chk_outbox_claim_pending). Leaving status out
+// keeps this on the primary key: with it, the planner may walk idx_outbox_claimable over the whole
+// pending backlog when statistics lag a burst of events.
 func (q *Queries) MarkOutboxPublished(ctx context.Context, arg MarkOutboxPublishedParams) (int64, error) {
 	result, err := q.db.Exec(ctx, markOutboxPublished, arg.Ids, arg.ClaimToken)
 	if err != nil {

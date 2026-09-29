@@ -1,5 +1,6 @@
 -- name: ListProductChangesByProductID :many
-SELECT *
+SELECT id, product_id, from_version_id, to_version_id, change_type, changed_fields, ingestion_run_id,
+       raw_record_id, detected_at
 FROM product_changes
 WHERE product_id = $1
 ORDER BY detected_at DESC, id DESC

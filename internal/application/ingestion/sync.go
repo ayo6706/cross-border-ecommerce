@@ -8,9 +8,8 @@ import (
 
 	domainIngestion "github.com/ayo6706/cross-border-ecommerce/internal/domain/ingestion"
 	"github.com/ayo6706/cross-border-ecommerce/internal/domain/source"
+	"github.com/ayo6706/cross-border-ecommerce/internal/platform/cleanup"
 )
-
-const runCleanupTimeout = 5 * time.Second
 
 // SyncParams contains parameters required to execute an ingestion sync run.
 // ErrorBudget bounds the share of rows a run may skip before the run is failed.
@@ -148,7 +147,7 @@ func (c *SyncCoordinator) persistBatch(ctx context.Context, runID string, res do
 // cancelRun marks the run CANCELLED on a context that survives the caller's
 // cancellation, and returns the cancellation cause joined with any cleanup error.
 func (c *SyncCoordinator) cancelRun(ctx context.Context, runID, reason string) error {
-	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), runCleanupTimeout)
+	cleanupCtx, cancel := cleanup.Context(ctx)
 	defer cancel()
 
 	cause := context.Cause(ctx)
@@ -163,7 +162,7 @@ func (c *SyncCoordinator) cancelRun(ctx context.Context, runID, reason string) e
 
 // failRun marks the run FAILED and returns runErr joined with any cleanup error.
 func (c *SyncCoordinator) failRun(ctx context.Context, runID string, runErr error) error {
-	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), runCleanupTimeout)
+	cleanupCtx, cancel := cleanup.Context(ctx)
 	defer cancel()
 
 	if err := c.runService.FailRun(cleanupCtx, runID, runErr.Error()); err != nil {

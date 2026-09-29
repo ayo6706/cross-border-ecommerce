@@ -1,0 +1,2 @@
+-- Nothing to undo: the queued rows are the same rows the old worker scan would insert,
+-- and deleting them could drop a run the worker has not processed yet.

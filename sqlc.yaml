@@ -20,6 +20,9 @@ sql:
       - "migrations/000016_drop_idx_dlq_messages_status.up.sql"
       - "migrations/000017_drop_idx_dlq_messages_lookup.up.sql"
       - "migrations/000018_drop_idx_product_sources_product_id.up.sql"
+      - "migrations/000019_backfill_run_processing_queue.up.sql"
+      - "migrations/000020_chk_outbox_claim_pending.up.sql"
+      - "migrations/000021_validate_chk_outbox_claim_pending.up.sql"
     queries: "internal/infrastructure/postgres/queries"
     gen:
       go:

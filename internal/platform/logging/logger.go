@@ -2,6 +2,8 @@ package logging
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"strings"
@@ -74,24 +76,42 @@ func (h *ContextHandler) WithGroup(name string) slog.Handler {
 	return &ContextHandler{inner: h.inner.WithGroup(name)}
 }
 
-func ParseLevel(levelStr string) slog.Level {
-	switch strings.ToLower(strings.TrimSpace(levelStr)) {
-	case "debug":
-		return slog.LevelDebug
-	case "warn":
-		return slog.LevelWarn
-	case "error":
-		return slog.LevelError
+var (
+	ErrInvalidLevel  = errors.New("log level must be one of debug, info, warn, error")
+	ErrInvalidFormat = errors.New("log format must be json or text")
+)
+
+// ParseLevel accepts the slog level names (debug, info, warn, error; any case). Anything else
+// is an error: an unknown level never falls back to info.
+func ParseLevel(s string) (slog.Level, error) {
+	var level slog.Level
+	if err := level.UnmarshalText([]byte(strings.TrimSpace(s))); err != nil {
+		return 0, fmt.Errorf("%w: %q", ErrInvalidLevel, s)
+	}
+	return level, nil
+}
+
+type Format string
+
+const (
+	FormatJSON Format = "json"
+	FormatText Format = "text"
+)
+
+// ParseFormat accepts json or text, in any case.
+func ParseFormat(s string) (Format, error) {
+	switch f := Format(strings.ToLower(strings.TrimSpace(s))); f {
+	case FormatJSON, FormatText:
+		return f, nil
 	default:
-		return slog.LevelInfo
+		return "", fmt.Errorf("%w: %q", ErrInvalidFormat, s)
 	}
 }
 
-// Options configures NewLogger. Level is one of debug, info, warn, error;
-// Format is "json" (default) or "text".
+// Options configures NewLogger; platform/config parses them from LOG_* variables.
 type Options struct {
-	Level     string
-	Format    string
+	Level     slog.Level
+	Format    Format
 	AddSource bool
 }
 
@@ -99,12 +119,12 @@ type Options struct {
 // request and correlation IDs carried in the context.
 func NewLogger(w io.Writer, opts Options) *slog.Logger {
 	handlerOpts := &slog.HandlerOptions{
-		Level:     ParseLevel(opts.Level),
+		Level:     opts.Level,
 		AddSource: opts.AddSource,
 	}
 
 	var baseHandler slog.Handler
-	if strings.EqualFold(strings.TrimSpace(opts.Format), "text") {
+	if opts.Format == FormatText {
 		baseHandler = slog.NewTextHandler(w, handlerOpts)
 	} else {
 		baseHandler = slog.NewJSONHandler(w, handlerOpts)

@@ -19,10 +19,7 @@ func TestErrorBudget_Validation(t *testing.T) {
 		{0.01, 1},
 	}
 	for _, tc := range validCases {
-		b, err := ingestion.NewErrorBudget(tc.rate, tc.rows)
-		if err != nil {
-			t.Errorf("expected valid budget for (%f, %d), got %v", tc.rate, tc.rows, err)
-		}
+		b := ingestion.ErrorBudget{MaxErrorRate: tc.rate, MinSampleRows: tc.rows}
 		if err := b.Validate(); err != nil {
 			t.Errorf("expected Validate() to pass for (%f, %d), got %v", tc.rate, tc.rows, err)
 		}
@@ -42,10 +39,6 @@ func TestErrorBudget_Validation(t *testing.T) {
 	}
 	for _, tc := range invalidCases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := ingestion.NewErrorBudget(tc.rate, tc.rows)
-			if !errors.Is(err, ingestion.ErrInvalidErrorBudget) {
-				t.Errorf("expected ErrInvalidErrorBudget, got %v", err)
-			}
 			b := ingestion.ErrorBudget{MaxErrorRate: tc.rate, MinSampleRows: tc.rows}
 			if !errors.Is(b.Validate(), ingestion.ErrInvalidErrorBudget) {
 				t.Errorf("expected Validate() to return ErrInvalidErrorBudget, got %v", b.Validate())
@@ -57,9 +50,9 @@ func TestErrorBudget_Validation(t *testing.T) {
 func TestErrorBudget_Check(t *testing.T) {
 	t.Parallel()
 
-	budget, err := ingestion.NewErrorBudget(0.10, 10)
-	if err != nil {
-		t.Fatalf("unexpected error creating budget: %v", err)
+	budget := ingestion.ErrorBudget{MaxErrorRate: 0.10, MinSampleRows: 10}
+	if err := budget.Validate(); err != nil {
+		t.Fatalf("unexpected invalid budget: %v", err)
 	}
 
 	tests := []struct {

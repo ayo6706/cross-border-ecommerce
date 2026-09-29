@@ -22,40 +22,7 @@ func NewProductTxManager(pool *pgxpool.Pool) (*ProductTxManager, error) {
 }
 
 func (m *ProductTxManager) WithinTx(ctx context.Context, fn func(repos appProduct.TxRepos) error) error {
-	tx, err := m.pool.Begin(ctx)
-	if err != nil {
-		return fmt.Errorf("begin product transaction: %w", err)
-	}
-	defer func() {
-		_ = tx.Rollback(ctx)
-	}()
-
-	prodRepo, err := NewProductRepository(tx)
-	if err != nil {
-		return fmt.Errorf("create tx product repository: %w", err)
-	}
-
-	processingRepo, err := NewRunProcessingRepository(tx)
-	if err != nil {
-		return fmt.Errorf("create tx run processing repository: %w", err)
-	}
-
-	outboxRepo, err := NewOutboxRepository(tx)
-	if err != nil {
-		return fmt.Errorf("create tx outbox repository: %w", err)
-	}
-
-	if err := fn(appProduct.TxRepos{
-		Products:      prodRepo,
-		RunProcessing: processingRepo,
-		Outbox:        outboxRepo,
-	}); err != nil {
-		return err
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit product transaction: %w", err)
-	}
-
-	return nil
+	return withinTx(ctx, m.pool, "product", func(r txRepositories) error {
+		return fn(appProduct.TxRepos{Products: r.products, RunProcessing: r.processing, Outbox: r.outbox})
+	})
 }

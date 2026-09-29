@@ -28,12 +28,6 @@ func NewSourceRepository(db generated.DBTX) (*SourceRepository, error) {
 	}, nil
 }
 
-func (r *SourceRepository) WithTx(tx pgx.Tx) *SourceRepository {
-	return &SourceRepository{
-		queries: r.queries.WithTx(tx),
-	}
-}
-
 func (r *SourceRepository) FindByID(ctx context.Context, id source.ID) (*source.Source, error) {
 	trimmed := strings.TrimSpace(string(id))
 	if trimmed == "" {

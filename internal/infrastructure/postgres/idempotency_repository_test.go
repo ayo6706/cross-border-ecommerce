@@ -13,6 +13,7 @@ import (
 	appIdempotency "github.com/ayo6706/cross-border-ecommerce/internal/application/idempotency"
 	"github.com/ayo6706/cross-border-ecommerce/internal/infrastructure/postgres"
 	"github.com/ayo6706/cross-border-ecommerce/internal/platform/uuid"
+	"github.com/ayo6706/cross-border-ecommerce/internal/testsupport"
 	"github.com/ayo6706/cross-border-ecommerce/migrations"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -40,11 +41,7 @@ func setupLiveIdempotencyDB(t *testing.T) (*pgxpool.Pool, *postgres.IdempotencyR
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	pool, err := postgres.NewPool(ctx, connStr,
-		postgres.WithConnectTimeout(3*time.Second),
-		postgres.WithMaxConns(20),
-		postgres.WithMinConns(2),
-	)
+	pool, err := postgres.NewPool(ctx, testsupport.PoolConfig(connStr, 20))
 	if err != nil {
 		t.Skipf("skipping live database test: unable to connect to %s: %v", connStr, err)
 		return nil, nil
@@ -234,7 +231,8 @@ func TestIdempotency_Live(t *testing.T) {
 		require.NoError(t, err)
 		defer func() { _ = tx.Rollback(ctx) }()
 
-		txRepo := repo.WithTx(tx)
+		txRepo, err := postgres.NewIdempotencyRepository(tx)
+		require.NoError(t, err)
 		err = txRepo.CompleteKey(ctx, scope, eventID, token)
 		require.NoError(t, err)
 
@@ -274,7 +272,8 @@ func TestIdempotency_Live(t *testing.T) {
 		require.NoError(t, err)
 		defer func() { _ = txA.Rollback(ctx) }()
 
-		txRepoA := repo.WithTx(txA)
+		txRepoA, err := postgres.NewIdempotencyRepository(txA)
+		require.NoError(t, err)
 		err = txRepoA.CompleteKey(ctx, scope, eventID, tokenA)
 		assert.ErrorIs(t, err, appIdempotency.ErrLeaseLost, "Worker A must fail with ErrLeaseLost")
 		_ = txA.Rollback(ctx)

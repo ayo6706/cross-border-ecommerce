@@ -28,12 +28,6 @@ func NewIdempotencyRepository(db generated.DBTX) (*IdempotencyRepository, error)
 	}, nil
 }
 
-func (r *IdempotencyRepository) WithTx(tx pgx.Tx) *IdempotencyRepository {
-	return &IdempotencyRepository{
-		queries: r.queries.WithTx(tx),
-	}
-}
-
 //nolint:funlen // legacy baseline 2026-09-26: fix in ENG-025
 func (r *IdempotencyRepository) ClaimKey(
 	ctx context.Context,
@@ -175,13 +169,7 @@ func (r *IdempotencyRepository) GetKey(ctx context.Context, scope, key string) (
 		if errors.Is(err, pgx.ErrNoRows) {
 			return appIdempotency.Record{}, appIdempotency.ErrKeyNotFound
 		}
-		return appIdempotency.Record{}, err
-	}
-
-	var leaseToken *string
-	if row.LeaseToken.Valid {
-		s := uuidToString(row.LeaseToken)
-		leaseToken = &s
+		return appIdempotency.Record{}, fmt.Errorf("get idempotency key: %w", err)
 	}
 
 	var leaseExpiresAt *time.Time
@@ -201,7 +189,7 @@ func (r *IdempotencyRepository) GetKey(ctx context.Context, scope, key string) (
 		Key:            row.Key,
 		Status:         row.Status,
 		PayloadHash:    row.PayloadHash,
-		LeaseToken:     leaseToken,
+		LeaseToken:     uuidPtr(row.LeaseToken),
 		LeaseExpiresAt: leaseExpiresAt,
 		Attempts:       int(row.Attempts),
 		CreatedAt:      row.CreatedAt.Time,

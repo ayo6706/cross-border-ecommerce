@@ -9,8 +9,12 @@ import (
 
 	appMessaging "github.com/ayo6706/cross-border-ecommerce/internal/application/messaging"
 	platformBackoff "github.com/ayo6706/cross-border-ecommerce/internal/platform/backoff"
+	"github.com/ayo6706/cross-border-ecommerce/internal/platform/cleanup"
 	"github.com/ayo6706/cross-border-ecommerce/internal/platform/uuid"
 )
+
+// maxBatchSize bounds the events one claim statement locks and one RunOnce publishes.
+const maxBatchSize = 1000
 
 var (
 	ErrInvalidConfig = errors.New("invalid relay configuration")
@@ -53,8 +57,8 @@ type RelayConfig struct {
 }
 
 func (c RelayConfig) Validate() error {
-	if c.BatchSize <= 0 || c.BatchSize > 1000 {
-		return fmt.Errorf("%w: batch size must be between 1 and 1000, got %d", ErrInvalidConfig, c.BatchSize)
+	if c.BatchSize <= 0 || c.BatchSize > maxBatchSize {
+		return fmt.Errorf("%w: batch size must be between 1 and %d, got %d", ErrInvalidConfig, maxBatchSize, c.BatchSize)
 	}
 	if c.PollInterval <= 0 {
 		return fmt.Errorf("%w: poll interval must be strictly positive", ErrInvalidConfig)
@@ -107,7 +111,7 @@ func NewRelay(store Store, pub Publisher, cfg RelayConfig, logger *slog.Logger) 
 // relay can take them now instead of after the lease. It uses a detached context because the
 // caller's is already cancelled, and attempts both writes even if one fails.
 func (r *Relay) settleOnCancel(ctx context.Context, claimToken string, publishedIDs, unprocessedIDs []string) error {
-	settleCtx, settleCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	settleCtx, settleCancel := cleanup.Context(ctx)
 	defer settleCancel()
 
 	var markErr, relErr error

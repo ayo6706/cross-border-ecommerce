@@ -2,14 +2,17 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
 	"os"
+	"os/signal"
 	"strconv"
-	"time"
+	"syscall"
 
 	"github.com/ayo6706/cross-border-ecommerce/internal/infrastructure/postgres"
+	"github.com/ayo6706/cross-border-ecommerce/internal/platform/config"
 	"github.com/ayo6706/cross-border-ecommerce/migrations"
 )
 
@@ -20,41 +23,37 @@ func main() {
 	}
 }
 
-//nolint:funlen // legacy baseline 2026-09-26: fix in ENG-018
+// command is a parsed migrate invocation: up, down <steps> or version.
+type command struct {
+	name  string
+	steps int
+}
+
+// run has no deadline: a CREATE INDEX CONCURRENTLY migration on a large table can outlast any
+// fixed bound, so the deploy job owns the timeout and a signal cancels the run.
 func run() error {
-	var (
-		dbURLFlag string
-	)
-	flag.StringVar(&dbURLFlag, "database-url", "", "PostgreSQL database connection URL (or set DATABASE_URL)")
+	dbURL := flag.String("database-url", "", "PostgreSQL database URL (default: DATABASE_URL)")
 	flag.Parse()
-
-	args := flag.Args()
-	if len(args) == 0 {
-		return fmt.Errorf("missing command: specify 'up', 'down <steps>', or 'version'")
+	cmd, err := parseCommand(flag.Args())
+	if err != nil {
+		return err
 	}
 
-	command := args[0]
-
-	dbURL := dbURLFlag
-	if dbURL == "" {
-		dbURL = os.Getenv("DATABASE_URL")
+	dbCfg, err := config.LoadDatabase(func(key string) string {
+		if key == "DATABASE_URL" && *dbURL != "" {
+			return *dbURL
+		}
+		return os.Getenv(key)
+	})
+	if err != nil {
+		return fmt.Errorf("load database configuration: %w", err)
 	}
-	if dbURL == "" {
-		return fmt.Errorf("database URL is required: pass -database-url or set DATABASE_URL")
-	}
+	logger := slog.Default()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
-	pool, err := postgres.NewPool(
-		ctx,
-		dbURL,
-		postgres.WithMaxConns(5),
-		postgres.WithMinConns(1),
-		postgres.WithMaxConnLifetime(time.Hour),
-		postgres.WithMaxConnIdleTime(30*time.Minute),
-		postgres.WithConnectTimeout(10*time.Second),
-	)
+	pool, err := postgres.NewPool(ctx, dbCfg)
 	if err != nil {
 		return fmt.Errorf("connect to database: %w", err)
 	}
@@ -64,35 +63,54 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("initialize migrator: %w", err)
 	}
-
-	switch command {
-	case "up":
-		slog.Info("running pending database migrations")
-		if err := migrator.Up(ctx); err != nil {
-			return fmt.Errorf("migration up failed: %w", err)
-		}
-	case "down":
-		steps := 1
-		if len(args) > 1 {
-			parsed, err := strconv.Atoi(args[1])
-			if err != nil || parsed <= 0 {
-				return fmt.Errorf("invalid step count: %s (must be positive integer)", args[1])
-			}
-			steps = parsed
-		}
-		slog.Info("rolling back database migrations", "steps", steps)
-		if err := migrator.Down(ctx, steps); err != nil {
-			return fmt.Errorf("migration down failed: %w", err)
-		}
-	case "version":
-	default:
-		return fmt.Errorf("unknown command %q: use 'up', 'down', or 'version'", command)
+	if err := apply(ctx, migrator, cmd, logger); err != nil {
+		return err
 	}
 
 	version, err := migrator.Version(ctx)
 	if err != nil {
 		return fmt.Errorf("check version: %w", err)
 	}
-	slog.Info("current schema version", "version", version)
+	logger.Info("current schema version", slog.Int64("version", version))
+	return nil
+}
+
+func parseCommand(args []string) (command, error) {
+	if len(args) == 0 {
+		return command{}, errors.New("missing command: specify 'up', 'down <steps>', or 'version'")
+	}
+	switch args[0] {
+	case "up", "version":
+		return command{name: args[0]}, nil
+	case "down":
+		if len(args) == 1 {
+			return command{name: "down", steps: 1}, nil
+		}
+		steps, err := strconv.Atoi(args[1])
+		if err != nil {
+			return command{}, fmt.Errorf("invalid step count %q: %w", args[1], err)
+		}
+		if steps <= 0 {
+			return command{}, fmt.Errorf("invalid step count %d: must be a positive integer", steps)
+		}
+		return command{name: "down", steps: steps}, nil
+	default:
+		return command{}, fmt.Errorf("unknown command %q: use 'up', 'down', or 'version'", args[0])
+	}
+}
+
+func apply(ctx context.Context, migrator *postgres.Migrator, cmd command, logger *slog.Logger) error {
+	switch cmd.name {
+	case "up":
+		logger.Info("running pending database migrations")
+		if err := migrator.Up(ctx); err != nil {
+			return fmt.Errorf("migration up failed: %w", err)
+		}
+	case "down":
+		logger.Info("rolling back database migrations", slog.Int("steps", cmd.steps))
+		if err := migrator.Down(ctx, cmd.steps); err != nil {
+			return fmt.Errorf("migration down failed: %w", err)
+		}
+	}
 	return nil
 }

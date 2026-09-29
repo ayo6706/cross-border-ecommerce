@@ -12,6 +12,10 @@ import (
 
 const maxListLimit = 1000
 
+func toInterval(d time.Duration) pgtype.Interval {
+	return pgtype.Interval{Microseconds: d.Microseconds(), Valid: true}
+}
+
 // toInt32 converts an int to int32, failing instead of silently truncating.
 func toInt32(n int) (int32, error) {
 	if n > math.MaxInt32 || n < math.MinInt32 {

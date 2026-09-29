@@ -23,6 +23,7 @@ import (
 	infraPostgres "github.com/ayo6706/cross-border-ecommerce/internal/infrastructure/postgres"
 	infraRedis "github.com/ayo6706/cross-border-ecommerce/internal/infrastructure/redis"
 	platformUUID "github.com/ayo6706/cross-border-ecommerce/internal/platform/uuid"
+	"github.com/ayo6706/cross-border-ecommerce/internal/testsupport"
 	"github.com/ayo6706/cross-border-ecommerce/migrations"
 	"github.com/jackc/pgx/v5/pgxpool"
 	goredis "github.com/redis/go-redis/v9"
@@ -43,11 +44,7 @@ func setupLivePostgresForDLQ(t *testing.T) (*pgxpool.Pool, *infraPostgres.DLQRep
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	pool, err := infraPostgres.NewPool(ctx, dbURL,
-		infraPostgres.WithConnectTimeout(3*time.Second),
-		infraPostgres.WithMaxConns(20),
-		infraPostgres.WithMinConns(2),
-	)
+	pool, err := infraPostgres.NewPool(ctx, testsupport.PoolConfig(dbURL, 20))
 	if err != nil {
 		t.Skipf("skipping live database test: unable to connect to %s: %v", dbURL, err)
 		return nil, nil, nil
@@ -843,7 +840,8 @@ func TestConsumer_ENG014_Live(t *testing.T) {
 
 		tx, err := pool.Begin(ctx)
 		require.NoError(t, err)
-		txRepo := idempotencyRepo.WithTx(tx)
+		txRepo, err := infraPostgres.NewIdempotencyRepository(tx)
+		require.NoError(t, err)
 		claimCtx := appIdempotency.WithClaim(ctx, &claim)
 		require.NoError(t, appIdempotency.CompleteInTx(claimCtx, txRepo))
 		require.NoError(t, tx.Commit(ctx))
