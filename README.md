@@ -45,7 +45,7 @@ Database Pool Variables (with defaults), used by every binary (`api`, `worker`, 
 - `DB_MAX_CONNS`: Pool size per process (default: `25`). Each process opens its own pool, so the sum
   over all running processes must stay below PostgreSQL `max_connections` (100 by default) minus
   its reserved slots. The worker runs two loops (run processing, outbox relay); the API holds one
-  connection per in-flight query. Sizing against measured concurrency is ENG-044.
+  connection per in-flight query. These defaults are not yet sized against measured load.
 - `DB_MIN_CONNS`: Idle connections kept open (default: `5`, must be <= `DB_MAX_CONNS`).
 - `DB_MAX_CONN_IDLE_TIME`: Idle connection lifetime (default: `15m`).
 - `DB_MAX_CONN_LIFETIME`: Connection lifetime (default: `1h`).

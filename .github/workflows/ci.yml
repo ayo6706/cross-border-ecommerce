@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [main]
 
+# Both jobs only check out code and run tests: the token needs read access and nothing else.
+permissions:
+  contents: read
+
 jobs:
   test:
     name: Test & Lint
@@ -64,7 +68,7 @@ jobs:
 
   query-plans:
     # tests/performance: EXPLAIN (ANALYZE, BUFFERS) of every statement the worker, relay and API
-    # send, on a dataset seeded at scale. Separate from the verify gate (ENG-018).
+    # send, on a dataset seeded at scale. Separate from the verify gate: plan shape needs scale.
     name: Query plans at scale
     runs-on: ubuntu-latest
 
