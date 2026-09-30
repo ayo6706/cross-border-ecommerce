@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/ayo6706/cross-border-ecommerce/internal/domain/ingestion"
+	"github.com/ayo6706/cross-border-ecommerce/internal/domain/regulatory"
 	"github.com/ayo6706/cross-border-ecommerce/internal/platform/config"
 	"github.com/ayo6706/cross-border-ecommerce/internal/platform/logging"
 )
@@ -576,6 +577,49 @@ func TestLoadDatabase_IgnoresOtherSections(t *testing.T) {
 	}
 	if _, err := config.LoadDatabase(nil); !errors.Is(err, config.ErrNilLookup) {
 		t.Fatalf("nil lookup: error = %v; want ErrNilLookup", err)
+	}
+}
+
+func regulatoryEnv() map[string]string {
+	env := map[string]string{"DATABASE_URL": "postgres://user:pass@dbhost:5432/testdb"}
+	for _, c := range regulatory.Categories() {
+		env[config.SLAVariable(c)] = "168h"
+	}
+	return env
+}
+
+func TestLoadRegulatory_ReadsEverySLA(t *testing.T) {
+	t.Parallel()
+
+	env := regulatoryEnv()
+	env["REGULATORY_SLA_SANCTIONS"] = "24h"
+	env["PORT"] = "not-a-port" // unrelated sections must not block regload
+	cfg, err := config.LoadRegulatory(func(k string) string { return env[k] })
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if cfg.SLAs[regulatory.CategorySanctions] != 24*time.Hour || cfg.SLAs[regulatory.CategoryTariff] != 168*time.Hour {
+		t.Fatalf("SLAs = %v", cfg.SLAs)
+	}
+}
+
+func TestLoadRegulatory_FailsOnEveryBadSLA(t *testing.T) {
+	t.Parallel()
+
+	env := regulatoryEnv()
+	delete(env, "REGULATORY_SLA_SANCTIONS")
+	env["REGULATORY_SLA_TARIFF"] = "weekly"
+	env["REGULATORY_SLA_PERMIT"] = "0s"
+	env["REGULATORY_SLA_EXPORT_CONTROL"] = "-1h"
+	_, err := config.LoadRegulatory(func(k string) string { return env[k] })
+	if !errors.Is(err, regulatory.ErrInvalidSLA) {
+		t.Fatalf("want ErrInvalidSLA among the errors, got %v", err)
+	}
+	for _, key := range []string{"REGULATORY_SLA_SANCTIONS", "REGULATORY_SLA_TARIFF",
+		"REGULATORY_SLA_PERMIT", "REGULATORY_SLA_EXPORT_CONTROL"} {
+		if !strings.Contains(err.Error(), key) {
+			t.Errorf("error does not name %s: %v", key, err)
+		}
 	}
 }
 

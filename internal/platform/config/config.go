@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ayo6706/cross-border-ecommerce/internal/domain/ingestion"
+	"github.com/ayo6706/cross-border-ecommerce/internal/domain/regulatory"
 	"github.com/ayo6706/cross-border-ecommerce/internal/platform/backoff"
 	"github.com/ayo6706/cross-border-ecommerce/internal/platform/logging"
 )
@@ -241,6 +242,55 @@ func LoadDatabase(lookup func(string) string) (DatabaseConfig, error) {
 		return DatabaseConfig{}, fmt.Errorf("validate database config: %w", err)
 	}
 	return db, nil
+}
+
+type RegulatoryConfig struct {
+	Database DatabaseConfig
+	SLAs     regulatory.SLAs
+}
+
+func SLAVariable(c regulatory.Category) string {
+	return "REGULATORY_SLA_" + string(c)
+}
+
+// LoadRegulatory reads the database settings and a refresh SLA for every regulatory category, for
+// cmd/regload. SLAs have no default: an unset, malformed or non-positive one fails, and every bad
+// variable is reported together.
+func LoadRegulatory(lookup func(string) string) (RegulatoryConfig, error) {
+	if lookup == nil {
+		return RegulatoryConfig{}, ErrNilLookup
+	}
+	e := &env{lookup: lookup}
+	db := loadDatabase(e)
+	slas := make(map[regulatory.Category]time.Duration)
+	for _, c := range regulatory.Categories() {
+		key := SLAVariable(c)
+		raw := strings.TrimSpace(lookup(key))
+		if raw == "" {
+			e.errs = append(e.errs, fmt.Errorf("%s is required", key))
+			continue
+		}
+		d, err := time.ParseDuration(raw)
+		if err == nil {
+			err = regulatory.ValidateSLA(c, d)
+		}
+		if err != nil {
+			e.errs = append(e.errs, fmt.Errorf("invalid %s: %w", key, err))
+			continue
+		}
+		slas[c] = d
+	}
+	if err := errors.Join(e.errs...); err != nil {
+		return RegulatoryConfig{}, err
+	}
+	validated, err := regulatory.NewSLAs(slas)
+	if err != nil {
+		return RegulatoryConfig{}, err
+	}
+	if err := db.Validate(); err != nil {
+		return RegulatoryConfig{}, fmt.Errorf("validate database config: %w", err)
+	}
+	return RegulatoryConfig{Database: db, SLAs: validated}, nil
 }
 
 // Validate reports every invalid section, not only the first.
