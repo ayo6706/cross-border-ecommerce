@@ -5,6 +5,7 @@
 --   raw_records              210,000 (200,000 in 20 bulk runs + 10,000 in the run to process)
 --   products / product_versions / product_sources / product_changes  100,000 each
 --   outbox_events            201,000 (200,000 PROCESSED + 1,000 PENDING)
+--   tariff_rates             205,000 (10 usitc_hts versions x 20,000 lines + 5,000 overlay lines)
 -- The RUNNING run belongs to src-perf. Its records use ext-95000..ext-104999; product_sources
 -- holds ext-0..ext-99999 for src-perf, so half the records change a product and half are new.
 
@@ -78,3 +79,37 @@ SELECT 'src-perf', 'ext-' || g,
                           'country_code', 'US'),
        (SELECT id FROM ingestion_runs WHERE source_id = 'src-perf'), now()
 FROM generate_series(95000, 104999) g;
+
+-- Tariffs: usitc_hts reloads keep every version, so tariff_rates holds 10 versions x 20,000 lines
+-- (9 SUPERSEDED, 1 ACTIVE) plus an ACTIVE overlay source with 5,000 origin-keyed lines. Rules are
+-- inserted while their datasets are LOADED (the frozen-rules trigger), then the lifecycle is set.
+INSERT INTO regulatory_datasets (jurisdiction, category, source, version, fetched_at, content_sha256, licence,
+                                 attribution, status, loaded_by, requires_review)
+SELECT 'US', 'TARIFF', 'usitc_hts', 'v' || v, now(), sha256(convert_to('usitc_hts v' || v, 'UTF8')),
+       'Public domain', 'perf', 'LOADED', 'perf', false
+FROM generate_series(1, 10) v
+UNION ALL
+SELECT 'US', 'TARIFF', 'us_chapter99', 'v1', now(), sha256(convert_to('us_chapter99 v1', 'UTF8')),
+       'Public domain', 'perf', 'LOADED', 'perf', false;
+
+INSERT INTO tariff_rates (dataset_id, hs_code, origin_country, measure_type, measure_code, rate_type,
+                          ad_valorem_percent, rate_expression, effective_from, source_reference)
+SELECT d.id, (8400000000 + g * 7)::text, '*', 'MFN', NULL, 'AD_VALOREM', (g % 20)::numeric,
+       (g % 20) || '%', '2020-01-01', 'perf'
+FROM regulatory_datasets d CROSS JOIN generate_series(1, 20000) g
+WHERE d.source = 'usitc_hts';
+
+INSERT INTO tariff_rates (dataset_id, hs_code, origin_country, measure_type, measure_code, rate_type,
+                          ad_valorem_percent, rate_expression, effective_from, source_reference)
+SELECT d.id, (8400000000 + g * 28)::text, 'CN', 'ADDITIONAL_DUTY', 'US_SEC_301', 'AD_VALOREM', 7.5,
+       '7.5%', '2020-02-14', 'perf'
+FROM regulatory_datasets d CROSS JOIN generate_series(1, 5000) g
+WHERE d.source = 'us_chapter99';
+
+UPDATE regulatory_datasets
+SET status = 'SUPERSEDED', activated_at = now() - (20 - substr(version, 2)::int) * interval '1 day',
+    superseded_at = now() - (19 - substr(version, 2)::int) * interval '1 day'
+WHERE source = 'usitc_hts' AND version <> 'v10';
+
+UPDATE regulatory_datasets SET status = 'ACTIVE', activated_at = now() - interval '1 hour'
+WHERE version = 'v10' OR source = 'us_chapter99';
