@@ -24,6 +24,7 @@ sql:
       - "migrations/000020_chk_outbox_claim_pending.up.sql"
       - "migrations/000021_validate_chk_outbox_claim_pending.up.sql"
       - "migrations/000022_create_regulatory_rules.up.sql"
+      - "migrations/000023_regulatory_dataset_lifecycle.up.sql"
     queries: "internal/infrastructure/postgres/queries"
     gen:
       go:

@@ -2,17 +2,17 @@
 -- rates, parties and dates are shaped like the real sources but are not current law, and the
 -- sanctioned parties are fictional. Deployed data comes from the regulatory loaders.
 
-INSERT INTO regulatory_datasets (id, jurisdiction, category, source, version, fetched_at, content_sha256, licence, attribution) VALUES
-    ('00000000-0000-4000-8000-000000000001', 'NG', 'TARIFF', 'ng_cet', 'fixture-2026-01', '2026-01-05T09:00:00Z', sha256('ng_cet fixture'), 'Public sector information', 'Nigeria Customs Service, ECOWAS CET (fixture)'),
-    ('00000000-0000-4000-8000-000000000002', 'US', 'TARIFF', 'usitc_hts', 'fixture-2026-01', '2026-01-05T09:00:00Z', sha256('usitc_hts fixture'), 'Public domain', 'U.S. International Trade Commission, HTSUS (fixture)'),
-    ('00000000-0000-4000-8000-000000000003', 'GB', 'TARIFF', 'uk_tariff', 'fixture-2026-01', '2026-01-05T09:00:00Z', sha256('uk_tariff fixture'), 'OGL v3.0', 'HM Revenue & Customs, UK Trade Tariff (fixture)'),
-    ('00000000-0000-4000-8000-000000000004', 'EU', 'TARIFF', 'xi_tariff', 'fixture-2026-01', '2026-01-05T09:00:00Z', sha256('xi_tariff fixture'), 'EU reuse decision 2011/833/EU', 'European Commission, TARIC via the XI tariff (fixture)'),
-    ('00000000-0000-4000-8000-000000000011', 'NG', 'IMPORT_RESTRICTION', 'ng_prohibition_list', 'fixture-2026-01', '2026-01-05T09:00:00Z', sha256('ng_prohibition fixture'), 'Public sector information', 'Nigeria Customs Service import prohibition list (fixture)'),
-    ('00000000-0000-4000-8000-000000000021', 'US', 'PERMIT', 'us_curated_permits', 'fixture-2026-01', '2026-01-05T09:00:00Z', sha256('us_permits fixture'), 'Public domain', 'USDA APHIS permit requirements (fixture)'),
-    ('00000000-0000-4000-8000-000000000031', 'US', 'SANCTIONS', 'ofac_sls', 'fixture-2026-01', '2026-01-05T09:00:00Z', sha256('ofac fixture'), 'Public domain', 'OFAC Sanctions List Service (fixture)'),
-    ('00000000-0000-4000-8000-000000000032', 'GB', 'SANCTIONS', 'uksl', 'fixture-2026-01', '2026-01-05T09:00:00Z', sha256('uksl fixture'), 'OGL v3.0', 'FCDO UK Sanctions List (fixture)'),
-    ('00000000-0000-4000-8000-000000000041', 'US', 'EXPORT_CONTROL', 'us_ear', 'fixture-2026-01', '2026-01-05T09:00:00Z', sha256('ear fixture'), 'Public domain', 'BIS Commerce Control List (fixture)'),
-    ('00000000-0000-4000-8000-000000000051', 'GB', 'PREFERENTIAL_AGREEMENT', 'uk_tariff', 'fixture-2026-01', '2026-01-05T09:00:00Z', sha256('uk_fta fixture'), 'OGL v3.0', 'HM Revenue & Customs, UK Trade Tariff (fixture)');
+INSERT INTO regulatory_datasets (id, jurisdiction, category, source, version, fetched_at, content_sha256, licence, attribution, status, loaded_by, requires_review) VALUES
+    ('00000000-0000-4000-8000-000000000001', 'NG', 'TARIFF', 'ng_cet', 'fixture-2026-01', '2026-01-05T09:00:00Z', sha256('ng_cet fixture'), 'Public sector information', 'Nigeria Customs Service, ECOWAS CET (fixture)', 'LOADED', 'fixture-loader', false),
+    ('00000000-0000-4000-8000-000000000002', 'US', 'TARIFF', 'usitc_hts', 'fixture-2026-01', '2026-01-05T09:00:00Z', sha256('usitc_hts fixture'), 'Public domain', 'U.S. International Trade Commission, HTSUS (fixture)', 'LOADED', 'fixture-loader', false),
+    ('00000000-0000-4000-8000-000000000003', 'GB', 'TARIFF', 'uk_tariff', 'fixture-2026-01', '2026-01-05T09:00:00Z', sha256('uk_tariff fixture'), 'OGL v3.0', 'HM Revenue & Customs, UK Trade Tariff (fixture)', 'LOADED', 'fixture-loader', false),
+    ('00000000-0000-4000-8000-000000000004', 'EU', 'TARIFF', 'xi_tariff', 'fixture-2026-01', '2026-01-05T09:00:00Z', sha256('xi_tariff fixture'), 'EU reuse decision 2011/833/EU', 'European Commission, TARIC via the XI tariff (fixture)', 'LOADED', 'fixture-loader', false),
+    ('00000000-0000-4000-8000-000000000011', 'NG', 'IMPORT_RESTRICTION', 'ng_prohibition_list', 'fixture-2026-01', '2026-01-05T09:00:00Z', sha256('ng_prohibition fixture'), 'Public sector information', 'Nigeria Customs Service import prohibition list (fixture)', 'LOADED', 'fixture-loader', false),
+    ('00000000-0000-4000-8000-000000000021', 'US', 'PERMIT', 'us_curated_permits', 'fixture-2026-01', '2026-01-05T09:00:00Z', sha256('us_permits fixture'), 'Public domain', 'USDA APHIS permit requirements (fixture)', 'LOADED', 'fixture-loader', false),
+    ('00000000-0000-4000-8000-000000000031', 'US', 'SANCTIONS', 'ofac_sls', 'fixture-2026-01', '2026-01-05T09:00:00Z', sha256('ofac fixture'), 'Public domain', 'OFAC Sanctions List Service (fixture)', 'LOADED', 'fixture-loader', false),
+    ('00000000-0000-4000-8000-000000000032', 'GB', 'SANCTIONS', 'uksl', 'fixture-2026-01', '2026-01-05T09:00:00Z', sha256('uksl fixture'), 'OGL v3.0', 'FCDO UK Sanctions List (fixture)', 'LOADED', 'fixture-loader', false),
+    ('00000000-0000-4000-8000-000000000041', 'US', 'EXPORT_CONTROL', 'us_ear', 'fixture-2026-01', '2026-01-05T09:00:00Z', sha256('ear fixture'), 'Public domain', 'BIS Commerce Control List (fixture)', 'LOADED', 'fixture-loader', false),
+    ('00000000-0000-4000-8000-000000000051', 'GB', 'PREFERENTIAL_AGREEMENT', 'uk_tariff', 'fixture-2026-01', '2026-01-05T09:00:00Z', sha256('uk_fta fixture'), 'OGL v3.0', 'HM Revenue & Customs, UK Trade Tariff (fixture)', 'LOADED', 'fixture-loader', false);
 
 -- NG raises the smartphone duty from 10% to 15% on 2026-07-01: an order on 2026-06-30 resolves
 -- 10%, an order on 2026-07-01 resolves 15%.
