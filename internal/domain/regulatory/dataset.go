@@ -52,11 +52,30 @@ var jurisdictionPattern = regexp.MustCompile(`^[A-Z]{2}$`)
 
 // ParseJurisdiction normalizes an ISO 3166 alpha-2 code (EU included); the UK is GB.
 func ParseJurisdiction(s string) (string, error) {
-	j := strings.ToUpper(strings.TrimSpace(s))
-	if !jurisdictionPattern.MatchString(j) {
+	j, ok := parseCountry(s)
+	if !ok {
 		return "", fmt.Errorf("%w: jurisdiction %q is not an alpha-2 code", ErrInvalidDataset, s)
 	}
 	return j, nil
+}
+
+func parseCountry(s string) (string, bool) {
+	c := strings.ToUpper(strings.TrimSpace(s))
+	return c, jurisdictionPattern.MatchString(c)
+}
+
+// euMemberStates are the 27 member states (ISO codes: Greece is GR). The Union has one customs
+// tariff, so their regulatory datasets are the EU jurisdiction's.
+var euMemberStates = []string{"AT", "BE", "BG", "CY", "CZ", "DE", "DK", "EE", "ES", "FI", "FR", "GR", "HR",
+	"HU", "IE", "IT", "LT", "LU", "LV", "MT", "NL", "PL", "PT", "RO", "SE", "SI", "SK"}
+
+// importJurisdiction is the jurisdiction whose rules govern imports into a country: EU for a member
+// state, the country itself otherwise.
+func importJurisdiction(country string) string {
+	if slices.Contains(euMemberStates, country) {
+		return "EU"
+	}
+	return country
 }
 
 type Review struct {

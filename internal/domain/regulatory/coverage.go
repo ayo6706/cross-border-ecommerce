@@ -9,17 +9,27 @@ import (
 
 // HOLD reason codes a decision reports when it cannot rely on regulatory data.
 const (
-	ReasonNoCoverage = "NO_REGULATORY_COVERAGE"
-	ReasonStaleData  = "STALE_REGULATORY_DATA"
+	ReasonNoCoverage         = "NO_REGULATORY_COVERAGE"
+	ReasonStaleData          = "STALE_REGULATORY_DATA"
+	ReasonNoTariffRate       = "NO_TARIFF_RATE"
+	ReasonAmbiguousTariff    = "AMBIGUOUS_TARIFF"
+	ReasonUnsupportedMeasure = "UNSUPPORTED_MEASURE"
 )
 
-// HoldReason maps a coverage error to its reason code; ok is false for any other error.
+// HoldReason maps a coverage or rule-resolution error to its reason code; ok is false for any
+// other error.
 func HoldReason(err error) (reason string, ok bool) {
 	switch {
 	case errors.Is(err, ErrNoCoverage):
 		return ReasonNoCoverage, true
 	case errors.Is(err, ErrStaleCoverage):
 		return ReasonStaleData, true
+	case errors.Is(err, ErrNoTariffRate):
+		return ReasonNoTariffRate, true
+	case errors.Is(err, ErrAmbiguousTariff):
+		return ReasonAmbiguousTariff, true
+	case errors.Is(err, ErrUnsupportedMeasure):
+		return ReasonUnsupportedMeasure, true
 	default:
 		return "", false
 	}
