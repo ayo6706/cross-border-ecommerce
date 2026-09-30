@@ -11,6 +11,8 @@ import (
 	"github.com/ayo6706/cross-border-ecommerce/internal/adapters/httpapi"
 	appDLQ "github.com/ayo6706/cross-border-ecommerce/internal/application/dlq"
 	appProduct "github.com/ayo6706/cross-border-ecommerce/internal/application/product"
+	appRegulatory "github.com/ayo6706/cross-border-ecommerce/internal/application/regulatory"
+	"github.com/ayo6706/cross-border-ecommerce/internal/domain/regulatory"
 	"github.com/ayo6706/cross-border-ecommerce/internal/infrastructure/postgres"
 	"github.com/ayo6706/cross-border-ecommerce/internal/platform/config"
 	"github.com/ayo6706/cross-border-ecommerce/internal/platform/uuid"
@@ -84,4 +86,20 @@ func APIHandler(logger *slog.Logger, pool *pgxpool.Pool) (http.Handler, error) {
 		DLQReplayer: dlqReplayer,
 		Products:    products,
 	}), nil
+}
+
+func RegulatoryService(pool *pgxpool.Pool, slas regulatory.SLAs) (*appRegulatory.Service, error) {
+	tx, err := postgres.NewRegulatoryTxManager(pool)
+	if err != nil {
+		return nil, fmt.Errorf("create regulatory transaction manager: %w", err)
+	}
+	datasets, err := postgres.NewRegulatoryRepository(pool)
+	if err != nil {
+		return nil, fmt.Errorf("create regulatory repository: %w", err)
+	}
+	svc, err := appRegulatory.NewService(tx, datasets, slas)
+	if err != nil {
+		return nil, fmt.Errorf("create regulatory service: %w", err)
+	}
+	return svc, nil
 }

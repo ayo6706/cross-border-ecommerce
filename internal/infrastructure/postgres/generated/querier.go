@@ -28,10 +28,12 @@ type Querier interface {
 	CopyProducts(ctx context.Context, arg []CopyProductsParams) (int64, error)
 	CreateIngestionRun(ctx context.Context, arg CreateIngestionRunParams) (IngestionRun, error)
 	CreateRawRecord(ctx context.Context, arg CreateRawRecordParams) (RawRecord, error)
+	CreateRegulatoryDataset(ctx context.Context, arg CreateRegulatoryDatasetParams) error
 	CreateReplayOutboxEvent(ctx context.Context, arg CreateReplayOutboxEventParams) error
 	DeleteSource(ctx context.Context, id string) error
 	EnsureRunProcessingExists(ctx context.Context, runID pgtype.UUID) (IngestionRunProcessing, error)
 	FailRunProcessing(ctx context.Context, arg FailRunProcessingParams) (IngestionRunProcessing, error)
+	GetActiveRegulatoryDatasetForUpdate(ctx context.Context, arg GetActiveRegulatoryDatasetForUpdateParams) (RegulatoryDataset, error)
 	GetDLQReplaySource(ctx context.Context, id pgtype.UUID) (GetDLQReplaySourceRow, error)
 	GetIdempotencyKey(ctx context.Context, arg GetIdempotencyKeyParams) (IdempotencyKey, error)
 	GetIngestionRunByID(ctx context.Context, id pgtype.UUID) (IngestionRun, error)
@@ -40,9 +42,13 @@ type Querier interface {
 	GetProductByID(ctx context.Context, id pgtype.UUID) (Product, error)
 	GetProductWithSourceByIdentities(ctx context.Context, arg GetProductWithSourceByIdentitiesParams) ([]GetProductWithSourceByIdentitiesRow, error)
 	GetRawRecordByID(ctx context.Context, id pgtype.UUID) (RawRecord, error)
+	GetRegulatoryDatasetForUpdate(ctx context.Context, id pgtype.UUID) (RegulatoryDataset, error)
 	GetRunProcessingByID(ctx context.Context, runID pgtype.UUID) (IngestionRunProcessing, error)
 	GetSourceByID(ctx context.Context, id string) (Source, error)
 	InsertDLQMessage(ctx context.Context, arg InsertDLQMessageParams) error
+	// Parallel unnest in the select list zips the arrays row by row; the repository passes equal lengths.
+	InsertImportRestrictions(ctx context.Context, arg InsertImportRestrictionsParams) error
+	InsertPermitRequirements(ctx context.Context, arg InsertPermitRequirementsParams) error
 	ListActiveSources(ctx context.Context) ([]Source, error)
 	ListIngestionRunsBySource(ctx context.Context, arg ListIngestionRunsBySourceParams) ([]IngestionRun, error)
 	ListProductChangesByProductID(ctx context.Context, arg ListProductChangesByProductIDParams) ([]ProductChange, error)
@@ -53,6 +59,8 @@ type Querier interface {
 	ListRawRecordsByRunIDKeysetAfterCursor(ctx context.Context, arg ListRawRecordsByRunIDKeysetAfterCursorParams) ([]RawRecord, error)
 	ListRawRecordsByRunIDKeysetFirstPage(ctx context.Context, arg ListRawRecordsByRunIDKeysetFirstPageParams) ([]RawRecord, error)
 	ListRawRecordsBySourceAndExternalID(ctx context.Context, arg ListRawRecordsBySourceAndExternalIDParams) ([]RawRecord, error)
+	// A dataset is in force at T from its activation until its supersession.
+	ListRegulatoryDatasetsActiveAt(ctx context.Context, arg ListRegulatoryDatasetsActiveAtParams) ([]RegulatoryDataset, error)
 	ListSources(ctx context.Context) ([]Source, error)
 	MarkDLQMessageReplayed(ctx context.Context, arg MarkDLQMessageReplayedParams) (int64, error)
 	// A matching claim token implies status = 'PENDING' (chk_outbox_claim_pending). Leaving status out
@@ -69,6 +77,7 @@ type Querier interface {
 	// for product processing in the same statement, so the queue never misses a finished run and the
 	// worker never scans for them.
 	UpdateIngestionRunStatus(ctx context.Context, arg UpdateIngestionRunStatusParams) (UpdateIngestionRunStatusRow, error)
+	UpdateRegulatoryDatasetLifecycle(ctx context.Context, arg UpdateRegulatoryDatasetLifecycleParams) (int64, error)
 	UpdateRunProcessingProgress(ctx context.Context, arg UpdateRunProcessingProgressParams) (IngestionRunProcessing, error)
 	UpsertSource(ctx context.Context, arg UpsertSourceParams) (Source, error)
 }

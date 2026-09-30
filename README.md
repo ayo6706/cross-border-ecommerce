@@ -18,11 +18,12 @@ Infrastructure Adapters (internal/infrastructure/)
 
 ### Layer Responsibilities
 
-- **`cmd/`**: Entrypoints for executables (`cmd/api` REST API, `cmd/worker` background worker, `cmd/ingest` ingestion CLI, `cmd/migrate` schema migrations).
+- **`cmd/`**: Entrypoints for executables (`cmd/api` REST API, `cmd/worker` background worker, `cmd/ingest` ingestion CLI, `cmd/regload` regulatory dataset CLI, `cmd/migrate` schema migrations).
 - **`internal/domain/`**: Pure Go domain models, value objects, domain errors, and repository interfaces. Has **zero** external dependencies on HTTP routers, SQL drivers, or messaging brokers.
   - `product/`: Product canonical entities and lifecycle status.
   - `source/`: Supplier and catalogue ingestion source definitions and configurations.
   - `ingestion/`: Ingestion runs, raw records, checkpoints, error budgets, and the source adapter port.
+  - `regulatory/`: Regulatory dataset versions (review, activation, supersession), coverage and refresh SLAs.
 - **`internal/application/`**: Use case orchestrators coordinating domain operations and calling domain repository ports.
 - **`internal/infrastructure/`**: Secondary / Driven adapters implementing domain and application ports (`postgres` repositories and the transaction runner).
 - **`internal/adapters/`**: Primary / Driving adapters (`httpapi` router, middleware, health, DLQ replay and catalogue endpoints; `sources` REST and feed adapters).
@@ -87,6 +88,13 @@ Run Processing Variables (with defaults), used by the worker loop and `cmd/inges
 Idempotency Tuning Variables (with defaults):
 - `IDEMPOTENCY_LEASE_TTL`: Execution lease TTL for in-flight stream handlers (default: `30s`, must be strictly > `STREAM_HANDLER_TIMEOUT`).
 
+Regulatory Refresh SLAs (required, no defaults), used only by `cmd/regload`: the maximum age of a
+dataset's fetched data before coverage reports `STALE_REGULATORY_DATA` (ADR 0013). A missing,
+malformed or non-positive value fails startup. Suggested values:
+- `REGULATORY_SLA_SANCTIONS`: `24h`
+- `REGULATORY_SLA_TARIFF`, `REGULATORY_SLA_EXPORT_CONTROL`: `168h`
+- `REGULATORY_SLA_IMPORT_RESTRICTION`, `REGULATORY_SLA_PERMIT`, `REGULATORY_SLA_PREFERENTIAL_AGREEMENT`: `720h`
+
 Source credentials are never stored in source config. API sources reference
 secrets instead, e.g. `"auth_kind": "bearer", "auth_ref": "env:SUPPLIER_TOKEN"`,
 and the value is read from the environment when the adapter is built.
@@ -123,6 +131,17 @@ make perf
 # deadline: the deploy job owns the timeout
 go run ./cmd/ingest process --run <run-id> [--from-start] [--lease 45s] [--batch-size 250]
 go run ./cmd/migrate [-database-url URL] up | down [steps] | version
+
+# Regulatory datasets (ADR 0013): load a curated CSV as a LOADED version, sign it off (the reviewer
+# must not be the loader), activate it (supersedes the previous version of the same source), and
+# check coverage; not covered or stale prints the HOLD reason and exits non-zero
+go run ./cmd/regload load-curated --file ng.csv --jurisdiction NG --category IMPORT_RESTRICTION \
+  --source ng_prohibition_list --version 2026-09 --fetched-at 2026-09-29T08:00:00Z \
+  --licence "Public sector information" --attribution "Nigeria Customs Service" --loaded-by alice
+go run ./cmd/regload review --dataset <id> --reviewer bob --note "checked against the gazette"
+go run ./cmd/regload activate --dataset <id>
+go run ./cmd/regload reject --dataset <id> --reason "partial upstream file"
+go run ./cmd/regload coverage --jurisdiction NG --category IMPORT_RESTRICTION [--at 2026-07-01T00:00:00Z]
 
 # Build executables into bin/
 make build

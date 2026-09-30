@@ -29,6 +29,9 @@ const insertTariff = `INSERT INTO tariff_rates (dataset_id, hs_code, origin_coun
 	measure_code, rate_type, ad_valorem_percent, specific_amount, specific_currency, specific_unit,
 	rate_expression, effective_from, effective_to, source_reference) VALUES `
 
+const insertDataset = `INSERT INTO regulatory_datasets (jurisdiction, category, source, version, fetched_at,
+	content_sha256, licence, attribution, status, loaded_by, requires_review) VALUES `
+
 const insertSanction = `INSERT INTO sanctions_list (dataset_id, list_entry_id, entity_type, primary_name,
 	program, effective_from, effective_to, source_reference) VALUES `
 
@@ -141,9 +144,11 @@ func TestRegulatorySchema_SameRuleInNewDatasetVersion_Live(t *testing.T) {
 	withRegulatorySeed(t, pool, func(ctx context.Context, tx pgx.Tx) {
 		var next string
 		err := tx.QueryRow(ctx, `INSERT INTO regulatory_datasets
-			(jurisdiction, category, source, version, fetched_at, content_sha256, licence, attribution)
+			(jurisdiction, category, source, version, fetched_at, content_sha256, licence, attribution,
+			 status, loaded_by, requires_review)
 			VALUES ('NG', 'TARIFF', 'ng_cet', 'fixture-2026-08', '2026-08-01T09:00:00Z',
-			        sha256('ng_cet v2'), 'Public sector information', 'Nigeria Customs Service')
+			        sha256('ng_cet v2'), 'Public sector information', 'Nigeria Customs Service',
+			        'LOADED', 'fixture-loader', false)
 			RETURNING id::text`).Scan(&next)
 		if err != nil {
 			t.Fatalf("insert second dataset version: %v", err)
@@ -288,13 +293,11 @@ func TestRegulatorySchema_RejectsInvalidRules_Live(t *testing.T) {
 		{"rule without a source reference",
 			tariff("0101210000", "*", "MFN", "NULL", "AD_VALOREM", "5", "2026-01-01", "NULL", " "),
 			[]any{ngTariffDataset}, checkViolation, "tariff_rates_source_reference_check"},
-		{"duplicate dataset version", `INSERT INTO regulatory_datasets (jurisdiction, category, source,
-			version, fetched_at, content_sha256, licence, attribution) VALUES ('NG', 'TARIFF', 'ng_cet',
-			'fixture-2026-01', NOW(), sha256('other'), 'Public sector information', 'Nigeria Customs Service')`,
+		{"duplicate dataset version", insertDataset + `('NG', 'TARIFF', 'ng_cet', 'fixture-2026-01', NOW(),
+			sha256('other'), 'Public sector information', 'Nigeria Customs Service', 'LOADED', 'l', false)`,
 			nil, uniqueViolation, "uq_regulatory_datasets_version"},
-		{"dataset hash that is not SHA-256", `INSERT INTO regulatory_datasets (jurisdiction, category, source,
-			version, fetched_at, content_sha256, licence, attribution) VALUES ('NG', 'TARIFF', 'ng_cet',
-			'fixture-2026-09', NOW(), decode(md5('x'), 'hex'), 'Public sector information', 'Nigeria Customs')`,
+		{"dataset hash that is not SHA-256", insertDataset + `('NG', 'TARIFF', 'ng_cet', 'fixture-2026-09', NOW(),
+			decode(md5('x'), 'hex'), 'Public sector information', 'Nigeria Customs', 'LOADED', 'l', false)`,
 			nil, checkViolation, "regulatory_datasets_content_sha256_check"},
 		{"dataset without a licence", `UPDATE regulatory_datasets SET licence = '' WHERE id = $1`,
 			[]any{ngTariffDataset}, checkViolation, "regulatory_datasets_licence_check"},

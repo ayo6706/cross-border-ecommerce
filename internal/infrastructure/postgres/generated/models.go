@@ -217,16 +217,25 @@ type RawRecord struct {
 }
 
 type RegulatoryDataset struct {
-	ID            pgtype.UUID        `json:"id"`
-	Jurisdiction  string             `json:"jurisdiction"`
-	Category      string             `json:"category"`
-	Source        string             `json:"source"`
-	Version       string             `json:"version"`
-	FetchedAt     pgtype.Timestamptz `json:"fetched_at"`
-	ContentSha256 []byte             `json:"content_sha256"`
-	Licence       string             `json:"licence"`
-	Attribution   string             `json:"attribution"`
-	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	ID             pgtype.UUID        `json:"id"`
+	Jurisdiction   string             `json:"jurisdiction"`
+	Category       string             `json:"category"`
+	Source         string             `json:"source"`
+	Version        string             `json:"version"`
+	FetchedAt      pgtype.Timestamptz `json:"fetched_at"`
+	ContentSha256  []byte             `json:"content_sha256"`
+	Licence        string             `json:"licence"`
+	Attribution    string             `json:"attribution"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	Status         string             `json:"status"`
+	LoadedBy       string             `json:"loaded_by"`
+	RequiresReview bool               `json:"requires_review"`
+	ReviewedBy     pgtype.Text        `json:"reviewed_by"`
+	ReviewedAt     pgtype.Timestamptz `json:"reviewed_at"`
+	ReviewNote     pgtype.Text        `json:"review_note"`
+	ActivatedAt    pgtype.Timestamptz `json:"activated_at"`
+	SupersededAt   pgtype.Timestamptz `json:"superseded_at"`
+	RejectedReason pgtype.Text        `json:"rejected_reason"`
 }
 
 type SanctionsList struct {
