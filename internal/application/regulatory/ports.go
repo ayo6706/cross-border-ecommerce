@@ -22,6 +22,12 @@ type DatasetRepository interface {
 	) ([]*domain.Dataset, error)
 }
 
+// TariffRepository lists the MFN and additional-duty rules of the given datasets that are in force
+// on the query's UTC transaction date, keyed on one of its HS prefixes and on its origin or '*'.
+type TariffRepository interface {
+	TariffCandidates(ctx context.Context, datasetIDs []string, q domain.TariffQuery) ([]domain.TariffMeasure, error)
+}
+
 type RuleWriter interface {
 	InsertCurated(ctx context.Context, datasetID string, rules domain.CuratedRules) error
 }

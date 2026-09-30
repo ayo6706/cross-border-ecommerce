@@ -15,4 +15,8 @@ var (
 	ErrInvalidSLA           = errors.New("invalid regulatory refresh SLA")
 	ErrNoCoverage           = errors.New("no active regulatory dataset")
 	ErrStaleCoverage        = errors.New("active regulatory dataset is older than its refresh SLA")
+	ErrInvalidTariffQuery   = errors.New("invalid tariff query")
+	ErrNoTariffRate         = errors.New("no tariff rate in force")
+	ErrAmbiguousTariff      = errors.New("two equally specific tariff rules apply")
+	ErrUnsupportedMeasure   = errors.New("tariff measure cannot be evaluated")
 )

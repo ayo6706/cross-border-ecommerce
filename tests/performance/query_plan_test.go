@@ -22,6 +22,7 @@ import (
 
 	appOutbox "github.com/ayo6706/cross-border-ecommerce/internal/application/outbox"
 	"github.com/ayo6706/cross-border-ecommerce/internal/domain/ingestion"
+	"github.com/ayo6706/cross-border-ecommerce/internal/domain/regulatory"
 	"github.com/ayo6706/cross-border-ecommerce/internal/infrastructure/postgres"
 	"github.com/ayo6706/cross-border-ecommerce/internal/platform/config"
 	"github.com/ayo6706/cross-border-ecommerce/internal/testsupport"
@@ -35,7 +36,9 @@ var seedSQL string
 
 const (
 	allTables = "product_changes, product_sources, product_versions, products, raw_records, " +
-		"ingestion_run_processing, ingestion_runs, outbox_events, dlq_messages, idempotency_keys, sources"
+		"ingestion_run_processing, ingestion_runs, outbox_events, dlq_messages, idempotency_keys, sources, " +
+		"regulatory_datasets, tariff_rates, import_restrictions, permit_requirements, sanctions_list, " +
+		"export_controls, preferential_agreements"
 	seedTimeout = 10 * time.Minute
 	flowTimeout = 5 * time.Minute
 )
@@ -44,6 +47,7 @@ const (
 var largeTables = map[string]bool{
 	"ingestion_runs": true, "ingestion_run_processing": true, "raw_records": true, "products": true,
 	"product_versions": true, "product_sources": true, "product_changes": true, "outbox_events": true,
+	"tariff_rates": true,
 }
 
 type planEnv struct {
@@ -104,6 +108,7 @@ func (e *planEnv) flows() []flow {
 		{"worker_process_next", func(t *testing.T, ctx context.Context) { processNext(t, ctx, e.traced, e.cfg) }},
 		{"outbox_relay_run_once", func(t *testing.T, ctx context.Context) { relayOnce(t, ctx, e.traced, e.cfg, e.logger) }},
 		{"api_list_and_get_products", func(t *testing.T, _ context.Context) { browseProducts(t, e.traced, e.logger) }},
+		{"regulatory_resolve_tariff", func(t *testing.T, ctx context.Context) { resolveTariff(t, ctx, e.traced) }},
 	}
 }
 
@@ -223,6 +228,32 @@ func browseProducts(t *testing.T, pool *pgxpool.Pool, logger *slog.Logger) {
 	var product struct{ ID string }
 	getJSON(t, handler, "/v1/products/"+page.Items[0].ID, &product)
 	require.Equal(t, page.Items[0].ID, product.ID)
+}
+
+// resolveTariff resolves a seeded line under the active usitc_hts version and the overlay; the nine
+// superseded versions hold the same line.
+func resolveTariff(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+	slaByCategory := map[regulatory.Category]time.Duration{}
+	for _, c := range regulatory.Categories() {
+		slaByCategory[c] = 24 * time.Hour
+	}
+	slas, err := regulatory.NewSLAs(slaByCategory)
+	require.NoError(t, err)
+	svc, err := wiring.RegulatoryService(pool, slas)
+	require.NoError(t, err)
+	q, err := regulatory.NewTariffQuery(regulatory.TariffQueryParams{
+		Destination:   "US",
+		Origin:        "CN",
+		HSCode:        "8400000028",
+		TransactionAt: time.Date(2026, 3, 15, 10, 0, 0, 0, time.UTC),
+		EvaluatedAt:   time.Now(),
+	})
+	require.NoError(t, err)
+
+	r, err := svc.ResolveTariff(ctx, q)
+	require.NoError(t, err)
+	require.Len(t, r.Measures, 2, "MFN and the Section 301 overlay")
+	require.Equal(t, "11.5", r.AdValoremPercent().String(), "4% MFN + 7.5% overlay")
 }
 
 func getJSON(t *testing.T, handler http.Handler, target string, into any) {

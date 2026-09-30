@@ -1,140 +1,175 @@
 # Cross-Border Commerce Backend
 
-A high-throughput cross-border catalog ingestion, compliance, and landed-cost calculation platform.
+Backend services for cross-border e-commerce: supplier catalogue ingestion, change detection, event
+publication, and versioned regulatory data (tariffs, restrictions, permits, sanctions) for customs
+compliance. Written in Go on PostgreSQL 16 and Redis 7.
+
+## Features
+
+- **Catalogue ingestion** from supplier REST APIs and CSV/NDJSON feeds, with resumable checkpoints,
+  raw-payload provenance and a per-run error budget.
+- **Change detection**: products are normalized and fingerprinted, so downstream work runs only for
+  records that actually changed. Prices and inventory are tracked separately from product identity.
+- **Reliable events**: state changes and their events commit in one transaction (transactional
+  outbox); a relay publishes them to Redis Streams with retries, backoff and a replayable dead-letter queue.
+- **Regulatory datasets**: every load is an immutable, effective-dated version that is reviewed by a
+  second person before activation, superseded by later versions, and checked against a refresh SLA.
+- **Tariff resolution**: the duty in force for an HS code, origin and destination on a transaction
+  date, with HS-prefix fallback, origin-specific rates and stacked additional duties. Missing,
+  ambiguous or unsupported data is reported as a HOLD reason, never as a zero rate.
+- **Catalogue API** with keyset pagination.
 
 ## Architecture
 
-This service is structured using strict **Hexagonal / Clean Architecture (Ports & Adapters)**. All dependencies strictly flow inward toward the pure domain layer:
+The code follows a hexagonal (ports and adapters) layout; dependencies point inward to the domain.
 
 ```text
-Adapters (cmd/, internal/adapters/)
-       ↓
-Application Layer (internal/application/)
-       ↓
-Pure Domain Models & Ports (internal/domain/)
-       ↑
-Infrastructure Adapters (internal/infrastructure/)
+cmd/, internal/adapters/        entrypoints, HTTP handlers, supplier adapters
+        ↓
+internal/application/           use cases and ports
+        ↓
+internal/domain/                entities, value objects, domain errors (no I/O dependencies)
+        ↑
+internal/infrastructure/        PostgreSQL (pgx + sqlc) and Redis implementations of the ports
 ```
 
-### Layer Responsibilities
+| Path | Contents |
+|---|---|
+| `cmd/api` | HTTP API |
+| `cmd/worker` | Background worker: processes finished ingestion runs and relays the outbox |
+| `cmd/ingest` | Ingestion CLI |
+| `cmd/regload` | Regulatory dataset CLI |
+| `cmd/migrate` | Schema migrations |
+| `internal/domain` | `product`, `source`, `ingestion`, `regulatory` |
+| `internal/platform` | Configuration, logging, secrets, backoff, worker pool |
+| `migrations` | Numbered SQL migrations (up and down) |
+| `tests/performance` | Query-plan suite (build tag `perf`) |
 
-- **`cmd/`**: Entrypoints for executables (`cmd/api` REST API, `cmd/worker` background worker, `cmd/ingest` ingestion CLI, `cmd/regload` regulatory dataset CLI, `cmd/migrate` schema migrations).
-- **`internal/domain/`**: Pure Go domain models, value objects, domain errors, and repository interfaces. Has **zero** external dependencies on HTTP routers, SQL drivers, or messaging brokers.
-  - `product/`: Product canonical entities and lifecycle status.
-  - `source/`: Supplier and catalogue ingestion source definitions and configurations.
-  - `ingestion/`: Ingestion runs, raw records, checkpoints, error budgets, and the source adapter port.
-  - `regulatory/`: Regulatory dataset versions (review, activation, supersession), coverage and refresh SLAs.
-- **`internal/application/`**: Use case orchestrators coordinating domain operations and calling domain repository ports.
-- **`internal/infrastructure/`**: Secondary / Driven adapters implementing domain and application ports (`postgres` repositories and the transaction runner).
-- **`internal/adapters/`**: Primary / Driving adapters (`httpapi` router, middleware, health, DLQ replay and catalogue endpoints; `sources` REST and feed adapters).
+Money, duty and tax values use `github.com/shopspring/decimal`, never floating point. Regulatory
+dates are calendar dates, and lookups use the UTC date of the transaction.
 
-## Tooling & Commands
+## Getting Started
 
 ### Prerequisites
 
-- Go (version from `go.mod`)
-- Docker (for the local PostgreSQL 16 from `docker-compose.yml`)
+- Go (version in `go.mod`)
+- Docker, for local PostgreSQL and Redis
+- `golangci-lint` (version in `.golangci-lint-version`) and `sqlc`, for development
 
-### Configuration
-
-`DATABASE_URL` is required for all database-backed services.
-`REDIS_URL` is required by the background worker (`cmd/worker`) for publishing outbox events to Redis Streams.
-Every variable is read once by `internal/platform/config`; a malformed or out-of-range value fails
-startup (all bad variables are reported together), it is never replaced by the default.
-
-Database Pool Variables (with defaults), used by every binary (`api`, `worker`, `ingest`, `migrate`):
-- `DB_MAX_CONNS`: Pool size per process (default: `25`). Each process opens its own pool, so the sum
-  over all running processes must stay below PostgreSQL `max_connections` (100 by default) minus
-  its reserved slots. The worker runs two loops (run processing, outbox relay); the API holds one
-  connection per in-flight query. These defaults are not yet sized against measured load.
-- `DB_MIN_CONNS`: Idle connections kept open (default: `5`, must be <= `DB_MAX_CONNS`).
-- `DB_MAX_CONN_IDLE_TIME`: Idle connection lifetime (default: `15m`).
-- `DB_MAX_CONN_LIFETIME`: Connection lifetime (default: `1h`).
-- `DB_CONNECT_TIMEOUT`: Bound on every connection attempt and the startup ping (default: `5s`).
-
-Logging Variables (with defaults):
-- `LOG_LEVEL`: `debug`, `info`, `warn` or `error` (default: `info`); any other value fails startup.
-- `LOG_FORMAT`: `json` or `text` (default: `json`).
-- `LOG_ADD_SOURCE`: Add the source file and line to each record (default: `false`).
-
-Outbox Relay Tuning Variables (with defaults):
-- `OUTBOX_BATCH_SIZE`: Batch size for outbox claim query (default: `100`, range 1–1000).
-- `OUTBOX_POLL_INTERVAL`: Polling interval when backlog is empty (default: `500ms`).
-- `OUTBOX_LEASE`: Claim lease duration (default: `30s`).
-- `OUTBOX_BASE_BACKOFF`: Base retry backoff duration (default: `1s`).
-- `OUTBOX_MAX_BACKOFF`: Maximum retry backoff duration (default: `5m`).
-- `OUTBOX_MAX_ATTEMPTS`: Max retry attempts before marking an event as `FAILED` (default: `10`).
-
-Stream Broker Tuning Variables (with defaults):
-- `STREAM_RETENTION`: Time-based retention cutoff for stream trimming (default: `168h` / 7 days).
-
-Stream Consumer & Worker Pool Tuning Variables (with defaults):
-- `STREAM_CONSUMER_BLOCK`: XREADGROUP block timeout duration (default: `2s`).
-- `STREAM_CONSUMER_BATCH`: Maximum number of messages read per batch from Redis Stream (default: `10`, max 1000).
-- `STREAM_CLAIM_MIN_IDLE`: Minimum idle duration before reclaiming pending messages with XAUTOCLAIM (default: `60s`, must exceed the worst-case retry window: `STREAM_RETRY_MAX_ATTEMPTS` handler timeouts plus the backoffs between them).
-- `STREAM_CLAIM_INTERVAL`: Periodic interval between XAUTOCLAIM sweeps (default: `10s`).
-- `STREAM_HANDLER_TIMEOUT`: Maximum execution time allowed per message handler (default: `5s`).
-- `WORKER_CONCURRENCY`: Fixed number of concurrent worker goroutines in the pool (default: `10`). Used by the stream consumer, which no binary starts yet (ENG-025).
-- `WORKER_QUEUE_SIZE`: Buffer capacity of the worker task queue (default: `10`).
-- `WORKER_DRAIN_TIMEOUT`: Graceful shutdown drain timeout before cancelling in-flight tasks (default: `10s`).
-
-Run Processing Variables (with defaults), used by the worker loop and `cmd/ingest`:
-- `RUN_PROCESSING_POLL_INTERVAL`: How often the worker claims the next finished run (default: `2s`).
-- `RUN_PROCESSING_LEASE`: Claim lease, renewed per page (default: `30s`); default of `ingest process --lease`.
-- `RUN_PROCESSING_BATCH_SIZE`: Raw records per page (default: `500`); default of `ingest process --batch-size`.
-- `INGESTION_ERROR_BUDGET_MAX_RATE`: Share of rows a run may fail to normalize before the run is failed (default: `0.05`, must be > 0 and < 1).
-- `INGESTION_ERROR_BUDGET_MIN_ROWS`: Rows seen before the budget is enforced (default: `100`, must be > 0). An explicit value outside these bounds fails startup; it is never clamped.
-
-Idempotency Tuning Variables (with defaults):
-- `IDEMPOTENCY_LEASE_TTL`: Execution lease TTL for in-flight stream handlers (default: `30s`, must be strictly > `STREAM_HANDLER_TIMEOUT`).
-
-Regulatory Refresh SLAs (required, no defaults), used only by `cmd/regload`: the maximum age of a
-dataset's fetched data before coverage reports `STALE_REGULATORY_DATA` (ADR 0013). A missing,
-malformed or non-positive value fails startup. Suggested values:
-- `REGULATORY_SLA_SANCTIONS`: `24h`
-- `REGULATORY_SLA_TARIFF`, `REGULATORY_SLA_EXPORT_CONTROL`: `168h`
-- `REGULATORY_SLA_IMPORT_RESTRICTION`, `REGULATORY_SLA_PERMIT`, `REGULATORY_SLA_PREFERENTIAL_AGREEMENT`: `720h`
-
-Source credentials are never stored in source config. API sources reference
-secrets instead, e.g. `"auth_kind": "bearer", "auth_ref": "env:SUPPLIER_TOKEN"`,
-and the value is read from the environment when the adapter is built.
-
-### Common Commands
+### Run locally
 
 ```bash
-# Start local PostgreSQL and Redis (dev + test databases)
-make db-up
+make db-up          # PostgreSQL on localhost:5433 (crossborder_dev, crossborder_test), Redis on localhost:6379
+make migrate-up     # apply migrations to crossborder_dev
+make run-api        # http://localhost:8080
+```
 
-# Apply migrations to the dev database
-make migrate-up
+In another terminal:
 
-# golangci-lint (version pinned in .golangci-lint-version; includes funlen/gocognit/dupl)
-make lint
+```bash
+export REDIS_URL=redis://localhost:6379/0
+make run-worker
+```
 
-# Unit tests (integration tests skip without TEST_DATABASE_URL)
-make test
+The Makefile sets `DATABASE_URL` for the local dev database; override it for any other database.
 
-# Unit + PostgreSQL & Redis live integration tests with the race detector
-make test-integration
+## Configuration
 
-# Every gate, the same script CI runs: gofmt, go vet, staticcheck (go.mod tool), golangci-lint,
-# sqlc diff, tests against live PostgreSQL + Redis; any skipped test fails. VERIFY_RACE=1 adds -race.
-make verify
+All configuration comes from environment variables and is validated at startup. Every invalid
+variable is reported together, and an invalid value is never replaced by its default.
 
-# Query-plan suite (separate CI job): seeds ~100k-200k rows per large table into TEST_DATABASE_URL,
-# which it TRUNCATES, and fails when a statement the worker, relay or API sends reads a large table
-# without an index. Timings are logged, not asserted (ADR 0010).
-make perf
+### Required
 
-# Process one finished run now (lease/batch default to RUN_PROCESSING_*). migrate reads only
-# DATABASE_URL (or -database-url) and DB_*, logs plain text (LOG_* do not apply), and has no
-# deadline: the deploy job owns the timeout
+| Variable | Used by |
+|---|---|
+| `DATABASE_URL` | All binaries |
+| `REDIS_URL` | `worker` |
+| `REGULATORY_SLA_<CATEGORY>` | `regload` (see [Regulatory data](#regulatory-data)) |
+
+### Optional
+
+| Variable | Default | Notes |
+|---|---|---|
+| `PORT` | `8080` | API listen port |
+| `SERVER_READ_TIMEOUT` / `SERVER_WRITE_TIMEOUT` | `10s` | |
+| `SERVER_IDLE_TIMEOUT` | `60s` | |
+| `SERVER_SHUTDOWN_TIMEOUT` | `15s` | |
+| `DB_MAX_CONNS` | `25` | Per process. The sum across processes must stay below PostgreSQL's `max_connections` |
+| `DB_MIN_CONNS` | `5` | Must be ≤ `DB_MAX_CONNS` |
+| `DB_MAX_CONN_IDLE_TIME` | `15m` | |
+| `DB_MAX_CONN_LIFETIME` | `1h` | |
+| `DB_CONNECT_TIMEOUT` | `5s` | Connection attempts and the startup ping |
+| `LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error` |
+| `LOG_FORMAT` | `json` | `json` or `text` |
+| `LOG_ADD_SOURCE` | `false` | Add file and line to each record |
+| `OUTBOX_BATCH_SIZE` | `100` | 1–1000 |
+| `OUTBOX_POLL_INTERVAL` | `500ms` | Poll interval when the outbox is empty |
+| `OUTBOX_LEASE` | `30s` | Claim lease |
+| `OUTBOX_BASE_BACKOFF` / `OUTBOX_MAX_BACKOFF` | `1s` / `5m` | Retry backoff |
+| `OUTBOX_MAX_ATTEMPTS` | `10` | Attempts before an event is marked `FAILED` |
+| `STREAM_RETENTION` | `168h` | Stream trimming cutoff |
+| `STREAM_CONSUMER_BLOCK` | `2s` | `XREADGROUP` block timeout |
+| `STREAM_CONSUMER_BATCH` | `10` | Messages per read, max 1000 |
+| `STREAM_CLAIM_MIN_IDLE` | `60s` | Idle time before `XAUTOCLAIM`; must exceed the worst-case retry window |
+| `STREAM_CLAIM_INTERVAL` | `10s` | Interval between reclaim sweeps |
+| `STREAM_HANDLER_TIMEOUT` | `5s` | Per-message handler timeout |
+| `STREAM_RETRY_MAX_ATTEMPTS` | `5` | Handler attempts before dead-lettering |
+| `STREAM_RETRY_BASE_BACKOFF` / `STREAM_RETRY_MAX_BACKOFF` | `200ms` / `2s` | |
+| `WORKER_CONCURRENCY` | `10` | Stream consumer pool size |
+| `WORKER_QUEUE_SIZE` | `10` | |
+| `WORKER_DRAIN_TIMEOUT` | `10s` | Graceful shutdown drain |
+| `RUN_PROCESSING_POLL_INTERVAL` | `2s` | How often the worker claims a finished run |
+| `RUN_PROCESSING_LEASE` | `30s` | Renewed per page |
+| `RUN_PROCESSING_BATCH_SIZE` | `500` | Raw records per page |
+| `INGESTION_ERROR_BUDGET_MAX_RATE` | `0.05` | Share of rows that may fail normalization; > 0 and < 1 |
+| `INGESTION_ERROR_BUDGET_MIN_ROWS` | `100` | Rows seen before the budget applies |
+| `IDEMPOTENCY_LEASE_TTL` | `30s` | Must be greater than `STREAM_HANDLER_TIMEOUT` |
+
+The stream consumer settings (`STREAM_CONSUMER_*`, `STREAM_CLAIM_*`, `STREAM_HANDLER_TIMEOUT`,
+`STREAM_RETRY_*`, `WORKER_*`, `IDEMPOTENCY_LEASE_TTL`) are validated at startup, but no binary
+starts the consumer yet.
+
+`cmd/migrate` reads only `DATABASE_URL` (or `-database-url`) and the `DB_*` variables.
+
+Supplier credentials are never stored in source configuration. A source references a secret, for
+example `"auth_kind": "bearer", "auth_ref": "env:SUPPLIER_TOKEN"`, and the value is read from the
+environment when the adapter is built.
+
+## Usage
+
+### HTTP API
+
+| Method and path | Description |
+|---|---|
+| `GET /health/live` | Liveness |
+| `GET /health/ready` | Readiness (database reachable) |
+| `GET /v1/products?limit=&cursor=` | Products, newest first: `{"items": [...], "next_cursor": "..." \| null}` |
+| `GET /v1/products/{id}` | One product; `404` if unknown |
+| `POST /v1/dlq/{id}/replay` | Replay a dead-lettered message |
+
+`limit` defaults to 50 and must be between 1 and 500. `next_cursor` is opaque: pass it back
+unchanged as `cursor`. It is `null` on the last page. An out-of-range limit or an unknown cursor
+returns `400`.
+
+```bash
+curl 'http://localhost:8080/v1/products?limit=100'
+curl "http://localhost:8080/v1/products?limit=100&cursor=$NEXT_CURSOR"
+```
+
+### Ingestion
+
+```bash
+# Process one finished run now (lease and batch size default to RUN_PROCESSING_*)
 go run ./cmd/ingest process --run <run-id> [--from-start] [--lease 45s] [--batch-size 250]
-go run ./cmd/migrate [-database-url URL] up | down [steps] | version
+```
 
-# Regulatory datasets (ADR 0013): load a curated CSV as a LOADED version, sign it off (the reviewer
-# must not be the loader), activate it (supersedes the previous version of the same source), and
-# check coverage; not covered or stale prints the HOLD reason and exits non-zero
+### Regulatory data
+
+Each load is stored as a new dataset version. Curated datasets must be reviewed by someone other
+than the loader before activation, and activating a version supersedes the previous version from
+the same source.
+
+```bash
 go run ./cmd/regload load-curated --file ng.csv --jurisdiction NG --category IMPORT_RESTRICTION \
   --source ng_prohibition_list --version 2026-09 --fetched-at 2026-09-29T08:00:00Z \
   --licence "Public sector information" --attribution "Nigeria Customs Service" --loaded-by alice
@@ -142,28 +177,47 @@ go run ./cmd/regload review --dataset <id> --reviewer bob --note "checked agains
 go run ./cmd/regload activate --dataset <id>
 go run ./cmd/regload reject --dataset <id> --reason "partial upstream file"
 go run ./cmd/regload coverage --jurisdiction NG --category IMPORT_RESTRICTION [--at 2026-07-01T00:00:00Z]
-
-# Build executables into bin/
-make build
-
-# Start API server / background worker
-make run-api
-make run-worker
 ```
 
-### Catalogue API
+`coverage` prints the datasets in force. When none is in force, or one is older than its refresh
+SLA, it prints the HOLD reason (`NO_REGULATORY_COVERAGE` or `STALE_REGULATORY_DATA`) and exits
+non-zero.
 
-| Route | Response |
+Refresh SLAs are required, one per category, with no defaults:
+
+| Variable | Suggested value |
 |---|---|
-| `GET /v1/products?limit=&cursor=` | `{"items": [...], "next_cursor": "..." \| null}`, newest first (`created_at DESC, id DESC`) |
-| `GET /v1/products/{id}` | one product; `404` if unknown |
+| `REGULATORY_SLA_SANCTIONS` | `24h` |
+| `REGULATORY_SLA_TARIFF` | `168h` |
+| `REGULATORY_SLA_EXPORT_CONTROL` | `168h` |
+| `REGULATORY_SLA_IMPORT_RESTRICTION` | `720h` |
+| `REGULATORY_SLA_PERMIT` | `720h` |
+| `REGULATORY_SLA_PREFERENTIAL_AGREEMENT` | `720h` |
 
-`limit` defaults to 50 and must be 1..500. `next_cursor` is opaque: pass it back unchanged as
-`cursor` to get the next page; it is `null` on the last page. A limit out of range or a cursor
-that was not issued by the API is `400`. Pages are keyset seeks, so page depth does not slow them
-down (ADR 0010).
+### Migrations
 
 ```bash
-curl 'http://localhost:8080/v1/products?limit=100'
-curl "http://localhost:8080/v1/products?limit=100&cursor=$NEXT_CURSOR"
+go run ./cmd/migrate [-database-url URL] up | down [steps] | version
 ```
+
+## Development
+
+```bash
+make build              # binaries in bin/
+make lint               # golangci-lint
+make sqlc-generate      # regenerate internal/infrastructure/postgres/generated
+make test               # unit tests; live tests skip without TEST_DATABASE_URL / TEST_REDIS_URL
+make test-integration   # unit and live PostgreSQL/Redis tests with -race
+make verify             # every CI gate (see below)
+make perf               # query-plan suite
+```
+
+`make verify` runs `scripts/verify.sh`, the same script CI runs: gofmt, go vet, staticcheck,
+golangci-lint, a sqlc diff, and the full test suite against live PostgreSQL and Redis. It starts
+throwaway containers when `TEST_DATABASE_URL` and `TEST_REDIS_URL` are unset (ports
+`VERIFY_PG_PORT`, default `55432`, and `VERIFY_REDIS_PORT`, default `56379`). Any skipped test fails
+the run. Set `VERIFY_RACE=1` to add `-race`, which needs CGO.
+
+`make perf` seeds 100,000–200,000 rows per large table into `TEST_DATABASE_URL` and **truncates it
+first**, so point it at a throwaway database. It fails when a statement sent by the worker, relay,
+API or tariff resolver reads a large table without an index. Timings are logged, not asserted.

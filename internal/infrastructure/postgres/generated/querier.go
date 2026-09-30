@@ -62,6 +62,11 @@ type Querier interface {
 	// A dataset is in force at T from its activation until its supersession.
 	ListRegulatoryDatasetsActiveAt(ctx context.Context, arg ListRegulatoryDatasetsActiveAtParams) ([]RegulatoryDataset, error)
 	ListSources(ctx context.Context) ([]Source, error)
+	// MFN and additional-duty rules of the datasets, in force on @on_date, keyed on the HS code or one of
+	// its prefixes and on the origin or any origin ('*'). @on_date is a calendar date, never a
+	// timestamptz: a timestamptz comparison would use the session time zone (ADR 0012). The measure
+	// types mirror regulatory.MeasureMFN and MeasureAdditionalDuty; PREFERENTIAL rows are not read.
+	ListTariffCandidates(ctx context.Context, arg ListTariffCandidatesParams) ([]ListTariffCandidatesRow, error)
 	MarkDLQMessageReplayed(ctx context.Context, arg MarkDLQMessageReplayedParams) (int64, error)
 	// A matching claim token implies status = 'PENDING' (chk_outbox_claim_pending). Leaving status out
 	// keeps this on the primary key: with it, the planner may walk idx_outbox_claimable over the whole

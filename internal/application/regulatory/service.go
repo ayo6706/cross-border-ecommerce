@@ -1,5 +1,5 @@
-// Package regulatory runs the dataset lifecycle: load, review, activate or reject, and the coverage
-// check decisions make before relying on a category of rules.
+// Package regulatory runs the dataset lifecycle (load, review, activate or reject), the coverage
+// check decisions make before relying on a category of rules, and the resolution of rules in force.
 package regulatory
 
 import (
@@ -15,18 +15,21 @@ import (
 type Service struct {
 	tx       TxRunner
 	datasets DatasetRepository
+	tariffs  TariffRepository
 	slas     domain.SLAs
 	now      func() time.Time
 }
 
-func NewService(tx TxRunner, datasets DatasetRepository, slas domain.SLAs) (*Service, error) {
-	if tx == nil || datasets == nil {
-		return nil, errors.New("regulatory service needs a transaction runner and a dataset repository")
+func NewService(
+	tx TxRunner, datasets DatasetRepository, tariffs TariffRepository, slas domain.SLAs,
+) (*Service, error) {
+	if tx == nil || datasets == nil || tariffs == nil {
+		return nil, errors.New("regulatory service needs a transaction runner, a dataset and a tariff repository")
 	}
 	if slas == nil {
 		return nil, fmt.Errorf("%w: no SLAs configured", domain.ErrInvalidSLA)
 	}
-	return &Service{tx: tx, datasets: datasets, slas: slas, now: now}, nil
+	return &Service{tx: tx, datasets: datasets, tariffs: tariffs, slas: slas, now: now}, nil
 }
 
 // now is truncated to the microsecond precision of timestamptz, so the times the service returns
@@ -165,4 +168,27 @@ func (s *Service) Coverage(
 		return nil, fmt.Errorf("list datasets active at %s: %w", at.UTC().Format(time.RFC3339), err)
 	}
 	return active, s.slas.Check(category, active, at)
+}
+
+// ResolveTariff returns the duty in force for the query: rules effective on its transaction date,
+// from the tariff datasets in force, and within their SLA, at its evaluation time. Every error
+// domain.HoldReason maps is a HOLD, never a zero rate.
+func (s *Service) ResolveTariff(ctx context.Context, q domain.TariffQuery) (*domain.TariffResolution, error) {
+	datasets, err := s.Coverage(ctx, q.Jurisdiction(), domain.CategoryTariff, q.EvaluatedAt())
+	if err != nil {
+		return nil, fmt.Errorf("resolve tariff: %w", err)
+	}
+	ids := make([]string, 0, len(datasets))
+	for _, d := range datasets {
+		ids = append(ids, d.ID)
+	}
+	candidates, err := s.tariffs.TariffCandidates(ctx, ids, q)
+	if err != nil {
+		return nil, fmt.Errorf("resolve tariff: %w", err)
+	}
+	resolution, err := domain.ResolveTariff(q, datasets, candidates)
+	if err != nil {
+		return nil, fmt.Errorf("resolve tariff: %w", err)
+	}
+	return resolution, nil
 }

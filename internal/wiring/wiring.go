@@ -93,11 +93,11 @@ func RegulatoryService(pool *pgxpool.Pool, slas regulatory.SLAs) (*appRegulatory
 	if err != nil {
 		return nil, fmt.Errorf("create regulatory transaction manager: %w", err)
 	}
-	datasets, err := postgres.NewRegulatoryRepository(pool)
+	repo, err := postgres.NewRegulatoryRepository(pool)
 	if err != nil {
 		return nil, fmt.Errorf("create regulatory repository: %w", err)
 	}
-	svc, err := appRegulatory.NewService(tx, datasets, slas)
+	svc, err := appRegulatory.NewService(tx, repo, repo, slas)
 	if err != nil {
 		return nil, fmt.Errorf("create regulatory service: %w", err)
 	}
