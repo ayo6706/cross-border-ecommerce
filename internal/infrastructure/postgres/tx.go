@@ -7,6 +7,7 @@ import (
 	appDLQ "github.com/ayo6706/cross-border-ecommerce/internal/application/dlq"
 	appIngestion "github.com/ayo6706/cross-border-ecommerce/internal/application/ingestion"
 	appProduct "github.com/ayo6706/cross-border-ecommerce/internal/application/product"
+	appRegulatory "github.com/ayo6706/cross-border-ecommerce/internal/application/regulatory"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -20,12 +21,13 @@ type txRepositories struct {
 	processing *RunProcessingRepository
 	outbox     *OutboxRepository
 	dlq        *DLQRepository
+	regulatory *RegulatoryRepository
 }
 
 func newTxRepositories(tx pgx.Tx) (txRepositories, error) {
 	var (
 		r    txRepositories
-		errs [6]error
+		errs [7]error
 	)
 	r.runs, errs[0] = NewIngestionRepository(tx)
 	r.rawRecords, errs[1] = NewRawRecordRepository(tx)
@@ -33,6 +35,7 @@ func newTxRepositories(tx pgx.Tx) (txRepositories, error) {
 	r.processing, errs[3] = NewRunProcessingRepository(tx)
 	r.outbox, errs[4] = NewOutboxRepository(tx)
 	r.dlq, errs[5] = NewDLQRepository(tx)
+	r.regulatory, errs[6] = NewRegulatoryRepository(tx)
 	for _, err := range errs {
 		if err != nil {
 			return txRepositories{}, err
@@ -66,9 +69,10 @@ func withinTx(ctx context.Context, pool *pgxpool.Pool, name string, fn func(txRe
 }
 
 var (
-	_ appIngestion.TxRunner = (*TxManager[appIngestion.TxRepos])(nil)
-	_ appProduct.TxRunner   = (*TxManager[appProduct.TxRepos])(nil)
-	_ appDLQ.TxRunner       = (*TxManager[appDLQ.TxRepos])(nil)
+	_ appIngestion.TxRunner  = (*TxManager[appIngestion.TxRepos])(nil)
+	_ appProduct.TxRunner    = (*TxManager[appProduct.TxRepos])(nil)
+	_ appDLQ.TxRunner        = (*TxManager[appDLQ.TxRepos])(nil)
+	_ appRegulatory.TxRunner = (*TxManager[appRegulatory.TxRepos])(nil)
 )
 
 // TxManager runs a function with the repositories one application port declares (T), all bound
@@ -105,5 +109,11 @@ func NewProductTxManager(pool *pgxpool.Pool) (*TxManager[appProduct.TxRepos], er
 func NewDLQTxManager(pool *pgxpool.Pool) (*TxManager[appDLQ.TxRepos], error) {
 	return newTxManager(pool, "dlq", func(r txRepositories) appDLQ.TxRepos {
 		return appDLQ.TxRepos{DLQ: r.dlq, Outbox: r.outbox}
+	})
+}
+
+func NewRegulatoryTxManager(pool *pgxpool.Pool) (*TxManager[appRegulatory.TxRepos], error) {
+	return newTxManager(pool, "regulatory", func(r txRepositories) appRegulatory.TxRepos {
+		return appRegulatory.TxRepos{Datasets: r.regulatory, Rules: r.regulatory, Outbox: r.outbox}
 	})
 }

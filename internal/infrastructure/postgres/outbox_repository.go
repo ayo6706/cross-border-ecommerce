@@ -11,15 +11,18 @@ import (
 	appDLQ "github.com/ayo6706/cross-border-ecommerce/internal/application/dlq"
 	appOutbox "github.com/ayo6706/cross-border-ecommerce/internal/application/outbox"
 	appProduct "github.com/ayo6706/cross-border-ecommerce/internal/application/product"
+	appRegulatory "github.com/ayo6706/cross-border-ecommerce/internal/application/regulatory"
 	domainProduct "github.com/ayo6706/cross-border-ecommerce/internal/domain/product"
+	domainRegulatory "github.com/ayo6706/cross-border-ecommerce/internal/domain/regulatory"
 	"github.com/ayo6706/cross-border-ecommerce/internal/infrastructure/postgres/generated"
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
 var (
-	_ appOutbox.Store         = (*OutboxRepository)(nil)
-	_ appDLQ.OutboxWriter     = (*OutboxRepository)(nil)
-	_ appProduct.OutboxWriter = (*OutboxRepository)(nil)
+	_ appOutbox.Store            = (*OutboxRepository)(nil)
+	_ appDLQ.OutboxWriter        = (*OutboxRepository)(nil)
+	_ appProduct.OutboxWriter    = (*OutboxRepository)(nil)
+	_ appRegulatory.OutboxWriter = (*OutboxRepository)(nil)
 )
 
 type OutboxRepository struct {
@@ -38,7 +41,65 @@ func NewOutboxRepository(db generated.DBTX) (*OutboxRepository, error) {
 const (
 	AggregateTypeProduct    = "product"
 	EventTypeProductChanged = "product.changed"
+
+	AggregateTypeRegulatoryDataset = "regulatory_dataset"
+	EventTypeDatasetActivated      = "regulatory.dataset_activated"
 )
+
+// datasetActivatedPayload is the published regulatory.dataset_activated contract. Consumers
+// (revalidation) decode this shape, so a field rename is a breaking change.
+type datasetActivatedPayload struct {
+	DatasetID         string    `json:"dataset_id"`
+	PreviousDatasetID *string   `json:"previous_dataset_id"`
+	Jurisdiction      string    `json:"jurisdiction"`
+	Category          string    `json:"category"`
+	Source            string    `json:"source"`
+	Version           string    `json:"version"`
+	ActivatedAt       time.Time `json:"activated_at"`
+}
+
+// CreateDatasetActivatedEvent writes the activation event inside the caller's transaction, so it
+// commits or rolls back with the activation it describes.
+func (r *OutboxRepository) CreateDatasetActivatedEvent(ctx context.Context, e domainRegulatory.DatasetActivated) error {
+	id, err := parseUUID(e.EventID)
+	if err != nil {
+		return fmt.Errorf("invalid dataset activated event id %q: %w", e.EventID, err)
+	}
+	if e.Dataset.ActivatedAt == nil {
+		return fmt.Errorf("dataset %s activated event without an activation time", e.Dataset.ID)
+	}
+	payload, err := json.Marshal(datasetActivatedPayload{
+		DatasetID:         e.Dataset.ID,
+		PreviousDatasetID: optionalString(e.PreviousDatasetID),
+		Jurisdiction:      e.Dataset.Jurisdiction,
+		Category:          string(e.Dataset.Category),
+		Source:            e.Dataset.Source,
+		Version:           e.Dataset.Version,
+		ActivatedAt:       *e.Dataset.ActivatedAt,
+	})
+	if err != nil {
+		return fmt.Errorf("marshal %s payload: %w", EventTypeDatasetActivated, err)
+	}
+	_, err = r.queries.CopyOutboxEvents(ctx, []generated.CopyOutboxEventsParams{{
+		ID:            id,
+		AggregateType: AggregateTypeRegulatoryDataset,
+		AggregateID:   e.Dataset.ID,
+		EventType:     EventTypeDatasetActivated,
+		Payload:       payload,
+	}})
+	if err != nil {
+		return fmt.Errorf("create %s event: %w", EventTypeDatasetActivated, err)
+	}
+	return nil
+}
+
+// optionalString is nil for the empty string, so the payload carries null, not "".
+func optionalString(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
+}
 
 // productChangedPayload is the published product.changed contract. Consumers decode this
 // shape, so a field rename is a breaking change.
