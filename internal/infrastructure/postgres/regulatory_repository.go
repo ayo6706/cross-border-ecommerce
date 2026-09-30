@@ -13,11 +13,13 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/shopspring/decimal"
 )
 
 var (
 	_ appRegulatory.DatasetRepository = (*RegulatoryRepository)(nil)
 	_ appRegulatory.RuleWriter        = (*RegulatoryRepository)(nil)
+	_ appRegulatory.TariffRepository  = (*RegulatoryRepository)(nil)
 )
 
 // Constraints of migrations 000022/000023 that map to domain errors.
@@ -176,6 +178,83 @@ func (r *RegulatoryRepository) InsertCurated(ctx context.Context, datasetID stri
 	return nil
 }
 
+func (r *RegulatoryRepository) TariffCandidates(
+	ctx context.Context, datasetIDs []string, q domain.TariffQuery,
+) ([]domain.TariffMeasure, error) {
+	ids, err := parseUUIDs(datasetIDs)
+	if err != nil {
+		return nil, fmt.Errorf("invalid dataset id: %w", err)
+	}
+	onDate := q.TransactionDate()
+	rows, err := r.queries.ListTariffCandidates(ctx, generated.ListTariffCandidatesParams{
+		DatasetIds: ids,
+		HsCodes:    q.HSPrefixes(),
+		Origin:     q.Origin(),
+		OnDate:     toDate(&onDate),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list tariff candidates: %w", err)
+	}
+	out := make([]domain.TariffMeasure, 0, len(rows))
+	for i := range rows {
+		m, err := toTariffMeasure(&rows[i])
+		if err != nil {
+			return nil, fmt.Errorf("tariff rule %s: %w", uuidToString(rows[i].ID), err)
+		}
+		out = append(out, m)
+	}
+	return out, nil
+}
+
+func toTariffMeasure(row *generated.ListTariffCandidatesRow) (domain.TariffMeasure, error) {
+	adValorem, err := toDecimal(row.AdValoremPercent)
+	if err != nil {
+		return domain.TariffMeasure{}, fmt.Errorf("ad_valorem_percent: %w", err)
+	}
+	specificAmount, err := toDecimal(row.SpecificAmount)
+	if err != nil {
+		return domain.TariffMeasure{}, fmt.Errorf("specific_amount: %w", err)
+	}
+	validity, err := domain.NewValidity(row.EffectiveFrom.Time, fromDate(row.EffectiveTo))
+	if err != nil {
+		return domain.TariffMeasure{}, err
+	}
+	m := domain.TariffMeasure{
+		ID:              uuidToString(row.ID),
+		DatasetID:       uuidToString(row.DatasetID),
+		HSCode:          row.HsCode,
+		OriginCountry:   row.OriginCountry,
+		MeasureType:     domain.MeasureType(row.MeasureType),
+		MeasureCode:     row.MeasureCode.String,
+		RateType:        domain.RateType(row.RateType),
+		AdValorem:       adValorem,
+		RateExpression:  row.RateExpression,
+		SourceReference: row.SourceReference,
+		Validity:        validity,
+	}
+	if specificAmount != nil {
+		m.Specific = &domain.SpecificDuty{
+			Amount:   *specificAmount,
+			Currency: row.SpecificCurrency.String,
+			Unit:     row.SpecificUnit.String,
+		}
+	}
+	return m, nil
+}
+
+// toDecimal converts a NUMERIC exactly; NULL is nil. NaN and infinities satisfy the rate columns'
+// ">= 0" CHECKs, so they reach here and are refused as a corrupt rule rather than read as a rate.
+func toDecimal(n pgtype.Numeric) (*decimal.Decimal, error) {
+	if !n.Valid {
+		return nil, nil
+	}
+	if n.NaN || n.InfinityModifier != pgtype.Finite {
+		return nil, fmt.Errorf("%w: not a finite number", domain.ErrInvalidRule)
+	}
+	d := decimal.NewFromBigInt(n.Int, n.Exp)
+	return &d, nil
+}
+
 func restrictionParams(id pgtype.UUID, rules []domain.ImportRestriction) generated.InsertImportRestrictionsParams {
 	p := generated.InsertImportRestrictionsParams{DatasetID: id}
 	for i := range rules {
@@ -260,10 +339,18 @@ func optionalText(s string) pgtype.Text {
 	return pgtype.Text{String: s, Valid: s != ""}
 }
 
-// toDate sends a Validity date (already a calendar date); nil is SQL NULL, an open end.
+// toDate sends a calendar date (midnight UTC); nil is SQL NULL, an open end. pgx sends the date
+// of the time's own location, so the caller passes a UTC calendar date.
 func toDate(t *time.Time) pgtype.Date {
 	if t == nil {
 		return pgtype.Date{}
 	}
 	return pgtype.Date{Time: *t, Valid: true}
+}
+
+func fromDate(d pgtype.Date) *time.Time {
+	if !d.Valid {
+		return nil
+	}
+	return &d.Time
 }

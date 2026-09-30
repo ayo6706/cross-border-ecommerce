@@ -39,7 +39,7 @@ func newRegulatoryService(t *testing.T, sla time.Duration) (*appRegulatory.Servi
 	if err != nil {
 		t.Fatalf("slas: %v", err)
 	}
-	svc, err := appRegulatory.NewService(tx, repo, slas)
+	svc, err := appRegulatory.NewService(tx, repo, repo, slas)
 	if err != nil {
 		t.Fatalf("service: %v", err)
 	}
