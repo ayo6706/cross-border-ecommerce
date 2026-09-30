@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 
+	appDLQ "github.com/ayo6706/cross-border-ecommerce/internal/application/dlq"
 	appIngestion "github.com/ayo6706/cross-border-ecommerce/internal/application/ingestion"
+	appProduct "github.com/ayo6706/cross-border-ecommerce/internal/application/product"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -63,21 +65,45 @@ func withinTx(ctx context.Context, pool *pgxpool.Pool, name string, fn func(txRe
 	return nil
 }
 
-var _ appIngestion.TxRunner = (*TxManager)(nil)
+var (
+	_ appIngestion.TxRunner = (*TxManager[appIngestion.TxRepos])(nil)
+	_ appProduct.TxRunner   = (*TxManager[appProduct.TxRepos])(nil)
+	_ appDLQ.TxRunner       = (*TxManager[appDLQ.TxRepos])(nil)
+)
 
-type TxManager struct {
+// TxManager runs a function with the repositories one application port declares (T), all bound
+// to a single transaction.
+type TxManager[T any] struct {
 	pool *pgxpool.Pool
+	name string
+	bind func(txRepositories) T
 }
 
-func NewTxManager(pool *pgxpool.Pool) (*TxManager, error) {
+func newTxManager[T any](pool *pgxpool.Pool, name string, bind func(txRepositories) T) (*TxManager[T], error) {
 	if pool == nil {
-		return nil, fmt.Errorf("pgxpool cannot be nil")
+		return nil, fmt.Errorf("%s transaction manager: pgxpool cannot be nil", name)
 	}
-	return &TxManager{pool: pool}, nil
+	return &TxManager[T]{pool: pool, name: name, bind: bind}, nil
 }
 
-func (m *TxManager) WithinTx(ctx context.Context, fn func(repos appIngestion.TxRepos) error) error {
-	return withinTx(ctx, m.pool, "ingestion", func(r txRepositories) error {
-		return fn(appIngestion.TxRepos{Runs: r.runs, RawRecords: r.rawRecords})
+func (m *TxManager[T]) WithinTx(ctx context.Context, fn func(repos T) error) error {
+	return withinTx(ctx, m.pool, m.name, func(r txRepositories) error { return fn(m.bind(r)) })
+}
+
+func NewTxManager(pool *pgxpool.Pool) (*TxManager[appIngestion.TxRepos], error) {
+	return newTxManager(pool, "ingestion", func(r txRepositories) appIngestion.TxRepos {
+		return appIngestion.TxRepos{Runs: r.runs, RawRecords: r.rawRecords}
+	})
+}
+
+func NewProductTxManager(pool *pgxpool.Pool) (*TxManager[appProduct.TxRepos], error) {
+	return newTxManager(pool, "product", func(r txRepositories) appProduct.TxRepos {
+		return appProduct.TxRepos{Products: r.products, RunProcessing: r.processing, Outbox: r.outbox}
+	})
+}
+
+func NewDLQTxManager(pool *pgxpool.Pool) (*TxManager[appDLQ.TxRepos], error) {
+	return newTxManager(pool, "dlq", func(r txRepositories) appDLQ.TxRepos {
+		return appDLQ.TxRepos{DLQ: r.dlq, Outbox: r.outbox}
 	})
 }
